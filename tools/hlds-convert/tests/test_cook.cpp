@@ -1,0 +1,235 @@
+// The whole cook, on the box room: .bsp bytes in, .hlm bytes out, read back
+// through the DS's own reader.
+//
+// Everything here is checked against the room's known shape rather than
+// against the cooker's intermediate data, so it would catch the cooker being
+// consistently wrong -- every wall facing outwards, say -- which a round-trip
+// test alone never would.
+
+#include <cstdio>
+#include <cstring>
+
+#include "HlLevelReader.hpp"
+#include "TestBspBuilder.hpp"
+#include "hlds/Cooker.hpp"
+#include "hlds/GxStream.hpp"
+
+using namespace hlds;
+using namespace hldata;
+using namespace hldstest;
+
+namespace
+{
+    struct Cooked
+    {
+        std::vector<std::uint8_t> bytes;
+        LevelView view;
+        CookReport report;
+        bool ok = false;
+    };
+
+    Cooked cook(const BoxRoom &room, double gamma = 1.0, bool guarded = true)
+    {
+        Cooked c;
+        BspFile bsp;
+        std::string error;
+        CookedLevel level;
+        CookOptions options;
+        options.lightGamma = gamma;
+        options.guardedMerges = guarded;
+        c.ok = bsp.parse(buildBoxRoom(room), error) &&
+               cookLevel(bsp, options, {}, level, c.report, error) &&
+               writeLevel(level, c.bytes, error) &&
+               c.view.open(c.bytes.data(), static_cast<std::uint32_t>(c.bytes.size())) ==
+                   LevelError::Ok;
+        if (!c.ok)
+            std::fprintf(stderr, "cook failed: %s\n", error.c_str());
+        return c;
+    }
+
+    void testBoxRoom()
+    {
+        const Cooked c = cook(BoxRoom());
+        check(c.ok, "the box room cooks and opens");
+        if (!c.ok)
+            return;
+        const LevelView &v = c.view;
+
+        check(v.header->mins[0] == -128 && v.header->maxs[2] == 128, "bounds");
+        check(v.header->visLeafCount == 1, "one visible leaf");
+        check(v.header->worstPolygons == 6 && v.header->worstVertices == 24,
+              "worst case is the six quads");
+        check(v.surfaceCount == 6 && c.report.polygons == 6 && c.report.vertices == 24,
+              "six surfaces, one quad each");
+        check(v.nodeCount == 6 && v.leafCount == 2 && v.modelCount == 1, "tree sizes");
+
+        // Hull 2 is dropped: 12 of the 18 clip nodes, and its 6 planes.
+        check(v.clipNodeCount == 12 && c.report.droppedClipNodes == 6, "two clip hulls kept");
+        check(v.planeCount == 18 && c.report.droppedPlanes == 6, "unused planes dropped");
+        check(v.models[0].clipStanding == 0 && v.models[0].clipCrouched == 6,
+              "hull roots renumbered");
+
+        // The standing hull's planes are the walls moved in by 16 and 36.
+        const ClipNode &first = v.clipNodes[v.models[0].clipStanding];
+        check(v.planeTypes[first.plane] == kPlaneAxisX &&
+                  v.planes[first.plane].normal[0] == kNormalOne &&
+                  v.planes[first.plane].dist == fxFromInt(-112),
+              "the first clip plane is x = -112, axial, in Q30 / Q12");
+        check(first.children[1] == kContentsSolid && first.children[0] == 1,
+              "behind it is solid, in front the next node");
+
+        // Parents: a chain from the root to leaf 1.
+        check(v.nodes[0].parent == kNoParent && v.nodes[3].parent == 2, "node parents");
+        check(v.leaves[1].parent == 5 && v.leaves[1].contents == kContentsEmpty &&
+                  v.leaves[1].markCount == 6,
+              "the room leaf hangs from the last node");
+        check(v.leaves[0].contents == kContentsSolid && v.leaves[0].visOfs == -1, "solid leaf");
+        check(v.visSize == 1 && v.vis[0] == 1, "vis row carried over unchanged");
+
+        check(v.textureCount == 1 && std::strcmp(v.textures[0].name, "testwall") == 0 &&
+                  v.textures[0].width == 16 && v.textures[0].sourceWidth == 16,
+              "the texture table");
+
+        check(v.entityCount == 2 &&
+                  v.entities[1].classId ==
+                      static_cast<std::uint16_t>(EntityClass::InfoPlayerStart) &&
+                  v.entities[1].origin[2] == fxFromInt(40) && v.entities[1].angles[1] == 16384,
+              "the player start: origin in Q12, yaw 90 degrees in turns");
+        check(std::string(v.entityText, v.entityTextSize).find("worldspawn") != std::string::npos,
+              "entity text kept");
+
+        // Every surface: decodes, is a quad on its plane, faces INTO the room
+        // counter-clockwise, and carries its own wall's light.
+        bool seenGrey[6] = {};
+        for (std::uint32_t s = 0; s < v.surfaceCount; ++s)
+        {
+            const Surface &surface = v.surfaces[s];
+            std::vector<GxRun> runs;
+            std::string error;
+            check(decodeGxStream(v.gxStream + surface.gxOfs, surface.gxWords, runs, error),
+                  "surface stream decodes");
+            if (runs.size() != 1 || runs[0].vertices.size() != 4)
+            {
+                check(false, "surface is one quad");
+                continue;
+            }
+            const auto &q = runs[0].vertices;
+            // Normal of (q0, q1, q2) by the right-hand rule: for a
+            // counter-clockwise face it points at the viewer, i.e. at the
+            // room's centre (0, 0, 64) = (0, 0, 256) in quarter units.
+            const double e1[3] = {double(q[1].x - q[0].x), double(q[1].y - q[0].y),
+                                  double(q[1].z - q[0].z)};
+            const double e2[3] = {double(q[2].x - q[0].x), double(q[2].y - q[0].y),
+                                  double(q[2].z - q[0].z)};
+            const double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                                 e1[0] * e2[1] - e1[1] * e2[0]};
+            const double toCentre[3] = {0.0 - q[0].x, 0.0 - q[0].y, 256.0 - q[0].z};
+            check(n[0] * toCentre[0] + n[1] * toCentre[1] + n[2] * toCentre[2] > 0,
+                  "surface is counter-clockwise seen from inside the room");
+
+            // The plane the surface names must contain its vertices, and the
+            // back flag must say which side the room is on.
+            const Plane &plane = v.planes[surface.planeRef & kSurfacePlaneMask];
+            for (const GxVertex &p : q)
+            {
+                const std::int64_t d =
+                    (static_cast<std::int64_t>(plane.normal[0]) * p.x +
+                     static_cast<std::int64_t>(plane.normal[1]) * p.y +
+                     static_cast<std::int64_t>(plane.normal[2]) * p.z) >>
+                    (kNormalShift - kFxShift + kVertexShift);
+                check(d == plane.dist, "vertex lies on the surface's plane");
+            }
+            const std::int64_t centreSide =
+                ((static_cast<std::int64_t>(plane.normal[2]) * fxFromInt(64)) >> kNormalShift) -
+                plane.dist;
+            const bool back = (surface.planeRef & kSurfacePlaneBack) != 0;
+            check(back ? centreSide < 0 : centreSide > 0,
+                  "the back flag matches the side the room is on");
+
+            // Light: gamma 1, so the builder's grey for this BSP face, which is
+            // 40 + 30 * face. Surfaces are re-ordered, so find it by value.
+            const int grey = (q[0].colour & 31) << 3;
+            const int face = (grey - 40 + 8) / 30; // 5-bit colour loses the low bits
+            check(face >= 0 && face < 6 && rgb555(40 + 30 * face, 40 + 30 * face, 40 + 30 * face) ==
+                                               q[0].colour,
+                  "vertex colour is one wall's grey in RGB555");
+            if (face >= 0 && face < 6)
+                seenGrey[face] = true;
+            check(q[0].colour == q[3].colour, "a flat-lit wall is one colour");
+            check(surface.polygons == 1 && surface.vertices == 4 && surface.texture == 0,
+                  "surface costs");
+            check(surface.radius > 0, "surface has a bounding radius");
+        }
+        for (bool seen : seenGrey)
+            check(seen, "every wall's light reached exactly one surface");
+    }
+
+    void testDroppedFaces()
+    {
+        BoxRoom room;
+        room.textureName = "sky";
+        const Cooked c = cook(room);
+        check(c.ok, "a room of sky still cooks");
+        if (!c.ok)
+            return;
+        check(c.view.surfaceCount == 0 && c.report.droppedFaces == 6, "sky faces are dropped");
+        check(c.view.leaves[1].markCount == 0, "and leave no marks behind");
+        check(c.view.textureCount == 0, "an unused texture is not listed");
+        check(c.view.header->worstPolygons == 0, "nothing to draw");
+    }
+
+    void testTooLarge()
+    {
+        BoxRoom room;
+        room.maxs[0] = 9000;
+        BspFile bsp;
+        std::string error;
+        CookedLevel level;
+        CookReport report;
+        check(bsp.parse(buildBoxRoom(room), error), "an oversized room parses");
+        check(!cookLevel(bsp, CookOptions(), {}, level, report, error) &&
+                  error.find("8191") != std::string::npos,
+              "but is refused by the cooker, with the reason");
+    }
+
+    void testSizesOverride()
+    {
+        {
+            // Width 0 is the plan saying "not drawn": the faces go.
+            BspFile hiddenBsp;
+            std::string e;
+            CookedLevel l;
+            CookReport r;
+            hiddenBsp.parse(buildBoxRoom(), e);
+            TexturePlan none;
+            none.sizes = {TextureSize{0, 0}};
+            none.alphaSizes = {TextureSize{0, 0}};
+            check(cookLevel(hiddenBsp, CookOptions(), none, l, r, e) && l.surfaces.empty() &&
+                      r.droppedFaces == 6 && l.textures.empty(),
+                  "a texture the plan left out takes its faces with it");
+        }
+        BspFile bsp;
+        std::string error;
+        CookedLevel level;
+        CookReport report;
+        bsp.parse(buildBoxRoom(), error);
+        TexturePlan sized;
+        sized.sizes = {TextureSize{32, 64}};
+        sized.alphaSizes = {TextureSize{0, 0}};
+        check(cookLevel(bsp, CookOptions(), sized, level, report, error),
+              "cooks with given texture sizes");
+        check(level.textures[0].width == 32 && level.textures[0].height == 64,
+              "the budget's sizes replace the defaults");
+    }
+} // namespace
+
+int main()
+{
+    testBoxRoom();
+    testDroppedFaces();
+    testTooLarge();
+    testSizesOverride();
+    if (g_failures == 0)
+        std::printf("test_cook: ok\n");
+    return g_failures == 0 ? 0 : 1;
+}

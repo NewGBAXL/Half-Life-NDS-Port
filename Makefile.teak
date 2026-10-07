@@ -1,0 +1,12 @@
+# The DSP program (DSi): built with the Teak LLVM toolchain and libteak
+# installed in $(BLOCKSDSEXT). make.sh runs this before the ARM build, and
+# does without it if the toolchain is not there.
+#
+#     make -f Makefile.teak            builds build/teak.elf and build/teak.tlf
+
+BLOCKSDSEXT	?= /opt/wonderful/thirdparty/blocksds/external
+
+SOURCEDIRS	:= teak/source
+INCLUDEDIRS	:= shared/dsp
+
+include $(BLOCKSDSEXT)/libteak/mk/Makefile.teak

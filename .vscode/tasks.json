@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Configure converter",
+            "type": "shell",
+            "command": "cmake -S tools/hlds-convert -B build/convert",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build converter",
+            "type": "shell",
+            "command": "cmake --build build/convert -j && ctest --test-dir build/convert --output-on-failure",
+            "problemMatcher": ["$gcc"],
+            "group": "build"
+        },
+        {
+            "label": "Build ROM",
+            "type": "shell",
+            "command": "./make.sh",
+            "problemMatcher": ["$gcc"],
+            "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "Clean ROM",
+            "type": "shell",
+            "command": "./clean.sh",
+            "problemMatcher": []
+        }
+    ]
+}

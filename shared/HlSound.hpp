@@ -1,0 +1,309 @@
+#pragma once
+
+// Sound: the file a cooked sound is in, the sounds every map has, and how
+// the game says "this was heard, here".
+//
+// A cooked sound (.hsn, under snd/ on the card) is IMA-ADPCM exactly as the
+// DS's sound hardware plays it: a four-byte header (the first sample and the
+// step it starts at) and then four bits a sample. The hardware loops it too,
+// from a point given in words (four bytes, eight samples).
+//
+// The game's shared code does not play anything. Where something happens
+// that is heard -- a door starts, a shot is fired, a headcrab lands -- it
+// puts a SoundEvent on a queue; the console empties the queue each frame
+// into its sixteen channels, and the host tests read it to see that what
+// should have been heard was.
+//
+// std-only: shared with the converter and the tests.
+
+#include <cstdint>
+#include <cstring>
+
+#include "HlLevel.hpp"
+
+namespace hldata
+{
+    inline constexpr char kSoundMagic[4] = {'H', 'L', 'S', 'N'};
+    inline constexpr std::uint16_t kSoundVersion = 1;
+    inline constexpr std::uint32_t kSoundNoLoop = 0xFFFFFFFFu;
+    /// What sounds are cooked at, unless a map is short of room for them.
+    inline constexpr int kSoundRate = 11025;
+
+    struct SoundHeader
+    {
+        char magic[4];
+        std::uint16_t version;
+        std::uint16_t rate;        ///< samples a second
+        std::uint32_t dataBytes;   ///< the ADPCM, its four-byte header included; a multiple of 4
+        std::uint32_t loopWord;    ///< where it loops from, in words of the data; kSoundNoLoop
+        std::uint32_t samples;     ///< how long it is
+        std::uint32_t sourceHash;  ///< of what it was made from, and how
+    };
+    static_assert(sizeof(SoundHeader) == 24);
+
+    inline bool soundHeaderValid(const SoundHeader &h, std::uint32_t fileSize)
+    {
+        return std::memcmp(h.magic, kSoundMagic, 4) == 0 && h.version == kSoundVersion &&
+               h.rate >= 4000 && h.rate <= 32768 && h.dataBytes >= 8 && (h.dataBytes & 3) == 0 &&
+               h.dataBytes == fileSize - sizeof(SoundHeader) &&
+               (h.loopWord == kSoundNoLoop || (h.loopWord >= 1 && h.loopWord < h.dataBytes / 4)) &&
+               h.samples <= (h.dataBytes - 4) * 2;
+    }
+
+    // Music (.hsm, under music/ on the card): a header and then eight-bit
+    // signed samples, one channel, to be read off the card as it plays.
+    inline constexpr char kMusicMagic[4] = {'H', 'L', 'S', 'M'};
+    inline constexpr int kMusicRate = 16000;
+    struct MusicHeader
+    {
+        char magic[4];
+        std::uint16_t version; ///< kSoundVersion
+        std::uint16_t rate;
+        std::uint32_t bytes;   ///< of samples, after this header
+    };
+    static_assert(sizeof(MusicHeader) == 12);
+
+    // The same music for a DSi (.hsd): two channels of ADPCM at half the
+    // DSP's output rate, as the DSP program unpacks it (shared/dsp/hl_dsp.h).
+    // Blocks of kMusicBlockWords words, each after four words that are both
+    // decoders' states at its start (left sample, left step, right sample,
+    // right step) -- so that a track can be taken up at any block.
+    inline constexpr char kStereoMagic[4] = {'H', 'L', 'S', 'D'};
+    inline constexpr int kStereoRate = 23802;      ///< 47,605 / 2
+    inline constexpr int kMusicBlockWords = 1024;  ///< 2048 pairs: 86 ms
+    struct StereoHeader
+    {
+        char magic[4];
+        std::uint16_t version; ///< kSoundVersion
+        std::uint16_t rate;
+        std::uint32_t blocks;
+        std::uint32_t pairs;   ///< samples a channel, in all
+    };
+    static_assert(sizeof(StereoHeader) == 16);
+
+    /// What a room sounds like, as the DSP's echo is set: how much of it
+    /// comes round again (Q15), how much it is dulled on the way (0..255),
+    /// and how loud it is (0..255; 0 is no echo at all).
+    struct RoomEcho
+    {
+        std::uint16_t feedback;
+        std::uint8_t damp;
+        std::uint8_t level;
+    };
+
+    /// The echo of one of the game's 29 room types (an env_sound's
+    /// "roomtype"): they come in families of three sizes, and five kinds of
+    /// room are told apart here.
+    inline RoomEcho roomEcho(int type)
+    {
+        if (type <= 0 || type > 28)
+            return {0, 0, 0}; // "normal": none
+        if (type == 1)
+            return {22000, 70, 60}; // generic: a small room
+        const int size = (type - 2) % 3; // 0 small, 1 medium, 2 large
+        const int family = (type - 2) / 3;
+        switch (family)
+        {
+        case 0: // metal
+        case 1: // tunnel
+            return {static_cast<std::uint16_t>(27500 + size * 1000), 25,
+                    static_cast<std::uint8_t>(90 + size * 15)};
+        case 4: // water
+            return {26000, 200, 120};
+        case 6: // outside
+            return {20000, 120, 40};
+        case 7: // cavern
+        case 8: // weirdo
+            return {static_cast<std::uint16_t>(29000 + size * 800), 35,
+                    static_cast<std::uint8_t>(110 + size * 10)};
+        default: // chamber, bright, concrete
+            return {static_cast<std::uint16_t>(25000 + size * 1200), 45,
+                    static_cast<std::uint8_t>(75 + size * 10)};
+        }
+    }
+
+    /// The file a track of the game's music is in, under music/.
+    /// `stereo`: the DSi's (.hsd) rather than the DS's (.hsm).
+    inline void musicFileName(int track, char *out, std::size_t size, bool stereo = false)
+    {
+        // Two digits: tracks are numbered 2 to 28.
+        const char name[] = {'t', 'r', 'a', 'c', 'k', static_cast<char>('0' + (track / 10) % 10),
+                             static_cast<char>('0' + track % 10), '.', 'h', 's', stereo ? 'd' : 'm', '\0'};
+        std::size_t i = 0;
+        for (; i + 1 < size && name[i] != '\0'; ++i)
+            out[i] = name[i];
+        out[i] = '\0';
+    }
+
+    /// The sounds every map's Sounds section begins with, in this order (a
+    /// map that has no use for one leaves its name empty).
+    enum class CommonSound : std::uint16_t
+    {
+        Step1,
+        Step2,
+        Step3,
+        Step4,
+        Pain,
+        CrowbarMiss,
+        CrowbarHit,
+        CrowbarFlesh,
+        Pistol,
+        Shotgun,
+        Reload,
+        ShotgunReload,
+        Click,
+        GunPickup,
+        AmmoPickup,
+        MedKit,
+        Charge,
+        GrenadeBounce,
+        Explode,
+        HeadcrabAlert,
+        HeadcrabAttack,
+        HeadcrabPain,
+        HeadcrabDie,
+        HeadcrabBite,
+        ZombieAlert,
+        ZombieAttack,
+        ZombiePain,
+        ClawStrike,
+        ClawMiss,
+        BarnacleAlert,
+        BarnacleChew,
+        BarnacleDie,
+        SlaveAlert,
+        SlaveZap,
+        SlavePain,
+        SlaveDie,
+        SquidAlert,
+        SquidSpit,
+        SquidBite,
+        SquidPain,
+        SquidDie,
+        SpitHit,
+        HoundAlert,
+        HoundAttack,
+        HoundBlast,
+        HoundPain,
+        HoundDie,
+        Count
+    };
+    inline constexpr std::uint16_t kNoSound = 0xFFFF;
+
+    /// Where each of them is in the game's sound folder.
+    inline const char *commonSoundPath(CommonSound sound)
+    {
+        static const char *const kPaths[] = {
+            "player/pl_step1.wav",    "player/pl_step2.wav",     "player/pl_step3.wav",
+            "player/pl_step4.wav",    "player/pl_pain2.wav",     "weapons/cbar_miss1.wav",
+            "weapons/cbar_hit1.wav",  "weapons/cbar_hitbod1.wav", "weapons/pl_gun3.wav",
+            "weapons/sbarrel1.wav",   "items/9mmclip1.wav",      "weapons/reload1.wav",
+            "weapons/357_cock1.wav",  "items/gunpickup2.wav",    "items/9mmclip1.wav",
+            "items/smallmedkit1.wav", "items/medshot4.wav",
+            "weapons/grenade_hit1.wav", "weapons/explode3.wav",  "headcrab/hc_alert1.wav",
+            "headcrab/hc_attack1.wav", "headcrab/hc_pain1.wav",  "headcrab/hc_die1.wav",
+            "headcrab/hc_headbite.wav", "zombie/zo_alert10.wav", "zombie/zo_attack1.wav",
+            "zombie/zo_pain1.wav",    "zombie/claw_strike1.wav", "zombie/claw_miss1.wav",
+            "barnacle/bcl_alert2.wav", "barnacle/bcl_chew1.wav", "barnacle/bcl_die1.wav",
+            "aslave/slv_alert1.wav",  "weapons/electro4.wav",    "aslave/slv_pain1.wav",
+            "aslave/slv_die1.wav",    "bullchicken/bc_attackgrowl.wav", "bullchicken/bc_attack1.wav",
+            "bullchicken/bc_bite1.wav", "bullchicken/bc_pain1.wav", "bullchicken/bc_die1.wav",
+            "bullchicken/bc_spithit1.wav", "houndeye/he_alert1.wav", "houndeye/he_attack1.wav",
+            "houndeye/he_blast1.wav", "houndeye/he_pain1.wav",   "houndeye/he_die1.wav"};
+        static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
+        return kPaths[static_cast<int>(sound)];
+    }
+
+    // How far a sound carries, as the game has it: full volume at the
+    // source, nothing at the radius, a straight line between.
+    inline constexpr int kRadiusEverywhere = 0; ///< as loud wherever the listener is
+    inline constexpr int kRadiusSmall = 500;
+    inline constexpr int kRadiusMedium = 800;
+    inline constexpr int kRadiusLarge = 1250;
+
+    /// How loud (0..127) something of loudness `volume` (0..127) is, heard
+    /// `distance` whole units away, if it carries `radius` units.
+    inline int soundGain(int volume, int distance, int radius)
+    {
+        if (radius <= 0)
+            return volume;
+        if (distance >= radius)
+            return 0;
+        return (volume * (radius - distance)) / radius;
+    }
+
+    /// Which of a level's sounds are kept in memory while it is played:
+    /// `kept[i]` for each of `soundCount`. The common ones, and whatever a
+    /// logic record plays. The rest are words of spoken lines, which are
+    /// long and said once: those are read off the card as they are spoken.
+    inline void soundsKept(const LogicRecord *logic, std::uint32_t logicCount,
+                           const LogicSound *logicSounds, std::uint32_t logicSoundCount,
+                           std::uint32_t soundCount, bool *kept)
+    {
+        for (std::uint32_t i = 0; i < soundCount; ++i)
+            kept[i] = false;
+        for (std::uint32_t i = 0; i < soundCount && i < static_cast<std::uint32_t>(CommonSound::Count); ++i)
+            kept[i] = true;
+        for (std::uint32_t i = 0; i < logicCount; ++i)
+        {
+            if (logic[i].kind == static_cast<std::uint8_t>(LogicKind::Ambient) &&
+                logic[i].extra[3] == 0 && logic[i].extra[0] < soundCount)
+                kept[logic[i].extra[0]] = true;
+        }
+        for (std::uint32_t i = 0; i < logicSoundCount; ++i)
+        {
+            if (logicSounds[i].move < soundCount)
+                kept[logicSounds[i].move] = true;
+            if (logicSounds[i].stop < soundCount)
+                kept[logicSounds[i].stop] = true;
+        }
+    }
+
+    struct SoundEvent
+    {
+        std::uint16_t sound = kNoSound; ///< into the level's Sounds; or a sentence, with kSoundSentence
+        std::uint8_t volume = 127;
+        std::uint8_t flags = 0;         ///< kSound*
+        std::int16_t radius = kRadiusLarge;
+        fx pos[3] = {0, 0, 0};
+    };
+    inline constexpr std::uint8_t kSoundHere = 1;     ///< at the listener: no place, no fading
+    inline constexpr std::uint8_t kSoundSentence = 2; ///< `sound` is an index into Sentences
+
+    inline constexpr int kMaxSoundEvents = 24;
+
+    /// What has been heard since the queue was last emptied. More than it
+    /// holds in one tick are dropped: nobody hears the twenty-fifth thing.
+    struct SoundQueue
+    {
+        SoundEvent events[kMaxSoundEvents];
+        int count = 0;
+
+        void add(std::uint16_t sound, const fx *pos, int volume, int radius, std::uint8_t flags = 0)
+        {
+            if (sound == kNoSound || count >= kMaxSoundEvents)
+                return;
+            SoundEvent &event = events[count++];
+            event.sound = sound;
+            event.volume = static_cast<std::uint8_t>(volume < 0 ? 0 : (volume > 127 ? 127 : volume));
+            event.flags = pos == nullptr ? static_cast<std::uint8_t>(flags | kSoundHere) : flags;
+            event.radius = static_cast<std::int16_t>(radius);
+            for (int i = 0; i < 3; ++i)
+                event.pos[i] = pos != nullptr ? pos[i] : 0;
+        }
+        void add(CommonSound sound, const fx *pos, int volume = 127, int radius = kRadiusLarge)
+        {
+            add(static_cast<std::uint16_t>(sound), pos, volume, radius);
+        }
+        bool heard(std::uint16_t sound) const
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                if (events[i].sound == sound && !(events[i].flags & kSoundSentence))
+                    return true;
+            }
+            return false;
+        }
+        bool heard(CommonSound sound) const { return heard(static_cast<std::uint16_t>(sound)); }
+    };
+} // namespace hldata

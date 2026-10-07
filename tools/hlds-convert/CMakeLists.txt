@@ -1,0 +1,127 @@
+cmake_minimum_required(VERSION 3.20)
+project(hlds-convert LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+
+# ---------------------------------------------------------------------------
+# Core -- pure C++20, NO Qt.
+#
+# The GUI and the CLI are both thin drivers over this. Keeping Qt out is what
+# lets the tests run fast and headless, and what lets a CI job without Qt still
+# verify the conversion logic.
+# ---------------------------------------------------------------------------
+add_library(hlds_convert_core STATIC
+    core/src/AtomicWrite.cpp
+    core/src/BrushInfo.cpp
+    core/src/BspFile.cpp
+    core/src/Converter.cpp
+    core/src/Cooker.cpp
+    core/src/EntityCook.cpp
+    core/src/EntityParser.cpp
+    core/src/FaceBuilder.cpp
+    core/src/GxStream.cpp
+    core/src/LevelWriter.cpp
+    core/src/LightBake.cpp
+    core/src/MdlFile.cpp
+    core/src/ModelCook.cpp
+    core/src/MapStats.cpp
+    core/src/MeshOptimize.cpp
+    core/src/PathNodes.cpp
+    core/src/SoundCook.cpp
+    core/src/TextureEncoder.cpp
+    core/src/TextureBudget.cpp
+    core/src/TextureCook.cpp
+    core/src/TextureImage.cpp
+    core/src/TextureSize.cpp
+    core/src/WadFile.cpp
+)
+
+target_include_directories(hlds_convert_core PUBLIC
+    core/include
+    "${REPO_ROOT}/shared"      # the formats the DS also compiles
+    "${REPO_ROOT}/thirdparty"  # <yas/...>, same spelling as the ARM9 build
+)
+
+find_package(Threads REQUIRED)
+target_link_libraries(hlds_convert_core PUBLIC Threads::Threads)
+
+# yas reads its byte order from these, exactly as the ARM9 build pins it
+# (build.py): both sides must be told the same thing, explicitly.
+target_compile_definitions(hlds_convert_core PUBLIC _LITTLE_ENDIAN)
+
+if(NOT MSVC)
+    target_compile_options(hlds_convert_core PRIVATE -Wall -Wextra)
+endif()
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+add_executable(hlds-convert cli/main.cpp)
+target_link_libraries(hlds-convert PRIVATE hlds_convert_core)
+
+# ---------------------------------------------------------------------------
+# Tests
+#
+# No Valve data is in this repository and none may be added, so every test
+# here runs on a level built in memory (tests/TestBspBuilder.hpp). Tests that
+# want real maps read HLDS_VALVE_DIR from the environment and skip without it.
+# ---------------------------------------------------------------------------
+option(HLDS_BUILD_TESTS "Build the converter tests" ON)
+if(HLDS_BUILD_TESTS)
+    enable_testing()
+    foreach(test_name
+            test_anim
+            test_brush
+            test_bsp
+            test_cook
+            test_entities
+            test_geometry
+            test_level
+            test_logic
+            test_track
+            test_monsters
+            test_cascade
+            test_actors
+            test_sound
+            test_manifest
+            test_mdl
+            test_mesh
+            test_movers
+            test_physics
+            test_save
+            test_texture
+            test_wad)
+        add_executable(${test_name} tests/${test_name}.cpp)
+        target_link_libraries(${test_name} PRIVATE hlds_convert_core)
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+
+    # Not a test: writes a synthetic map with one brush of each kind in front
+    # of the player, for looking at on the console (tests/make_test_map.cpp).
+    add_executable(hlds-testmap tests/make_test_map.cpp)
+    target_link_libraries(hlds-testmap PRIVATE hlds_convert_core)
+endif()
+
+# ---------------------------------------------------------------------------
+# GUI -- Qt 6 Widgets, optional.
+#
+# A thin driver over the core, for players who would rather pick two folders
+# than type a command. Left out, with a note, when Qt is not installed: the
+# CLI converts exactly the same files.
+# ---------------------------------------------------------------------------
+option(HLDS_BUILD_GUI "Build the Qt 6 converter GUI" ON)
+if(HLDS_BUILD_GUI)
+    find_package(Qt6 6.8 QUIET COMPONENTS Widgets)
+    if(Qt6_FOUND)
+        add_subdirectory(gui)
+    else()
+        message(STATUS "Qt 6.8+ Widgets not found: hlds-convert-gui will not be built")
+    endif()
+endif()

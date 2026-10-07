@@ -1,0 +1,213 @@
+#pragma once
+
+// Drawing the world: which surfaces can be seen from here, and sending them.
+//
+// The cooked level already holds each surface as a finished run of
+// geometry-engine commands, so "drawing" is choosing. Each frame:
+//
+//  1. Find the leaf the eye is in. If it changed, decode that leaf's PVS row
+//     and stamp every visible leaf and the nodes above it.
+//  2. Walk the BSP tree front to back, skipping branches with no stamp and
+//     boxes outside the view. In each leaf reached, take the surfaces that face
+//     the eye and are inside the view, until the frame's budget is spent.
+//  3. Send the chosen surfaces in index order -- they are stored sorted by
+//     texture -- by copying their words to the geometry FIFO.
+//
+// THE BUDGET is the whole reason for the order of step 2. The hardware stops
+// at 2048 polygons and 6144 vertices and simply drops the rest, in whatever
+// order they were sent. Walking front to back and stopping at a budget of our
+// own means that what gets left out is the farthest geometry, which the fog
+// is already hiding, rather than whichever wall happened to come last.
+//
+// BRUSH ENTITIES -- doors, grates, glass -- are drawn after the world, each
+// under its own translation, when one of the leaves it touches is visible and
+// its box is in view. Opaque ones go straight out. The rest wait: the hardware
+// draws every see-through polygon after every opaque one, in the order they
+// were SENT and without sorting them, so they are sent far to near. That
+// includes the cutout class, which looks opaque: a polygon with an A3I5
+// texture is treated as see-through whatever its own alpha (measured, not
+// assumed -- NEA's own header says otherwise).
+//
+// The walk and the send are in WorldDraw.itcm.arm.cpp: ARM code in ITCM.
+
+#include <cstdint>
+
+#include <nds.h>
+#include <NEAMain.h>
+
+#include "HlLogic.hpp"
+
+namespace hlrt
+{
+    struct WorldStats
+    {
+        int leaf = 0;        ///< the leaf the eye is in
+        int surfaces = 0;    ///< surfaces sent
+        int polygons = 0;    ///< as the level counts them, before clipping
+        int vertices = 0;
+        /// What the geometry engine says it used, read back once it had taken
+        /// the frame's last command. Higher than the two above when polygons
+        /// were clipped at the screen's edge.
+        int hwPolygons = 0;
+        int hwVertices = 0;
+        int brushes = 0;        ///< brush entities sent
+        bool budgetHit = false; ///< the walk stopped early
+        /// How far away the first thing left out was (whole units), when the
+        /// walk stopped early.
+        int cutDistance = 0;
+        /// Left out for being small and far (see WorldDraw::pressure), and
+        /// what the surfaces among them would have cost.
+        int dropped = 0;
+        int droppedPolygons = 0;
+        int droppedVertices = 0;
+        int models = 0;         ///< actors drawn
+        int modelsCut = 0;      ///< in view, but the pass had no room
+    };
+
+    class WorldDraw
+    {
+    public:
+        // Kept under the hardware's 2048 / 6144: clipping against the screen's
+        // edges turns one polygon into one with more vertices, and that is
+        // counted against the same RAM.
+        static constexpr int kPolygonBudget = 1700;
+        static constexpr int kVertexBudget = 5200;
+
+        // How every polygon of a level is sent.
+        //
+        // The hardware is NOT asked to cull back faces. Every surface is one
+        // plane and is tested against the eye before it is sent, so there is
+        // nothing left for the hardware to reject -- and its own test goes by
+        // a polygon's first three vertices after projection, where a sliver
+        // or a far-off polygon can come out with the wrong sign and vanish.
+        //
+        // Polygons that cross the far plane are clipped to it. The default is
+        // to drop them whole, which takes a long wall away all at once.
+        /// The size of the display list a pass's surfaces are put in on a
+        /// DSi (32-bit words). More than a pass ever is; if one were, it
+        /// would go in two pieces.
+        static constexpr int kListWords = 24 * 1024;
+        static constexpr int kRelaxWait = 120;
+        static constexpr int kNoFog = 8192; ///< a fog distance that is no fog
+        static constexpr NEA_CullingEnum kCull = NEA_CULL_NONE;
+        static constexpr NEA_OtherFormatEnum kPolygonMode =
+            static_cast<NEA_OtherFormatEnum>(NEA_MODULATION | NEA_RENDER_FAR_CLIPPED);
+
+        /// Allocate the per-level working arrays. Call after a level loads.
+        bool create();
+        void destroy();
+
+        /// Choose and send the world's surfaces. Call inside the frame's draw
+        /// callback, after Camera::apply().
+        void draw();
+
+        /// For what is drawn besides the world (models): whether a ball at
+        /// `centre` (whole units) can be seen at all -- its leaf is one the
+        /// eye's leaf can see, and it is in the view.
+        bool ballVisible(const std::int16_t *centre, int radius) const;
+        /// Take `polygons` and `vertices` from what is left of the pass.
+        /// False, with nothing taken, if there is not that much.
+        bool spend(int polygons, int vertices);
+
+        const WorldStats &stats() const { return stats_; }
+
+        /// The budget, corrected by what the hardware said of the last pass
+        /// (GpuStats): call once a pass, after it is sent.
+        ///
+        /// It goes both ways. The constants above are what the hardware is
+        /// meant to end up holding, but the count the walk keeps is made
+        /// before the hardware throws away what is off the screen, and that
+        /// is often a fifth of it: so most of the difference seen in the
+        /// last pass of this half is added to the next one's allowance. And
+        /// a pass the hardware could not hold, or could not finish its lines
+        /// for, takes some away -- the far end of the view goes -- which
+        /// comes back slowly while the hardware has room to spare.
+        ///
+        /// `slow`: the pass took longer than a frame to make. What is added
+        /// is for a console with time to draw it: a slow pass takes a
+        /// quarter of it away, and a second of passes that are not slow
+        /// gives a quarter back.
+        void govern(bool overflow, bool underflow, int lines, bool slow);
+        /// Which half is about to be drawn (always 0 in single-pass).
+        void setPass(int pass) { pass_ = pass & 1; }
+        /// How hard the view is to fit, 0 to 3: raised while passes run out
+        /// of room, let down slowly when they have room to spare. What it
+        /// costs first is what is least seen -- the far and small: surfaces
+        /// and brushes a few pixels across, and the share of a pass the
+        /// models may have. Only what is still too much is cut off at a
+        /// distance, and that is faded into fog (below), not left as an edge.
+        int pressure() const { return pressure_; }
+        /// The ratio of distance to size past which something is left out,
+        /// at this pressure (0: nothing is).
+        int detailRatio() const
+        {
+            static constexpr int kRatio[4] = {0, 48, 32, 20}; // about 2.5, 4 and 6 pixels across
+            return kRatio[pressure_];
+        }
+        /// Where the fog is whole (whole units), or 0 with no fog.
+        int fogDistance() const { return fogOn_ ? fogEnd_ : 0; }
+        /// What the world, the models and the brushes are drawn with: with
+        /// the fog on them while there is fog.
+        NEA_OtherFormatEnum polygonMode() const
+        {
+            return static_cast<NEA_OtherFormatEnum>(kPolygonMode | (fogOn_ ? NEA_FOG_ENABLE : 0));
+        }
+        /// Set the hardware's fog for the pass about to be drawn.
+        void applyFog();
+        int polygonBudget() const { return kPolygonBudget - held_ + sparePolygons_[pass_]; }
+        int vertexBudget() const { return kVertexBudget - held_ * 3 + spareVertices_[pass_]; }
+        /// For the overlay: what is being held back (negative: added).
+        int heldBack() const { return held_ - sparePolygons_[pass_]; }
+
+        /// Where the brush entities are: one hldata::BrushState per Brush
+        /// record, owned and moved by the game (Game::brushStates). Null
+        /// draws them where the map built them.
+        void setBrushStates(const hldata::BrushState *states) { brushState_ = states; }
+
+    private:
+        void markVisible(int leaf);
+        void walk();
+        void emit();
+        void emitList();
+        void finishList();
+        void drawBrushes();
+        void drawBrush(std::uint32_t index, int polygonId);
+        void drawSky();
+
+        std::uint16_t *nodeFrame_ = nullptr; ///< vis stamp per node
+        std::uint16_t *leafFrame_ = nullptr; ///< vis stamp per leaf
+        std::uint32_t *chosen_ = nullptr;    ///< one bit per surface
+        std::uint32_t *skipped_ = nullptr;   ///< ... of those left out as small and far
+        /// On a DSi: where a pass's surfaces are put together as one display
+        /// list, which its other DMA (NDMA) feeds to the geometry engine
+        /// while this processor gets on with something else. Null on a DS.
+        std::uint32_t *list_ = nullptr;
+        bool listSent_ = false; ///< this pass's world went that way
+        const hldata::BrushState *brushState_ = nullptr;
+        std::uint32_t chosenWords_ = 0;
+        std::uint16_t visFrame_ = 0;
+        int visLeaf_ = -1; ///< the leaf visFrame_ was built for
+        int modelPolygons_ = 0; ///< what this pass's models cost (ModelDraw::plan)
+        int modelVertices_ = 0;
+        int pressure_ = 0;
+        int cutPasses_ = 0;   ///< passes on end that ran out of room
+        int easyPasses_ = 0;  ///< ... that had room to spare
+        int relaxWait_ = kRelaxWait; ///< how many of those let the pressure down
+        int sinceRelax_ = 0;
+        /// Where the fog is whole: just short of where the view is being cut
+        /// off. Brought in at once, let out slowly.
+        int fogEnd_ = kNoFog;
+        bool fogOn_ = false;
+        int held_ = 0; ///< polygons kept back from the budget by govern()
+        int spareQuarters_ = 4; ///< how much of what could be added is (0..4)
+        int quickPasses_ = 0;
+        int pass_ = 0;
+        int sparePolygons_[2] = {0, 0}; ///< added to it, for each half
+        int spareVertices_[2] = {0, 0};
+        int unusedPolygons_[2] = {0, 0}; ///< what the last pass of each half did not use
+        int unusedVertices_[2] = {0, 0};
+        WorldStats stats_;
+    };
+
+    extern WorldDraw worldDraw;
+} // namespace hlrt

@@ -1,0 +1,413 @@
+#pragma once
+
+// LevelView: a cooked level (HlLevel.hpp) in memory, checked and ready to use.
+//
+// open() is the ONE place a level is validated. It refuses anything that is
+// not exactly this build's format, and it range-checks every index one record
+// holds into another section. After it returns true the typed pointers below
+// can be indexed by any index found in the data without a check -- which the
+// renderer and the hull trace, running in ITCM, rely on.
+//
+// It does not copy: the view points into the block it was given, which must
+// outlive it and must be 4-byte aligned (anything from malloc or std::vector
+// is).
+//
+// std-only, no <nds.h>: the converter's `verify` command and the host tests run
+// this exact code on the files the converter writes.
+
+#include <cstring>
+
+#include "HlLevel.hpp"
+
+namespace hldata
+{
+    enum class LevelError
+    {
+        Ok,
+        TooSmall,
+        BadMagic,
+        BadVersion,  ///< made by a different converter version: cook again
+        BadSize,     ///< truncated or padded: an interrupted copy
+        BadChecksum,
+        BadLayout,   ///< a section lies outside the file or is misaligned
+        BadIndex,    ///< a record names something that does not exist
+    };
+
+    inline const char *levelErrorText(LevelError error)
+    {
+        switch (error)
+        {
+        case LevelError::Ok:          return "ok";
+        case LevelError::TooSmall:    return "the file is too small to be a level";
+        case LevelError::BadMagic:    return "not a Half-Life DS level";
+        case LevelError::BadVersion:  return "made by another converter version";
+        case LevelError::BadSize:     return "the file is incomplete";
+        case LevelError::BadChecksum: return "the file is damaged";
+        case LevelError::BadLayout:   return "the file's layout is invalid";
+        case LevelError::BadIndex:    return "the file's contents are inconsistent";
+        default:                      return "unknown error";
+        }
+    }
+
+    struct LevelView
+    {
+        const LevelHeader *header = nullptr;
+
+        const Plane *planes = nullptr;
+        const std::uint8_t *planeTypes = nullptr;
+        const Node *nodes = nullptr;
+        const Leaf *leaves = nullptr;
+        const std::uint16_t *marks = nullptr;
+        const std::uint8_t *vis = nullptr;
+        const Surface *surfaces = nullptr;
+        const std::uint32_t *gxStream = nullptr;
+        const Model *models = nullptr;
+        const ClipNode *clipNodes = nullptr;
+        const TextureRef *textures = nullptr;
+        const EntityRecord *entities = nullptr;
+        const char *entityText = nullptr;
+        const Brush *brushes = nullptr;
+        const std::uint16_t *brushLeaves = nullptr;
+        const LogicRecord *logic = nullptr;
+        const LogicAux *logicAux = nullptr;
+        const PathCorner *corners = nullptr;
+        const std::uint32_t *nameHashes = nullptr;
+        const Landmark *landmarks = nullptr;
+        const char *strings = nullptr;
+        const ModelRef *modelRefs = nullptr;
+        const ActorRecord *actors = nullptr;
+        const PathNode *pathNodes = nullptr;
+        const std::uint8_t *pathNext = nullptr;
+        const SoundRef *sounds = nullptr;
+        const LogicSound *logicSounds = nullptr;
+        const SentenceRecord *sentences = nullptr;
+        const std::uint16_t *sentenceWords = nullptr;
+        const RoomRecord *rooms = nullptr;
+
+        std::uint32_t planeCount = 0;
+        std::uint32_t nodeCount = 0;
+        std::uint32_t leafCount = 0;
+        std::uint32_t markCount = 0;
+        std::uint32_t visSize = 0;
+        std::uint32_t surfaceCount = 0;
+        std::uint32_t gxWordCount = 0;
+        std::uint32_t modelCount = 0;
+        std::uint32_t clipNodeCount = 0;
+        std::uint32_t textureCount = 0;
+        std::uint32_t entityCount = 0;
+        std::uint32_t entityTextSize = 0;
+        std::uint32_t brushCount = 0;
+        std::uint32_t brushLeafCount = 0;
+        std::uint32_t logicCount = 0;
+        std::uint32_t logicAuxCount = 0;
+        std::uint32_t cornerCount = 0;
+        std::uint32_t nameCount = 0;
+        std::uint32_t landmarkCount = 0;
+        std::uint32_t stringsSize = 0;
+        std::uint32_t modelRefCount = 0;
+        std::uint32_t actorCount = 0;
+        std::uint32_t pathNodeCount = 0;
+        std::uint32_t pathNextCount = 0;
+        std::uint32_t soundCount = 0;
+        std::uint32_t logicSoundCount = 0;
+        std::uint32_t sentenceCount = 0;
+        std::uint32_t sentenceWordCount = 0;
+        std::uint32_t roomCount = 0;
+
+        /// Validate `data` and point this view into it. On any failure the view
+        /// is left empty. `checkCrc` exists so a caller that has just computed
+        /// the checksum some other way need not pay for it twice; pass true
+        /// unless you have.
+        LevelError open(const std::uint8_t *data, std::uint32_t size, bool checkCrc = true);
+
+    private:
+        template <class T>
+        const T *section(const std::uint8_t *data, const SectionDir *dir, Section s,
+                         std::uint32_t &count) const
+        {
+            const SectionDir &d = dir[static_cast<int>(s)];
+            count = d.count;
+            return reinterpret_cast<const T *>(data + d.offset);
+        }
+
+        bool validChild(std::int32_t child) const
+        {
+            return child >= 0 ? static_cast<std::uint32_t>(child) < nodeCount
+                              : static_cast<std::uint32_t>(-1 - child) < leafCount;
+        }
+
+        LevelError validate() const;
+    };
+
+    inline LevelError LevelView::open(const std::uint8_t *data, std::uint32_t size, bool checkCrc)
+    {
+        *this = LevelView();
+
+        if (size < kLevelDataStart)
+            return LevelError::TooSmall;
+        const auto *h = reinterpret_cast<const LevelHeader *>(data);
+        if (std::memcmp(h->magic, kLevelMagic, sizeof(kLevelMagic)) != 0)
+            return LevelError::BadMagic;
+        if (h->version != kLevelVersion || h->sectionCount != kSectionCount)
+            return LevelError::BadVersion;
+        if (h->fileSize != size)
+            return LevelError::BadSize;
+        if (checkCrc &&
+            crc32(data + sizeof(LevelHeader), size - sizeof(LevelHeader)) != h->crc32)
+            return LevelError::BadChecksum;
+
+        const auto *dir = reinterpret_cast<const SectionDir *>(data + sizeof(LevelHeader));
+        for (int i = 0; i < kSectionCount; ++i)
+        {
+            const SectionDir &d = dir[i];
+            const std::uint32_t record = sectionRecordSize(static_cast<Section>(i));
+            // 64-bit sums: a hostile offset must not wrap its way past the check.
+            if ((d.offset & 3) != 0 || d.offset < kLevelDataStart ||
+                static_cast<std::uint64_t>(d.offset) + d.size > size ||
+                static_cast<std::uint64_t>(d.count) * record != d.size)
+                return LevelError::BadLayout;
+        }
+
+        header = h;
+        planes = section<Plane>(data, dir, Section::Planes, planeCount);
+        std::uint32_t planeTypeCount = 0;
+        planeTypes = section<std::uint8_t>(data, dir, Section::PlaneTypes, planeTypeCount);
+        nodes = section<Node>(data, dir, Section::Nodes, nodeCount);
+        leaves = section<Leaf>(data, dir, Section::Leaves, leafCount);
+        marks = section<std::uint16_t>(data, dir, Section::Marks, markCount);
+        vis = section<std::uint8_t>(data, dir, Section::Vis, visSize);
+        surfaces = section<Surface>(data, dir, Section::Surfaces, surfaceCount);
+        gxStream = section<std::uint32_t>(data, dir, Section::GxStream, gxWordCount);
+        models = section<Model>(data, dir, Section::Models, modelCount);
+        clipNodes = section<ClipNode>(data, dir, Section::ClipNodes, clipNodeCount);
+        textures = section<TextureRef>(data, dir, Section::Textures, textureCount);
+        entities = section<EntityRecord>(data, dir, Section::Entities, entityCount);
+        entityText = section<char>(data, dir, Section::EntityText, entityTextSize);
+        brushes = section<Brush>(data, dir, Section::Brushes, brushCount);
+        brushLeaves = section<std::uint16_t>(data, dir, Section::BrushLeaves, brushLeafCount);
+        logic = section<LogicRecord>(data, dir, Section::Logic, logicCount);
+        logicAux = section<LogicAux>(data, dir, Section::LogicAux, logicAuxCount);
+        corners = section<PathCorner>(data, dir, Section::PathCorners, cornerCount);
+        nameHashes = section<std::uint32_t>(data, dir, Section::NameHashes, nameCount);
+        landmarks = section<Landmark>(data, dir, Section::Landmarks, landmarkCount);
+        strings = section<char>(data, dir, Section::Strings, stringsSize);
+        modelRefs = section<ModelRef>(data, dir, Section::ModelRefs, modelRefCount);
+        actors = section<ActorRecord>(data, dir, Section::Actors, actorCount);
+        pathNodes = section<PathNode>(data, dir, Section::PathNodes, pathNodeCount);
+        pathNext = section<std::uint8_t>(data, dir, Section::PathNext, pathNextCount);
+        sounds = section<SoundRef>(data, dir, Section::Sounds, soundCount);
+        logicSounds = section<LogicSound>(data, dir, Section::LogicSounds, logicSoundCount);
+        sentences = section<SentenceRecord>(data, dir, Section::Sentences, sentenceCount);
+        sentenceWords = section<std::uint16_t>(data, dir, Section::SentenceWords, sentenceWordCount);
+        rooms = section<RoomRecord>(data, dir, Section::Rooms, roomCount);
+
+        LevelError result = planeTypeCount == planeCount ? validate() : LevelError::BadLayout;
+        if (result != LevelError::Ok)
+            *this = LevelView();
+        return result;
+    }
+
+    inline LevelError LevelView::validate() const
+    {
+        if (modelCount == 0 || leafCount == 0)
+            return LevelError::BadIndex;
+        if (header->visLeafCount >= leafCount)
+            return LevelError::BadIndex;
+
+        for (std::uint32_t i = 0; i < planeCount; ++i)
+        {
+            if (planeTypes[i] > kPlaneOther)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < nodeCount; ++i)
+        {
+            const Node &n = nodes[i];
+            if (n.plane >= planeCount || !validChild(n.children[0]) ||
+                !validChild(n.children[1]) || (n.parent != kNoParent && n.parent >= nodeCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < leafCount; ++i)
+        {
+            const Leaf &l = leaves[i];
+            if (static_cast<std::uint32_t>(l.firstMark) + l.markCount > markCount ||
+                (l.visOfs >= 0 && static_cast<std::uint32_t>(l.visOfs) >= visSize) ||
+                l.visOfs < -1 || (l.parent != kNoParent && l.parent >= nodeCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < markCount; ++i)
+        {
+            if (marks[i] >= surfaceCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < surfaceCount; ++i)
+        {
+            const Surface &s = surfaces[i];
+            if (static_cast<std::uint64_t>(s.gxOfs) + s.gxWords > gxWordCount ||
+                static_cast<std::uint32_t>(s.planeRef & kSurfacePlaneMask) >= planeCount ||
+                (s.texture != kNoTexture && s.texture >= textureCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < clipNodeCount; ++i)
+        {
+            const ClipNode &c = clipNodes[i];
+            if (c.plane >= planeCount ||
+                (c.children[0] >= 0 && static_cast<std::uint32_t>(c.children[0]) >= clipNodeCount) ||
+                (c.children[1] >= 0 && static_cast<std::uint32_t>(c.children[1]) >= clipNodeCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < modelCount; ++i)
+        {
+            const Model &m = models[i];
+            if (!validChild(m.headNode) ||
+                (m.clipStanding >= 0 && static_cast<std::uint32_t>(m.clipStanding) >= clipNodeCount) ||
+                (m.clipCrouched >= 0 && static_cast<std::uint32_t>(m.clipCrouched) >= clipNodeCount) ||
+                static_cast<std::uint32_t>(m.firstSurface) + m.surfaceCount > surfaceCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < textureCount; ++i)
+        {
+            // The name becomes a file name on the card: it must end.
+            if (textures[i].name[sizeof(textures[i].name) - 1] != '\0')
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < entityCount; ++i)
+        {
+            if (entities[i].model >= modelCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < brushCount; ++i)
+        {
+            const Brush &b = brushes[i];
+            if (b.model == 0 || b.model >= modelCount ||
+                b.renderClass > static_cast<std::uint8_t>(RenderClass::Hidden) ||
+                static_cast<std::uint32_t>(b.firstLeaf) + b.leafCount > brushLeafCount ||
+                (b.logic != kNoLogic && b.logic >= logicCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < brushLeafCount; ++i)
+        {
+            if (brushLeaves[i] >= leafCount)
+                return LevelError::BadIndex;
+        }
+        if (logicCount > 0x7FFF || nameCount == 0 || nameCount > 0xFFFF)
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < modelRefCount; ++i)
+        {
+            // The name becomes a file name on the card: it must end.
+            if (modelRefs[i].name[sizeof(modelRefs[i].name) - 1] != '\0')
+                return LevelError::BadIndex;
+        }
+        if (header->viewModel > modelRefCount)
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < actorCount; ++i)
+        {
+            if (actors[i].model >= modelRefCount || actors[i].name >= nameCount ||
+                actors[i].kind >= static_cast<std::uint8_t>(ActorKind::Count) ||
+                actors[i].item >= static_cast<std::uint32_t>(ItemKind::Count) ||
+                actors[i].target >= nameCount)
+                return LevelError::BadIndex;
+        }
+        // Sounds: a name becomes a file name on the card, so it must end;
+        // and everything that points into the list must point inside it.
+        if (soundCount > 0x7FFF || (logicSoundCount != 0 && logicSoundCount != logicCount))
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < soundCount; ++i)
+        {
+            if (sounds[i].name[sizeof(sounds[i].name) - 1] != '\0')
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < logicSoundCount; ++i)
+        {
+            if ((logicSounds[i].move != 0xFFFF && logicSounds[i].move >= soundCount) ||
+                (logicSounds[i].stop != 0xFFFF && logicSounds[i].stop >= soundCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < sentenceCount; ++i)
+        {
+            if (static_cast<std::uint32_t>(sentences[i].firstWord) + sentences[i].wordCount >
+                sentenceWordCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < sentenceWordCount; ++i)
+        {
+            if (sentenceWords[i] >= soundCount)
+                return LevelError::BadIndex;
+        }
+        if (pathNodeCount > static_cast<std::uint32_t>(kMaxPathNodes) ||
+            pathNextCount != pathNodeCount * pathNodeCount)
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < pathNextCount; ++i)
+        {
+            if (pathNext[i] != kNoPathNode && pathNext[i] >= pathNodeCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < cornerCount; ++i)
+        {
+            if ((corners[i].next != kNoCorner && corners[i].next >= cornerCount) ||
+                corners[i].fireTarget >= nameCount || corners[i].netName >= nameCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < logicCount; ++i)
+        {
+            const LogicRecord &r = logic[i];
+            if (r.kind >= static_cast<std::uint8_t>(LogicKind::Count) || r.useType > kUseToggle ||
+                (r.brush != kNoBrush && r.brush >= brushCount))
+                return LevelError::BadIndex;
+            // Names are indices into NameHashes.
+            if (r.name >= nameCount || r.target >= nameCount || r.killTarget >= nameCount ||
+                r.master >= nameCount || r.netName >= nameCount)
+                return LevelError::BadIndex;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel))
+            {
+                // The map's name becomes a file name: it must be there, and end.
+                bool ends = false;
+                for (std::uint32_t c = r.extra[0]; c < stringsSize && !ends; ++c)
+                    ends = strings[c] == '\0';
+                if (!ends)
+                    return LevelError::BadIndex;
+            }
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Script) && r.extra[0] >= nameCount)
+                return LevelError::BadIndex;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Ambient) &&
+                (r.extra[3] > 1 || (r.extra[3] == 0 && r.extra[0] >= soundCount) ||
+                 (r.extra[3] == 1 && r.extra[0] >= sentenceCount)))
+                return LevelError::BadIndex;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Maker) &&
+                (r.extra[0] > actorCount || r.extra[1] > actorCount - r.extra[0]))
+                return LevelError::BadIndex;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::TrackChange) &&
+                ((r.extra[1] != kNoCorner && r.extra[1] >= cornerCount) ||
+                 (r.extra[2] != kNoCorner && r.extra[2] >= cornerCount) || r.extra[3] >= nameCount))
+                return LevelError::BadIndex;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Train) ||
+                r.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain))
+            {
+                // A train's firstAux is its first corner, not a list.
+                if (r.firstAux != kNoCorner && r.firstAux >= cornerCount)
+                    return LevelError::BadIndex;
+                continue;
+            }
+            if (static_cast<std::uint32_t>(r.firstAux) + r.auxCount > logicAuxCount)
+                return LevelError::BadIndex;
+            // A multisource's list holds record indices.
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::MultiSource))
+            {
+                for (std::uint32_t a = 0; a < r.auxCount; ++a)
+                {
+                    if (logicAux[r.firstAux + a].target >= logicCount)
+                        return LevelError::BadIndex;
+                }
+            }
+            else
+            {
+                // Anyone else's holds names.
+                for (std::uint32_t a = 0; a < r.auxCount; ++a)
+                {
+                    if (logicAux[r.firstAux + a].target >= nameCount)
+                        return LevelError::BadIndex;
+                }
+            }
+        }
+        return LevelError::Ok;
+    }
+} // namespace hldata

@@ -1,0 +1,1591 @@
+// The entity logic: shared/HlLogic.hpp driven on the host, on maps cooked from
+// the synthetic room.
+//
+// Each scenario is one rule a real map depends on, taken from the SDK: a
+// button that starts a multi_manager that opens a door half a second later; a
+// door with a name that will NOT open when walked into; a door that turns
+// round when the player is in the way; a lift that carries the player up. The
+// maps are a few brushes and a few lines of entity text, so that what is
+// being tested is the rule and nothing else.
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <random>
+
+#include "HlLevelReader.hpp"
+#include "HlLogic.hpp"
+#include "HlTransition.hpp"
+#include "TestBspBuilder.hpp"
+#include "hlds/Cooker.hpp"
+#include "hlds/EntityCook.hpp"
+
+using namespace hlds;
+using namespace hldata;
+using namespace hldstest;
+
+namespace
+{
+    double toUnits(fx v) { return v / 4096.0; }
+
+    /// A cooked map with the logic set up the way the DS sets it up.
+    struct Game
+    {
+        BspFile bsp;
+        std::vector<std::uint8_t> bytes;
+        LevelView view;
+        MoveWorld move;
+        std::vector<MoverHull> movers;
+        std::vector<BrushState> brushStates;
+        std::vector<LogicState> states;
+        std::vector<LadderVolume> ladders;
+        LogicWorld logic;
+        PlayerState player;
+        bool ok = false;
+
+        void tick(int ms, int times = 1)
+        {
+            for (int i = 0; i < times; ++i)
+                logicTick(logic, player, ms);
+        }
+        /// Logic and movement together, as a frame does them.
+        void frame(const MoveCommand &cmd, int times = 1)
+        {
+            for (int i = 0; i < times; ++i)
+            {
+                logicTick(logic, player, 33);
+                playerMove(player, cmd, move, kPlayerTick);
+            }
+        }
+        /// The record whose brush is model `model`.
+        int recordOfModel(int model) const
+        {
+            for (std::uint32_t i = 0; i < view.logicCount; ++i)
+            {
+                if (view.logic[i].brush != kNoBrush &&
+                    view.brushes[view.logic[i].brush].model == model)
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+        int recordOfKind(LogicKind kind, int nth = 0) const
+        {
+            for (std::uint32_t i = 0; i < view.logicCount; ++i)
+            {
+                if (view.logic[i].kind == static_cast<std::uint8_t>(kind) && nth-- == 0)
+                    return static_cast<int>(i);
+            }
+            return -1;
+        }
+        const BrushState &brushOfModel(int model) const
+        {
+            for (std::uint32_t i = 0; i < view.brushCount; ++i)
+            {
+                if (view.brushes[i].model == model)
+                    return brushStates[i];
+            }
+            return brushStates[0];
+        }
+        void use(int record) { logicUse(logic, player, record, -1, kUseToggle); }
+    };
+
+    void build(Game &g, const BoxRoom &room)
+    {
+        std::string error;
+        CookedLevel level;
+        CookReport report;
+        g.ok = g.bsp.parse(buildBoxRoom(room), error) &&
+               cookLevel(g.bsp, CookOptions(), TexturePlan(), level, report, error) &&
+               writeLevel(level, g.bytes, error) &&
+               g.view.open(g.bytes.data(), static_cast<std::uint32_t>(g.bytes.size())) ==
+                   LevelError::Ok;
+        if (!g.ok)
+        {
+            std::fprintf(stderr, "game failed: %s\n", error.c_str());
+            return;
+        }
+        const LevelView &v = g.view;
+        g.move.standing = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipStanding};
+        g.move.crouched = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipCrouched};
+        g.movers.resize(v.brushCount);
+        g.brushStates.resize(v.brushCount);
+        g.states.resize(v.logicCount);
+        for (std::uint32_t i = 0; i < v.brushCount; ++i)
+        {
+            const Model &model = v.models[v.brushes[i].model];
+            g.movers[i].standing = Hull{v.clipNodes, v.planes, v.planeTypes, model.clipStanding};
+            g.movers[i].crouched = Hull{v.clipNodes, v.planes, v.planeTypes, model.clipCrouched};
+        }
+        g.move.movers = g.movers.data();
+        g.move.moverCount = static_cast<int>(g.movers.size());
+
+        g.logic.records = v.logic;
+        g.logic.recordCount = static_cast<int>(v.logicCount);
+        g.logic.aux = v.logicAux;
+        g.logic.corners = v.corners;
+        g.logic.brushes = v.brushes;
+        g.logic.brushCount = static_cast<int>(v.brushCount);
+        g.logic.states = g.states.data();
+        g.logic.brushStates = g.brushStates.data();
+        g.logic.movers = g.movers.data();
+        g.logic.world = &g.move;
+        int ladderCount = 0;
+        for (std::uint32_t i = 0; i < v.logicCount; ++i)
+            ladderCount += v.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Ladder);
+        g.ladders.resize(ladderCount + 1);
+        g.move.ladders = g.ladders.data();
+        g.move.ladderCount = ladderCount;
+        g.logic.ladders = g.ladders.data();
+        logicInit(g.logic);
+
+        g.player = PlayerState();
+        g.player.origin[2] = fxFromInt(40);
+        MoveCommand idle;
+        for (int i = 0; i < 30; ++i)
+            playerMove(g.player, idle, g.move, kPlayerTick);
+    }
+
+    BrushBox brush(const char *cls, const char *keys, float x0, float y0, float z0, float x1,
+                   float y1, float z1)
+    {
+        BrushBox b;
+        b.className = cls;
+        b.keys = keys;
+        b.mins[0] = x0;
+        b.mins[1] = y0;
+        b.mins[2] = z0;
+        b.maxs[0] = x1;
+        b.maxs[1] = y1;
+        b.maxs[2] = z1;
+        return b;
+    }
+
+    // ---- the converter's arithmetic ---------------------------------------
+
+    void testCookRules()
+    {
+        std::vector<Entity> e;
+        std::string error;
+        auto dir = [&](const char *keys, double *out)
+        {
+            parseEntities(std::string("{") + keys + "}", e, error);
+            moverDirection(e[0], out);
+        };
+        double d[3];
+        dir("\"angle\" \"-1\"", d);
+        check(d[0] == 0 && d[1] == 0 && d[2] == 1, "angle -1 is up");
+        dir("\"angle\" \"-2\"", d);
+        check(d[2] == -1, "angle -2 is down");
+        dir("\"angle\" \"90\"", d);
+        check(d[0] == 0 && std::fabs(d[1] - 1) < 1e-12 && d[2] == 0, "angle 90 is exactly +Y");
+        dir("\"angles\" \"0 180 0\"", d);
+        check(std::fabs(d[0] + 1) < 1e-12 && d[1] == 0, "angles 0 180 0 is -X");
+        dir("\"angles\" \"0 -1 0\"", d);
+        check(d[2] == 1, "the three-number form of -1 is up too");
+        dir("", d);
+        check(d[0] == 1 && d[1] == 0 && d[2] == 0, "no angle at all is +X");
+
+        // The engine's travel: the size along the direction, less 2, less lip.
+        const double up[3] = {0, 0, 1};
+        const double size[3] = {64, 8, 96};
+        double move[3];
+        moverTravel(up, size, 8, move);
+        check(move[0] == 0 && move[1] == 0 && move[2] == 86, "a 96-high door with lip 8 rises 86");
+        const double side[3] = {-1, 0, 0};
+        moverTravel(side, size, 0, move);
+        check(move[0] == -62 && move[2] == 0, "sideways it slides its width less 2");
+    }
+
+    void testCookedRecords()
+    {
+        BoxRoom room;
+        room.brushes = {
+            brush("func_door",
+                  "\"targetname\" \"door1\"\n\"angle\" \"-1\"\n\"speed\" \"100\"\n\"wait\" \"2\"\n"
+                  "\"lip\" \"4\"\n\"netname\" \"shut\"\n\"spawnflags\" \"32\"\n\"dmg\" \"5\"\n",
+                  40, -32, 0, 48, 32, 64),
+            brush("func_button", "\"target\" \"mm1\"\n\"spawnflags\" \"1\"\n", -100, 0, 40, -96, 8, 48),
+            brush("func_button", "\"target\" \"door1\"\n\"angle\" \"90\"\n\"master\" \"ms1\"\n",
+                  -100, 20, 40, -96, 28, 48),
+            brush("trigger_once", "\"target\" \"door1\"\n\"delay\" \"1.5\"\n\"killtarget\" \"gone\"\n",
+                  -64, -64, 0, -32, -32, 64),
+            brush("trigger_multiple", "\"target\" \"x\"\n\"spawnflags\" \"2\"\n", 0, 0, 0, 8, 8, 8),
+            brush("func_wall", "\"targetname\" \"gone\"\n", 80, 0, 0, 88, 8, 64),
+            brush("func_wall", "", 80, 20, 0, 88, 28, 64),
+        };
+        room.extraEntities =
+            "{\n\"classname\" \"multi_manager\"\n\"targetname\" \"mm1\"\n\"door1\" \"0.5\"\n"
+            "\"later\" \"2\"\n\"door1#1\" \"0\"\n\"spawnflags\" \"1\"\n}\n"
+            "{\n\"classname\" \"multisource\"\n\"targetname\" \"ms1\"\n\"target\" \"out\"\n}\n"
+            "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"r\"\n\"target\" \"ms1\"\n"
+            "\"triggerstate\" \"1\"\n\"spawnflags\" \"1\"\n}\n"
+            "{\n\"classname\" \"trigger_auto\"\n\"target\" \"door1\"\n\"triggerstate\" \"0\"\n}\n"
+            "{\n\"classname\" \"monster_scientist\"\n}\n{\n\"classname\" \"monster_scientist\"\n}\n"
+            "{\n\"classname\" \"env_beam\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "the records room cooks");
+        if (!g.ok)
+            return;
+        const LevelView &v = g.view;
+
+        const LogicRecord &door = v.logic[g.recordOfModel(1)];
+        check(door.kind == static_cast<std::uint8_t>(LogicKind::Door) &&
+                  door.speed == fxFromInt(100) && door.waitMs == 2000 && door.damage == 5,
+              "the door's numbers");
+        check(door.move[0] == 0 && door.move[1] == 0 && door.move[2] == fxFromInt(64 - 2 - 4),
+              "its travel: up by its height less 2 and its lip");
+        check((door.flags & kLogicToggle) && !(door.flags & kLogicTouch) &&
+                  !(door.flags & kLogicStartOpen),
+              "flag 32 makes it a toggle; having a name means walking into it does nothing");
+        check(door.name != 0 && door.netName != 0 && door.netName != door.name, "its names");
+        check(v.brushes[door.brush].logic == g.recordOfModel(1), "brush and record point at each other");
+
+        const LogicRecord &plain = v.logic[g.recordOfModel(2)];
+        check(plain.kind == static_cast<std::uint8_t>(LogicKind::Button) && plain.waitMs == 1000 &&
+                  plain.speed == fxFromInt(40) && plain.move[0] == 0 && plain.move[1] == 0 &&
+                  plain.move[2] == 0,
+              "a don't-move button: default wait 1 s, speed 40, no travel");
+        const LogicRecord &moving = v.logic[g.recordOfModel(3)];
+        // 8 deep along Y: 8 - 2 - the default lip of 4.
+        check(moving.move[1] == fxFromInt(2) && moving.move[0] == 0 && moving.master != 0,
+              "a moving button travels its depth less 2 and the default lip of 4");
+        check(moving.target == door.name, "a target is the id of the name it names");
+
+        // A trigger has no brush record -- it is neither seen nor solid -- so
+        // it is found by kind, not by model.
+        const LogicRecord &once = v.logic[g.recordOfKind(LogicKind::TriggerOnce)];
+        check(once.kind == static_cast<std::uint8_t>(LogicKind::TriggerOnce) &&
+                  once.delayMs == 1500 && once.waitMs == -1 && once.brush == kNoBrush,
+              "a trigger: delay in ms, never re-arms, has no brush");
+        check(once.mins[0] == -64 && once.maxs[0] == -32 && once.maxs[2] == 64, "its volume");
+        check(g.recordOfKind(LogicKind::TriggerMultiple) == -1,
+              "a trigger that ignores the player gets no record");
+
+        const LogicRecord &gone = v.logic[g.recordOfModel(6)];
+        check(gone.kind == static_cast<std::uint8_t>(LogicKind::Static) && gone.name == once.killTarget,
+              "a named wall gets a record so that a killtarget can find it");
+        check(g.recordOfModel(7) == -1, "an unnamed wall needs none");
+
+        const LogicRecord &manager = v.logic[g.recordOfKind(LogicKind::MultiManager)];
+        check(manager.auxCount == 3 && (manager.flags & kLogicThread) && manager.target == 0,
+              "the multi_manager has three outputs and no target of its own");
+        const LogicAux *out = v.logicAux + manager.firstAux;
+        check(out[0].delayMs == 0 && out[0].target == door.name && out[1].delayMs == 500 &&
+                  out[1].target == door.name && out[2].delayMs == 2000,
+              "sorted by delay, with the editor's #1 suffix taken off");
+
+        const int ms = g.recordOfKind(LogicKind::MultiSource);
+        const LogicRecord &source = v.logic[ms];
+        check(source.auxCount == 1 &&
+                  v.logicAux[source.firstAux].target == g.recordOfKind(LogicKind::TriggerRelay),
+              "the multisource's one input is the relay that targets it");
+        check(g.states[g.recordOfModel(3)].master == ms, "and it is the second button's master");
+
+        const LogicRecord &relay = v.logic[g.recordOfKind(LogicKind::TriggerRelay)];
+        check(relay.useType == kUseOn && (relay.flags & kLogicFireOnce), "the relay: on, once");
+        check(v.logic[g.recordOfKind(LogicKind::TriggerAuto)].useType == kUseOff, "trigger_auto: off");
+
+        // The report of what is not handled.
+        BspFile bsp;
+        std::string error;
+        CookedLevel level;
+        CookReport report;
+        bsp.parse(buildBoxRoom(room), error);
+        cookLevel(bsp, CookOptions(), TexturePlan(), level, report, error);
+        // The trigger that ignores the player is in the list too: what would
+        // fire it (a monster) does not exist yet.
+        check(report.unsupported.size() == 3 && report.unsupported["monster_scientist"] == 2 &&
+                  report.unsupported["env_beam"] == 1 &&
+                  report.unsupported["trigger_multiple"] == 1,
+              "classes with no handling are counted, by class");
+        check(report.logicRecords == static_cast<int>(v.logicCount), "and the records are counted");
+    }
+
+    // ---- behaviour ----------------------------------------------------------
+
+    /// A button starts a multi_manager; the manager opens a door half a second
+    /// later; the door goes up, waits, and comes back.
+    void testButtonManagerDoor()
+    {
+        BoxRoom room;
+        room.brushes = {
+            brush("func_door",
+                  "\"targetname\" \"door1\"\n\"angle\" \"-1\"\n\"speed\" \"100\"\n\"wait\" \"2\"\n"
+                  "\"target\" \"relay1\"\n",
+                  40, -32, 0, 48, 32, 64),
+            brush("func_button", "\"target\" \"mm1\"\n\"spawnflags\" \"1\"\n\"wait\" \"3\"\n",
+                  -100, 0, 40, -96, 8, 48),
+            brush("func_wall_toggle", "\"targetname\" \"lamp\"\n", 80, 0, 0, 88, 8, 16),
+        };
+        room.extraEntities =
+            "{\n\"classname\" \"multi_manager\"\n\"targetname\" \"mm1\"\n\"door1\" \"0.5\"\n}\n"
+            // "triggerstate" 2 is toggle. Left out, a relay sends OFF -- the
+            // SDK's default -- and the lamp would be switched off twice.
+            "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"relay1\"\n\"target\" \"lamp\"\n"
+            "\"triggerstate\" \"2\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "button room");
+        if (!g.ok)
+            return;
+        const int door = g.recordOfModel(1);
+        const int button = g.recordOfModel(2);
+        const BrushState &slab = g.brushOfModel(1);
+        const BrushState &lamp = g.brushOfModel(3);
+
+        g.tick(33, 10);
+        check(g.states[door].move == MoveState::AtBottom && slab.pos[2] == 0, "nothing moves unasked");
+
+        g.use(button);
+        g.tick(33);
+        check(g.states[button].move == MoveState::AtTop, "a don't-move button is 'in' at once");
+        g.tick(33, 12); // about 0.43 s
+        check(g.states[door].move == MoveState::AtBottom, "the manager's half second is not up");
+        g.tick(33, 4);
+        check(g.states[door].move == MoveState::GoingUp, "after it, the door starts");
+        check(lamp.active, "the door's own target has not fired yet");
+
+        // 62 units at 100 a second: 0.62 s.
+        g.tick(33, 10);
+        check(g.states[door].move == MoveState::GoingUp && slab.pos[2] > fxFromInt(20) &&
+                  slab.pos[2] < fxFromInt(50),
+              "half way up after a third of a second");
+        g.tick(33, 12);
+        check(g.states[door].move == MoveState::AtTop && slab.pos[2] == fxFromInt(62),
+              "it stops exactly at the top of its travel");
+        check(!lamp.active, "reaching the top fires its target (the relay switches the lamp)");
+        const std::size_t doorBrush = g.view.logic[door].brush;
+        check(g.movers[doorBrush].origin[2] == fxFromInt(62) &&
+                  g.movers[doorBrush].mins[2] == fxFromInt(62),
+              "and the collision has moved with it");
+
+        // Using the button again while it is in does nothing.
+        g.use(button);
+        check(g.states[button].move == MoveState::AtTop, "a pressed button ignores another press");
+
+        g.tick(33, 62); // its 2 s wait, then it starts down
+        check(g.states[door].move == MoveState::GoingDown, "after its wait it comes back");
+        g.tick(33, 22);
+        check(g.states[door].move == MoveState::AtBottom && slab.pos[2] == 0, "and shuts");
+        check(lamp.active, "shutting fires the target again: the lamp is back");
+
+        check(g.states[button].move == MoveState::AtBottom, "the button popped out after its 3 s");
+        check(g.logic.eventsDropped == 0, "no event was lost");
+    }
+
+    /// Doors and the player: touch, names, being in the way, being carried.
+    void testDoorsAndThePlayer()
+    {
+        BoxRoom room;
+        room.brushes = {
+            // 1: a door with no name, across the player's path to +x.
+            brush("func_door", "\"angle\" \"-1\"\n\"speed\" \"200\"\n\"wait\" \"1\"\n", 40, -64, 0, 48, 64, 100),
+            // 2: a named door, across the path to -x.
+            brush("func_door", "\"targetname\" \"named\"\n\"angle\" \"-1\"\n\"speed\" \"200\"\n\"wait\" \"1\"\n",
+                  -48, -64, 0, -40, 64, 100),
+            // 3: a platform the player can stand on, that rises: a door that
+            //    goes up and stays.
+            brush("func_door", "\"targetname\" \"lift\"\n\"angle\" \"-1\"\n\"speed\" \"50\"\n\"wait\" \"-1\"\n"
+                               "\"lip\" \"-40\"\n",
+                  -30, 80, 0, 30, 112, 8),
+        };
+        Game g;
+        build(g, room);
+        check(g.ok, "door room");
+        if (!g.ok)
+            return;
+        const int touchDoor = g.recordOfModel(1);
+        const int namedDoor = g.recordOfModel(2);
+        const int lift = g.recordOfModel(3);
+        check((g.view.logic[touchDoor].flags & kLogicTouch) &&
+                  !(g.view.logic[namedDoor].flags & kLogicTouch),
+              "only the nameless door answers to touch");
+
+        // Walk at the named door: it stays shut and stops the player.
+        MoveCommand cmd;
+        cmd.forward = 1;
+        cmd.forwardXY[0] = -kFxOne;
+        cmd.forwardXY[1] = 0;
+        g.frame(cmd, 40);
+        check(g.states[namedDoor].move == MoveState::AtBottom, "a named door ignores being walked into");
+        check(toUnits(g.player.origin[0]) > -24.1 && toUnits(g.player.origin[0]) < -23.9,
+              "and stops the player");
+
+        // Walk at the nameless one: it opens, and the player goes through.
+        cmd.forwardXY[0] = kFxOne;
+        g.frame(cmd, 25);
+        check(g.states[touchDoor].move != MoveState::AtBottom, "a nameless door opens when touched");
+        g.frame(cmd, 60);
+        check(toUnits(g.player.origin[0]) > 80, "and the player walks through the opening");
+
+        // Wait for it to shut, open it again by name-less touch from the far
+        // side, and this time stand in the doorway once it is fully up. It
+        // comes down after its wait, meets the player, cannot push them
+        // through the floor, and goes back up.
+        cmd.forward = 0;
+        g.frame(cmd, 120);
+        check(g.states[touchDoor].move == MoveState::AtBottom, "left alone, it shuts");
+        logicUse(g.logic, g.player, touchDoor, -1, kUseToggle);
+        for (int i = 0; i < 60 && g.states[touchDoor].move != MoveState::AtTop; ++i)
+            g.frame(cmd);
+        check(g.states[touchDoor].move == MoveState::AtTop, "and opens again when used");
+        g.player.origin[0] = fxFromInt(44);
+        g.player.origin[2] = fxFromInt(40);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        int reversals = 0;
+        double lowest = 1e9;
+        MoveState last = g.states[touchDoor].move;
+        for (int i = 0; i < 200; ++i)
+        {
+            g.frame(cmd);
+            if (last == MoveState::GoingDown && g.states[touchDoor].move == MoveState::GoingUp)
+                ++reversals;
+            last = g.states[touchDoor].move;
+            lowest = std::min(lowest, toUnits(g.brushOfModel(1).pos[2]));
+            check(hullPositionFree(g.move.standing, g.player.origin), "never pushed into the world");
+        }
+        check(reversals >= 2, "a door that meets the player turns round, every time it tries");
+        // The player's head is 72 above the floor; the door's underside is at
+        // its position.
+        check(lowest > 70, "and never comes down past the top of their head");
+        check(std::fabs(toUnits(g.player.origin[0]) - 44) < 0.5 && g.player.onGround,
+              "the player was not shoved aside, and is still standing");
+
+        // The lift: stand on it, send it up, and go up with it.
+        g.player.origin[0] = 0;
+        g.player.origin[1] = fxFromInt(96);
+        g.player.origin[2] = fxFromInt(60);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        g.frame(cmd, 30);
+        const double standing = toUnits(g.player.origin[2]);
+        check(g.player.onGround && g.player.groundMover == static_cast<int>(g.view.logic[lift].brush) &&
+                  std::fabs(standing - (8 + 36 + 1.0 / 32)) < 0.01,
+              "standing on the lift, and the movement knows which brush that is");
+        logicFire(g.logic, g.player, g.view.logic[lift].name, -1, kUseToggle, 0);
+        g.frame(cmd, 20);
+        check(g.states[lift].move == MoveState::GoingUp, "the lift starts when its name is fired");
+        check(toUnits(g.player.origin[2]) > standing + 20, "and the player rises with it");
+        g.frame(cmd, 60);
+        // Travel: 8 high, less 2, less a lip of -40: 46 units.
+        check(g.states[lift].move == MoveState::AtTop &&
+                  g.brushOfModel(3).pos[2] == fxFromInt(46),
+              "it stops at the top of its travel and, with wait -1, stays");
+        check(g.player.onGround && std::fabs(toUnits(g.player.origin[2]) - (standing + 46)) < 0.1,
+              "with the player still standing on it, 46 units higher");
+        g.frame(cmd, 90);
+        check(g.states[lift].move == MoveState::AtTop, "wait -1: it does not come back by itself");
+    }
+
+    void testTriggersAndWiring()
+    {
+        BoxRoom room;
+        room.brushes = {
+            brush("trigger_once", "\"target\" \"wallA\"\n", 40, -128, 0, 128, 128, 128),
+            brush("trigger_multiple", "\"target\" \"count\"\n\"wait\" \"0.5\"\n", -128, -128, 0, -40, 128, 128),
+            brush("func_wall_toggle", "\"targetname\" \"wallA\"\n", 0, 100, 0, 8, 108, 64),
+            brush("func_wall_toggle", "\"targetname\" \"count\"\n", 0, 80, 0, 8, 88, 64),
+            brush("func_wall", "\"targetname\" \"doomed\"\n", 0, 60, 0, 8, 68, 64),
+            brush("func_button", "\"target\" \"ms\"\n\"spawnflags\" \"1\"\n\"wait\" \"-1\"\n", 0, 40, 40, 4, 44, 48),
+            brush("func_button", "\"target\" \"ms\"\n\"spawnflags\" \"1\"\n\"wait\" \"0.3\"\n", 0, 30, 40, 4, 34, 48),
+            brush("func_door", "\"targetname\" \"gated\"\n\"master\" \"ms\"\n\"angle\" \"-1\"\n", 0, 0, 100, 8, 8, 120),
+            brush("func_wall_toggle", "\"targetname\" \"result\"\n\"spawnflags\" \"1\"\n", 0, -20, 0, 8, -12, 64),
+            // "wait" -1: without it a door waits 0 seconds and goes straight back.
+            brush("func_door", "\"targetname\" \"open\"\n\"angle\" \"-1\"\n\"spawnflags\" \"1\"\n\"speed\" \"100\"\n\"wait\" \"-1\"\n",
+                  0, -60, 0, 8, -52, 32),
+            brush("func_breakable", "\"targetname\" \"glass\"\n\"target\" \"result\"\n", 0, -90, 0, 8, -82, 32),
+        };
+        room.extraEntities =
+            "{\n\"classname\" \"multisource\"\n\"targetname\" \"ms\"\n\"target\" \"result\"\n}\n"
+            "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"killer\"\n\"killtarget\" \"doomed\"\n"
+            "\"delay\" \"0.2\"\n}\n"
+            "{\n\"classname\" \"trigger_auto\"\n\"target\" \"count\"\n\"delay\" \"0.3\"\n}\n"
+            "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"loop\"\n\"target\" \"loop\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "wiring room");
+        if (!g.ok)
+            return;
+        const BrushState &wallA = g.brushOfModel(3);
+        const BrushState &counter = g.brushOfModel(4);
+        MoveCommand idle;
+
+        // trigger_auto: a tenth of a second after the start, then its own
+        // delay, with nobody doing anything.
+        check(counter.active, "the counter wall starts on");
+        g.tick(33, 11); // 0.36 s
+        check(counter.active, "0.1 s + 0.3 s has not passed");
+        g.tick(33, 3);
+        check(!counter.active, "trigger_auto fires by itself after 0.1 s and its delay");
+
+        // The player is at the origin, in neither trigger.
+        check(wallA.active, "trigger_once has not fired");
+
+        // Into the trigger_multiple (x < -40): fires, re-arms after half a second.
+        g.player.origin[0] = fxFromInt(-80);
+        g.tick(33);
+        check(counter.active, "entering trigger_multiple fires it (toggling the wall back)");
+        g.tick(33, 10);
+        check(counter.active, "it does not fire again inside its wait");
+        g.tick(33, 6);
+        check(!counter.active, "and does once the wait is over, the player still inside");
+
+        // Into the trigger_once: fires once only.
+        g.player.origin[0] = fxFromInt(80);
+        g.tick(33);
+        check(!wallA.active, "entering trigger_once fires it");
+        g.tick(33, 60);
+        check(!wallA.active, "and never again");
+        g.player.origin[0] = 0;
+
+        // killtarget, after a delay: the wall is gone, and so is its collision.
+        const BrushState &doomed = g.brushOfModel(5);
+        const int killer = g.recordOfKind(LogicKind::TriggerRelay, 0);
+        g.use(killer);
+        g.tick(33, 5);
+        check(doomed.active, "a delayed killtarget waits");
+        g.tick(33, 2);
+        check(!doomed.active, "then removes the wall");
+        const fx a[3] = {fxFromInt(-40), fxFromInt(64), fxFromInt(64)};
+        const fx b[3] = {fxFromInt(60), fxFromInt(64), fxFromInt(64)};
+        check(traceAll(g.move, false, a, b).fraction == kFractionOne,
+              "and a removed wall stops nothing");
+
+        // The multisource: an AND of two buttons, and a master for a door.
+        const int stay = g.recordOfModel(6);
+        const int pop = g.recordOfModel(7);
+        const int gated = g.recordOfModel(8);
+        const BrushState &result = g.brushOfModel(9);
+        check(!result.active, "the result wall starts off");
+        logicFire(g.logic, g.player, g.view.logic[gated].name, -1, kUseToggle, 0);
+        g.tick(33);
+        check(g.states[gated].move == MoveState::AtBottom, "a door whose master is off does not open");
+
+        g.use(stay);
+        g.tick(33);
+        check(!result.active, "one button of two is not enough");
+        g.use(pop);
+        g.tick(33);
+        check(result.active, "both pressed: the multisource fires its target");
+        logicFire(g.logic, g.player, g.view.logic[gated].name, -1, kUseToggle, 0);
+        g.tick(33);
+        check(g.states[gated].move != MoveState::AtBottom, "and the door it masters now opens");
+
+        // The second button pops out after 0.3 s and takes its input back.
+        g.tick(33, 12);
+        check(g.states[pop].move == MoveState::AtBottom, "the short button has popped out");
+        check(!logicMasterAllows(g.logic, gated), "which switches the multisource off again");
+        check(g.states[stay].move == MoveState::AtTop, "the wait -1 button stays in");
+
+        // A door that starts open sits at the top of its travel and "opens"
+        // towards where it was built.
+        const int open = g.recordOfModel(10);
+        check(g.brushOfModel(10).pos[2] == fxFromInt(30), "a start-open door begins raised");
+        logicFire(g.logic, g.player, g.view.logic[open].name, -1, kUseToggle, 0);
+        g.tick(33, 14);
+        check(g.brushOfModel(10).pos[2] == 0 && g.states[open].move == MoveState::AtTop,
+              "and closes when used");
+
+        // A breakable used by name breaks and fires its target.
+        const bool before = result.active;
+        logicFire(g.logic, g.player, g.view.logic[g.recordOfModel(11)].name, -1, kUseToggle, 0);
+        check(!g.brushOfModel(11).active && result.active != before,
+              "a breakable breaks when used, and fires its target");
+        logicFire(g.logic, g.player, g.view.logic[g.recordOfModel(11)].name, -1, kUseToggle, 0);
+        check(result.active != before, "once: a broken thing is not used again");
+
+        // A relay that targets itself must not hang the game.
+        g.use(g.recordOfKind(LogicKind::TriggerRelay, 1));
+        check(true, "a loop in the wiring ends at the depth limit");
+
+        // More fires than the queue holds are counted, not silently lost.
+        const int dropsBefore = g.logic.eventsDropped;
+        for (int i = 0; i < kMaxLogicEvents + 5; ++i)
+            logicEnqueue(g.logic, 1, 0, kUseToggle, -1, 100000);
+        check(g.logic.eventsDropped - dropsBefore == 5, "a full event queue counts what it drops");
+        (void)idle;
+    }
+
+    /// A train on a route of path corners, with everything a corner can ask
+    /// for: a wait, a target to fire, a change of speed, a stop until used.
+    void testTrains()
+    {
+        BoxRoom room;
+        room.brushes = {
+            // 1: the train, a platform 60 x 60 x 8 built in a corner of the
+            //    room. Its middle is (-90, -90, 4). No name: it starts itself.
+            brush("func_train", "\"target\" \"c1\"\n\"speed\" \"100\"\n", -120, -120, 0, -60, -60, 8),
+            brush("func_wall_toggle", "\"targetname\" \"arrived\"\n", 100, 100, 0, 108, 108, 16),
+            // 3: a named train: it waits to be told.
+            brush("func_train", "\"targetname\" \"t2\"\n\"target\" \"d1\"\n\"speed\" \"200\"\n", 90, -120, 0, 110,
+                  -100, 8),
+        };
+        room.extraEntities =
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"c1\"\n\"target\" \"c2\"\n\"origin\" \"0 90 4\"\n}\n"
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"c2\"\n\"target\" \"c3\"\n\"origin\" \"0 90 40\"\n"
+            "\"wait\" \"0.5\"\n\"message\" \"arrived\"\n}\n"
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"c3\"\n\"target\" \"c1\"\n\"origin\" \"60 90 40\"\n"
+            "\"speed\" \"50\"\n\"spawnflags\" \"1\"\n}\n"
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"d1\"\n\"target\" \"d2\"\n\"origin\" \"100 -110 4\"\n"
+            "\"spawnflags\" \"2\"\n}\n"
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"d2\"\n\"origin\" \"100 0 4\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "train room");
+        if (!g.ok)
+            return;
+        const LevelView &v = g.view;
+        const int train = g.recordOfModel(1);
+        const int named = g.recordOfModel(3);
+        const BrushState &platform = g.brushOfModel(1);
+        const BrushState &lamp = g.brushOfModel(2);
+
+        check(v.cornerCount == 5 && v.logic[train].kind == static_cast<std::uint8_t>(LogicKind::Train),
+              "five corners and a train");
+        const PathCorner &c1 = v.corners[v.logic[train].firstAux];
+        check(c1.pos[1] == fxFromInt(90) && c1.next != kNoCorner &&
+                  v.corners[c1.next].waitMs == 500 && v.corners[c1.next].fireTarget != 0,
+              "the train's target is its first corner, and corners chain by name");
+        check(v.corners[v.corners[c1.next].next].speed == fxFromInt(50) &&
+                  (v.corners[v.corners[c1.next].next].flags & kCornerWaitForUse) &&
+                  v.corners[v.corners[c1.next].next].next == v.logic[train].firstAux,
+              "the third corner: its speed, its stop, and the loop back to the first");
+        check(v.logic[train].target == 0, "a train's 'target' key is not something it fires");
+
+        // It begins ON its first corner, not where it was built: the middle of
+        // the brush, built at (-90, -90, 4), is put at (0, 90, 4).
+        check(platform.pos[0] == fxFromInt(90) && platform.pos[1] == fxFromInt(180) &&
+                  platform.pos[2] == 0,
+              "a train starts with its middle on its first corner");
+        const std::size_t trainBrush = v.logic[train].brush;
+        check(g.movers[trainBrush].mins[0] == fxFromInt(-30) &&
+                  g.movers[trainBrush].maxs[1] == fxFromInt(120),
+              "and its collision is there with it");
+
+        // Put the player on it and let it run. The route stays low: the room
+        // is 128 high and a rider's head must clear the ceiling, or the train
+        // (rightly) stops rather than crush them.
+        g.player.origin[0] = 0;
+        g.player.origin[1] = fxFromInt(90);
+        g.player.origin[2] = fxFromInt(60);
+        MoveCommand idle;
+        // Frames until something is so, up to a limit; -1 if it never is.
+        auto until = [&](int limit, const std::function<bool()> &done)
+        {
+            for (int i = 1; i <= limit; ++i)
+            {
+                g.frame(idle);
+                if (done())
+                    return i;
+            }
+            return -1;
+        };
+
+        g.frame(idle, 2);
+        check(g.states[train].move == MoveState::AtBottom, "it waits a tenth of a second");
+        check(until(8, [&] { return g.states[train].move == MoveState::GoingUp; }) > 0,
+              "then sets off by itself: it has no name");
+        // 36 units up at 100 a second: about eleven frames.
+        const int rise = until(20, [&] { return g.states[train].move == MoveState::AtBottom; });
+        check(rise >= 9 && rise <= 12, "it takes a third of a second to rise 36 units");
+        check(platform.pos[2] == fxFromInt(36), "and stops exactly on the second corner");
+        check(!lamp.active, "firing that corner's target on arriving");
+        check(g.player.onGround &&
+                  std::fabs(toUnits(g.player.origin[2]) - (36 + 8 + 36 + 1.0 / 32)) < 0.1,
+              "the player has ridden up with it");
+
+        const int wait = until(30, [&] { return g.states[train].move == MoveState::GoingUp; });
+        check(wait >= 15 && wait <= 17, "it waits out the corner's half second, then goes on");
+        // 60 units sideways, still at 100: the second corner gave no speed.
+        const int across = until(30, [&] { return !g.states[train].running; });
+        check(across >= 17 && across <= 20, "0.6 s to the third corner, which holds it");
+        check(platform.pos[0] == fxFromInt(150) && platform.pos[2] == fxFromInt(36),
+              "it is exactly on the third corner");
+        check(std::fabs(toUnits(g.player.origin[0]) - 60) < 0.5, "having carried the player sideways");
+        g.frame(idle, 60);
+        check(platform.pos[0] == fxFromInt(150) && g.states[train].move == MoveState::AtBottom,
+              "and it stays held until it is used");
+
+        // Used: on to the first corner, at the 50 a second the third corner
+        // set. 70 units: 1.4 seconds.
+        g.use(train);
+        check(g.states[train].move == MoveState::GoingUp && g.states[train].speed == fxFromInt(50),
+              "used, it leaves at the speed the corner it leaves gives");
+        g.frame(idle, 15);
+        check(g.states[train].move == MoveState::GoingUp, "still on its way after half a second");
+        // Used again while moving: it stops where it is.
+        g.use(train);
+        const fx held = platform.pos[0];
+        g.frame(idle, 20);
+        check(platform.pos[0] == held && !g.states[train].running, "used while moving, it stops");
+        g.use(train);
+        const int rest = until(60, [&]
+        {
+            return platform.pos[0] == fxFromInt(90) && platform.pos[2] == 0;
+        });
+        check(rest > 0, "and used once more, finishes the trip to the first corner");
+
+        // The named train has not moved in all this time.
+        const BrushState &second = g.brushOfModel(3);
+        check(g.states[named].move == MoveState::AtBottom && !g.states[named].running &&
+                  second.pos[1] == 0,
+              "a train with a name waits to be told");
+        // Its first corner teleports: told to go, it is simply at the second.
+        logicFire(g.logic, g.player, v.logic[named].name, -1, kUseToggle, 0);
+        check(second.pos[1] == fxFromInt(110), "a teleport corner moves the train at once");
+        g.frame(idle, 10);
+        check(!g.states[named].running, "and a corner with no next is the end of the line");
+
+        // A train that meets the player does not turn round: it waits.
+        Game h;
+        BoxRoom squeeze;
+        squeeze.brushes = {brush("func_train", "\"target\" \"top\"\n\"speed\" \"100\"\n", -30, -30, 100, 30, 30, 108)};
+        squeeze.extraEntities =
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"top\"\n\"target\" \"floor\"\n\"origin\" \"0 0 104\"\n}\n"
+            "{\n\"classname\" \"path_corner\"\n\"targetname\" \"floor\"\n\"target\" \"top\"\n\"origin\" \"0 0 4\"\n}\n";
+        build(h, squeeze);
+        check(h.ok, "squeeze room");
+        if (!h.ok)
+            return;
+        h.frame(idle, 60);
+        const int press = h.recordOfModel(1);
+        check(h.states[press].move == MoveState::GoingUp, "a blocked train keeps trying");
+        // The player's head is at 72; the platform's underside stops there.
+        check(toUnits(h.brushOfModel(1).pos[2]) > -30 && toUnits(h.brushOfModel(1).pos[2]) < -25,
+              "stopped on the player's head, not through them");
+        check(hullPositionFree(h.move.standing, h.player.origin), "who is not pushed into the floor");
+        // Step out from under it and it carries on down (and, its route being
+        // a loop, straight back up: so look for the moment it touches bottom).
+        h.player.origin[0] = fxFromInt(90);
+        bool reachedFloor = false;
+        for (int i = 0; i < 40 && !reachedFloor; ++i)
+        {
+            h.frame(idle);
+            reachedFloor = h.brushOfModel(1).pos[2] == fxFromInt(-100);
+        }
+        check(reachedFloor, "out of the way, it finishes its trip");
+    }
+
+    /// Ladders: a volume in which forward is up.
+    void testLadders()
+    {
+        BoxRoom room;
+        room.brushes = {
+            // A ladder against the +x wall: a thin volume floor to ceiling.
+            brush("func_ladder", "\"targetname\" \"rungs\"\n", 104, -16, 0, 112, 16, 128),
+        };
+        room.extraEntities =
+            "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"saw\"\n\"killtarget\" \"rungs\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "ladder room");
+        if (!g.ok)
+            return;
+        check(g.view.brushCount == 0, "a ladder is not a brush: it is neither seen nor solid");
+        check(g.move.ladderCount == 1 && g.ladders[0].active &&
+                  g.ladders[0].mins[0] == fxFromInt(104) && g.ladders[0].maxs[2] == fxFromInt(128),
+              "it is a volume the movement knows about");
+
+        MoveCommand cmd;
+        // In the middle of the room the ladder does nothing.
+        g.frame(cmd, 5);
+        check(!g.player.onLadder, "not on a ladder in the middle of the room");
+
+        // Walk at it (facing +x, level view). The player takes hold the
+        // moment their box touches the volume -- 16 units before their centre
+        // reaches it -- and from then on forward is up.
+        cmd.forward = 1;
+        int reached = -1;
+        for (int i = 0; i < 20 && reached < 0; ++i)
+        {
+            g.frame(cmd);
+            if (g.player.onLadder)
+                reached = i;
+        }
+        check(reached >= 0, "walking into the ladder takes hold of it");
+        const double before = toUnits(g.player.origin[2]);
+        const double contactX = toUnits(g.player.origin[0]);
+        check(contactX > 87.9 && contactX < 100, "as soon as the player's box touches it");
+        g.frame(cmd, 6);
+        const double climbed = toUnits(g.player.origin[2]) - before;
+        // 200 units a second for a fifth of a second.
+        check(climbed > 35 && climbed < 41, "forward, into the ladder, climbs at 200 units a second");
+        check(std::fabs(toUnits(g.player.origin[0]) - contactX) < 0.5,
+              "straight up: what would have gone into the ladder went up it instead");
+
+        // Let go of the keys: hang there. No gravity on a ladder.
+        cmd.forward = 0;
+        const double hung = toUnits(g.player.origin[2]);
+        g.frame(cmd, 30);
+        check(g.player.onLadder && std::fabs(toUnits(g.player.origin[2]) - hung) < 0.01,
+              "with no keys held the player hangs where they are");
+
+        // Back: down.
+        cmd.forward = -1;
+        g.frame(cmd, 4);
+        check(toUnits(g.player.origin[2]) < hung - 20, "back climbs down");
+
+        // Looking straight up, forward still climbs; looking straight down
+        // it descends -- the view decides, not just the key.
+        cmd.forward = 1;
+        cmd.viewForward[0] = 0;
+        cmd.viewForward[2] = -kFxOne;
+        const double high = toUnits(g.player.origin[2]);
+        g.frame(cmd, 3);
+        check(toUnits(g.player.origin[2]) < high - 15, "looking down, forward descends");
+        cmd.viewForward[0] = kFxOne;
+        cmd.viewForward[2] = 0;
+
+        // Jump: kicked off the ladder, away from the wall.
+        cmd.forward = 0;
+        cmd.jump = true;
+        g.frame(cmd, 1);
+        check(!g.player.onLadder && g.player.velocity[0] < -fxFromInt(200),
+              "jump kicks the player off, away from the ladder");
+        cmd.jump = false;
+        g.frame(cmd, 40);
+        check(g.player.onGround && toUnits(g.player.origin[0]) < 60, "and they land on the floor");
+
+        // On the floor at its foot, pushing AWAY from it steps off rather
+        // than clinging.
+        g.player.origin[0] = fxFromInt(100);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        g.frame(cmd, 3);
+        cmd.forward = -1;
+        g.frame(cmd, 10);
+        check(toUnits(g.player.origin[0]) < 60 && !g.player.onLadder,
+              "on the floor, walking away from a ladder leaves it");
+
+        // A ladder that is removed is no longer climbed.
+        g.use(g.recordOfKind(LogicKind::TriggerRelay));
+        check(!g.ladders[0].active, "a removed ladder is switched off");
+        g.player.origin[0] = fxFromInt(110);
+        cmd.forward = 1;
+        g.frame(cmd, 5);
+        check(!g.player.onLadder, "and cannot be climbed");
+    }
+
+    /// A door on a hinge: collision against a turned brush, and the door's
+    /// own rules.
+    void testRotatingDoors()
+    {
+        // The shared sine: every angle against the maths library.
+        double worst = 0;
+        for (int angle = 0; angle < 65536; angle += 7)
+        {
+            fx sine, cosine;
+            fxSinCos(static_cast<std::uint16_t>(angle), sine, cosine);
+            const double turn = angle * (2 * M_PI / 65536.0);
+            worst = std::max(worst, std::fabs(sine - 4096 * std::sin(turn)));
+            worst = std::max(worst, std::fabs(cosine - 4096 * std::cos(turn)));
+        }
+        check(worst < 1.0, "the sine table is within one unit in the last place everywhere");
+        fx sine, cosine;
+        fxSinCos(0, sine, cosine);
+        check(sine == 0 && cosine == 4096, "exact at 0");
+        fxSinCos(16384, sine, cosine);
+        check(sine == 4096 && cosine == 0, "exact at a quarter turn");
+        fxSinCos(49152, sine, cosine);
+        check(sine == -4096 && cosine == 0, "exact at three quarters");
+
+        // A door 48 long and 4 thick, built round its hinge and stood with
+        // the hinge at (40, 0): shut, it runs along +x from x = 40 to 88.
+        const char *doorKeys = "\"origin\" \"40 0 0\"\n\"speed\" \"180\"\n\"wait\" \"2\"\n\"distance\" \"90\"\n";
+        BoxRoom room;
+        room.brushes = {brush("func_door_rotating", doorKeys, 0, -2, 0, 48, 2, 100)};
+        Game g;
+        build(g, room);
+        check(g.ok, "hinged door room");
+        if (!g.ok)
+            return;
+        const int door = g.recordOfModel(1);
+        const LogicRecord &record = g.view.logic[door];
+        const std::size_t brushIndex = record.brush;
+        check(record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) &&
+                  record.move[0] == 16384 && record.speed == 32768 && (record.flags & kLogicTouch),
+              "90 degrees at 180 a second, as turns; no name, so it opens to the touch");
+        check((g.view.brushes[brushIndex].flags & kBrushHasPivot) &&
+                  g.view.brushes[brushIndex].mins[0] == 40 && g.view.brushes[brushIndex].maxs[0] == 88,
+              "its brush is placed by its hinge");
+
+        // Shut: it blocks the way across it, and its reach box is the circle
+        // it can sweep.
+        const fx south[3] = {fxFromInt(60), fxFromInt(-50), fxFromInt(64)};
+        const fx north[3] = {fxFromInt(60), fxFromInt(50), fxFromInt(64)};
+        Trace tr = traceAll(g.move, false, south, north);
+        check(tr.hit && std::fabs(toUnits(tr.endPos[1]) - (-2 - 16 - 1.0 / 32)) < 0.01,
+              "shut, it stops a move across it");
+        check(g.movers[brushIndex].mins[1] < fxFromInt(-47) && g.movers[brushIndex].maxs[0] > fxFromInt(87),
+              "and its quick-reject box covers everywhere it can swing");
+
+        // Turned by hand to an odd angle: the fixed-point trace against a
+        // float one that turns the segment the same way.
+        auto compareAt = [&](std::uint16_t yaw, unsigned seed)
+        {
+            logicPlaceBrush(g.logic, static_cast<int>(brushIndex), g.brushStates[brushIndex].pos, yaw);
+            const double turn = yaw * (2 * M_PI / 65536.0);
+            const double c = std::cos(turn), sn = std::sin(turn);
+            std::mt19937 rng(seed);
+            int differ = 0;
+            for (int n = 0; n < 3000; ++n)
+            {
+                fx a[3], b[3];
+                double la[3], lb[3];
+                for (int i = 0; i < 3; ++i)
+                {
+                    std::uniform_int_distribution<int> pick(fxFromInt(i == 2 ? 40 : -100),
+                                                            fxFromInt(i == 2 ? 90 : 100));
+                    a[i] = pick(rng);
+                    b[i] = pick(rng);
+                }
+                // Into the door's space, in doubles.
+                auto local = [&](const fx *w, double *out)
+                {
+                    const double x = toUnits(w[0]) - 40, y = toUnits(w[1]);
+                    out[0] = x * c + y * sn;
+                    out[1] = y * c - x * sn;
+                    out[2] = toUnits(w[2]);
+                };
+                local(a, la);
+                local(b, lb);
+                // The door's standing hull is its box grown by 16, 16, 36:
+                // solve the segment against that box directly.
+                const double lo[3] = {-16, -18, -36}, hi[3] = {64, 18, 136};
+                double enter = 0, leave = 1;
+                bool inside = true, miss = false;
+                for (int i = 0; i < 3 && !miss; ++i)
+                {
+                    const double d = lb[i] - la[i];
+                    if (la[i] < lo[i] || la[i] > hi[i])
+                        inside = false;
+                    if (std::fabs(d) < 1e-12)
+                    {
+                        miss = la[i] < lo[i] || la[i] > hi[i];
+                        continue;
+                    }
+                    double t0 = (lo[i] - la[i]) / d, t1 = (hi[i] - la[i]) / d;
+                    if (t0 > t1)
+                        std::swap(t0, t1);
+                    enter = std::max(enter, t0);
+                    leave = std::min(leave, t1);
+                    miss = enter > leave;
+                }
+                const Trace fixed = traceAll(g.move, false, a, b);
+                const Trace world = traceHull(g.move.standing, a, b);
+                // Only judge segments the world leaves alone and that do not
+                // start inside the door.
+                if (world.fraction != kFractionOne || inside)
+                    continue;
+                const bool refHit = !miss && enter > 0 && enter < 1;
+                if (fixed.hit != refHit)
+                {
+                    ++differ;
+                    continue;
+                }
+                if (!refHit)
+                    continue;
+                // Where the fixed-point trace stopped, in the door's space: it
+                // must be just outside the box -- 1/32 of a unit off the face
+                // it hit, measured square to the face. (Measured along the
+                // segment that distance is anything at all, at a glance.)
+                const double f = fixed.fraction / double(kFractionOne);
+                double outside = -1e9;
+                for (int i = 0; i < 3; ++i)
+                {
+                    const double pnt = la[i] + (lb[i] - la[i]) * f;
+                    outside = std::max(outside, std::max(lo[i] - pnt, pnt - hi[i]));
+                }
+                if (outside < 0.0 || outside > 0.08)
+                    ++differ;
+            }
+            return differ;
+        };
+        // A segment that passes within 1/32 of an edge of the box is a hit to
+        // one and a miss to the other, legitimately; a handful in 3000 is that,
+        // more would be the turning being wrong.
+        check(compareAt(0, 1) <= 3, "3000 traces against the shut door match a float box");
+        check(compareAt(5000, 2) <= 3, "and against the door turned 27 degrees");
+        check(compareAt(40000, 3) <= 3, "and turned 220 degrees");
+        logicPlaceBrush(g.logic, static_cast<int>(brushIndex), g.brushStates[brushIndex].pos, 0);
+
+        // Walk at it from the south: it swings north, away.
+        MoveCommand cmd;
+        cmd.forward = 1;
+        cmd.forwardXY[0] = 0;
+        cmd.forwardXY[1] = kFxOne;
+        cmd.rightXY[0] = kFxOne;
+        cmd.rightXY[1] = 0;
+        g.player.origin[0] = fxFromInt(64);
+        g.player.origin[1] = fxFromInt(-60);
+        int opened = -1;
+        for (int i = 0; i < 60 && opened < 0; ++i)
+        {
+            g.frame(cmd);
+            if (g.states[door].move == MoveState::AtTop)
+                opened = i;
+        }
+        check(opened > 0, "walked into, it opens");
+        check(g.brushStates[brushIndex].angles[1] == 16384,
+              "a quarter turn anticlockwise: away from a player coming from the south");
+        tr = traceAll(g.move, false, south, north);
+        check(tr.fraction == kFractionOne, "open, the way across where it stood is clear");
+        const fx west[3] = {0, fxFromInt(30), fxFromInt(64)};
+        const fx east[3] = {fxFromInt(100), fxFromInt(30), fxFromInt(64)};
+        tr = traceAll(g.move, false, west, east);
+        check(tr.hit && std::fabs(toUnits(tr.endPos[0]) - (38 - 16 - 1.0 / 32)) < 0.05,
+              "and it is solid where it stands now");
+        check(tr.normal[0] < -kNormalOne + 4096 && std::abs(tr.normal[1]) < 4096 * 64,
+              "with a normal turned along with it");
+        g.frame(cmd, 30);
+        check(toUnits(g.player.origin[1]) > 40, "the player walks through the doorway");
+
+        // It shuts again after its wait.
+        cmd.forward = 0;
+        int shut = -1;
+        for (int i = 0; i < 120 && shut < 0; ++i)
+        {
+            g.frame(cmd);
+            if (g.states[door].move == MoveState::AtBottom)
+                shut = i;
+        }
+        check(shut > 0 && g.brushStates[brushIndex].angles[1] == 0, "after its wait it swings shut");
+
+        // From the north it opens the other way: south.
+        cmd.forward = 1;
+        cmd.forwardXY[1] = -kFxOne;
+        cmd.rightXY[0] = -kFxOne;
+        g.player.origin[0] = fxFromInt(64);
+        g.player.origin[1] = fxFromInt(60);
+        for (int i = 0; i < 60 && g.states[door].move != MoveState::AtTop; ++i)
+            g.frame(cmd);
+        check(g.brushStates[brushIndex].angles[1] == 49152,
+              "from the other side it opens the other way: always away");
+
+        // Standing where it has to swing: it turns back rather than pass
+        // through the player. Let it open (south), then stand in its path
+        // home, on the arc between.
+        cmd.forward = 0;
+        g.player.origin[0] = fxFromInt(40 + 24);
+        g.player.origin[1] = fxFromInt(-24);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        int turnedBack = 0;
+        MoveState last = g.states[door].move;
+        for (int i = 0; i < 300; ++i)
+        {
+            g.frame(cmd);
+            if (last == MoveState::GoingDown && g.states[door].move == MoveState::GoingUp)
+                ++turnedBack;
+            last = g.states[door].move;
+            check(positionFree(g.move, false, g.player.origin), "the door never turns into the player");
+        }
+        check(turnedBack >= 1, "a hinged door that meets the player turns back");
+
+        // Flags: one-way, reverse, start open, and the axes that are not
+        // handled.
+        BoxRoom flags;
+        flags.brushes = {
+            brush("func_door_rotating", "\"origin\" \"40 0 0\"\n\"spawnflags\" \"16\"\n\"distance\" \"45\"\n\"wait\" \"-1\"\n",
+                  0, -2, 0, 48, 2, 100),
+            brush("func_door_rotating",
+                  "\"targetname\" \"d\"\n\"origin\" \"-40 80 0\"\n\"spawnflags\" \"19\"\n\"wait\" \"-1\"\n", 0,
+                  -2, 0, 30, 2, 100),
+            brush("func_door_rotating", "\"origin\" \"-80 -80 0\"\n\"spawnflags\" \"64\"\n\"wait\" \"-1\"\n", 0, -2, 0, 20, 2,
+                  100),
+        };
+        Game f;
+        build(f, flags);
+        check(f.ok, "flags room");
+        if (!f.ok)
+            return;
+        const int oneWay = f.recordOfModel(1);
+        check((f.view.logic[oneWay].flags & kLogicOneWay) && f.view.logic[oneWay].move[0] == 8192,
+              "flag 16 is one-way; 45 degrees is an eighth of a turn");
+        // From the north, where a two-way door would open south.
+        f.player.origin[0] = fxFromInt(64);
+        f.player.origin[1] = fxFromInt(60);
+        f.player.facingXY[0] = 0;
+        f.player.facingXY[1] = -kFxOne;
+        f.use(oneWay);
+        f.tick(33, 20);
+        check(f.brushStates[f.view.logic[oneWay].brush].angles[1] == 8192,
+              "a one-way door opens its own way whichever side it is opened from");
+
+        const int reversed = f.recordOfModel(2);
+        check(f.view.logic[reversed].move[0] == -16384 &&
+                  (f.view.logic[reversed].flags & kLogicStartOpen),
+              "flag 2 reverses it; flag 1 starts it open");
+        check(f.brushStates[f.view.logic[reversed].brush].angles[1] == 49152,
+              "starting open, it starts turned");
+        logicFire(f.logic, f.player, f.view.logic[reversed].name, -1, kUseToggle, 0);
+        f.tick(33, 40);
+        check(f.brushStates[f.view.logic[reversed].brush].angles[1] == 0 &&
+                  f.states[reversed].move == MoveState::AtTop,
+              "and used, turns shut -- which for it is the far end of its travel");
+
+        // Flag 64 is a flap: it turns about a horizontal axis (its roll).
+        const int flap = f.recordOfModel(3);
+        check(flap >= 0 && f.view.logic[flap].extra[0] == kRoll &&
+                  (f.view.brushes[f.view.logic[flap].brush].flags & kBrushTumbles),
+              "a door on a horizontal hinge turns about that, and is boxed as a ball");
+        if (flap >= 0)
+        {
+            f.player.origin[0] = fxFromInt(100);
+            f.player.origin[1] = fxFromInt(100);
+            f.use(flap);
+            f.tick(33, 40);
+            const BrushState &state = f.brushStates[f.view.logic[flap].brush];
+            // Which way depends on where the player stands, as for any door
+            // that is not one-way.
+            check((state.angles[kRoll] == 16384 || state.angles[kRoll] == 49152) &&
+                      state.angles[kYaw] == 0,
+                  "and opens a quarter turn about it");
+            // Its top corner (20, 2, 100) from the hinge, rolled a quarter
+            // turn: y -> z and z -> -y, so it now reaches y = -100.
+            const MoverHull &mover = f.movers[f.view.logic[flap].brush];
+            const fx local[3] = {fxFromInt(20), fxFromInt(2), fxFromInt(100)};
+            fx world[3];
+            hldata::detail::turnToWorld(mover, local, world);
+            const double sign = state.angles[kRoll] == 16384 ? 1 : -1;
+            check(std::fabs(toUnits(world[1]) + sign * 100) < 0.5 &&
+                      std::fabs(toUnits(world[2]) - sign * 2) < 0.5,
+                  "turned the way the game turns it");
+        }
+    }
+
+    void testRotation()
+    {
+        // The matrix against the game's own formula, in doubles, at angles
+        // all over the circle.
+        std::mt19937 rng(7);
+        std::uniform_int_distribution<int> any(0, 65535);
+        double worst = 0;
+        for (int n = 0; n < 2000; ++n)
+        {
+            const std::uint16_t angles[3] = {static_cast<std::uint16_t>(any(rng)),
+                                             static_cast<std::uint16_t>(any(rng)),
+                                             static_cast<std::uint16_t>(any(rng))};
+            std::int32_t m[9];
+            anglesToAxes(angles, m);
+            const double k = 2 * M_PI / 65536.0;
+            const double sp = std::sin(angles[0] * k), cp = std::cos(angles[0] * k);
+            const double sy = std::sin(angles[1] * k), cy = std::cos(angles[1] * k);
+            const double sr = std::sin(angles[2] * k), cr = std::cos(angles[2] * k);
+            const double want[9] = {cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy,
+                                    cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy,
+                                    -sp,     sr * cp,                cr * cp};
+            for (int i = 0; i < 9; ++i)
+                worst = std::max(worst, std::fabs(m[i] / 1073741824.0 - want[i]));
+        }
+        check(worst < 1e-6, "the rotation matrix is the game's, to a part in a million");
+
+        // A fan: an origin brush in the middle of the room, spinning about
+        // the vertical at 90 degrees a second, started by name; and one about
+        // a horizontal axis that starts by itself and winds up.
+        BoxRoom room;
+        BrushBox fan;
+        fan.className = "func_rotating";
+        fan.mins[0] = -40, fan.mins[1] = -4, fan.mins[2] = 100;
+        fan.maxs[0] = 40, fan.maxs[1] = 4, fan.maxs[2] = 104;
+        fan.keys = "\"targetname\" \"fan\"\n\"origin\" \"0 0 102\"\n\"speed\" \"90\"\n";
+        room.brushes.push_back(fan);
+        BrushBox wheel = fan;
+        wheel.mins[0] = 90, wheel.maxs[0] = 94, wheel.mins[1] = -20, wheel.maxs[1] = 20;
+        wheel.mins[2] = 60, wheel.maxs[2] = 100;
+        wheel.keys = "\"origin\" \"92 0 80\"\n\"speed\" \"180\"\n\"spawnflags\" \"25\"\n"
+                     "\"fanfriction\" \"10\"\n";
+        room.brushes.push_back(wheel);
+        Game g;
+        build(g, room);
+        check(g.ok, "fan room");
+        if (!g.ok)
+            return;
+        const int fanRecord = g.recordOfModel(1);
+        const int wheelRecord = g.recordOfModel(2);
+        check(fanRecord >= 0 && wheelRecord >= 0 &&
+                  g.view.logic[fanRecord].kind == static_cast<std::uint8_t>(LogicKind::Rotating) &&
+                  g.view.logic[fanRecord].speed == 16384 && g.view.logic[fanRecord].extra[0] == kYaw &&
+                  g.view.logic[wheelRecord].extra[0] == kPitch &&
+                  (g.view.logic[wheelRecord].flags & kLogicStartOpen) &&
+                  (g.view.logic[wheelRecord].flags & kLogicToggle),
+              "fans are cooked: speed as turns, the axis and the start flags from the map's");
+        if (fanRecord < 0 || wheelRecord < 0)
+            return;
+        g.player.origin[0] = fxFromInt(-100);
+        g.player.origin[1] = fxFromInt(-100);
+        g.player.origin[2] = fxFromInt(36);
+        const BrushState &fanState = g.brushStates[g.view.logic[fanRecord].brush];
+        const BrushState &wheelState = g.brushStates[g.view.logic[wheelRecord].brush];
+        g.tick(33, 30);
+        check(fanState.angles[kYaw] == 0, "a fan that is not told to start stands still");
+        check(wheelState.angles[kPitch] == 0, "one that starts on waits a second and a half");
+        g.tick(33, 30); // two seconds in: half a second of winding up at 10% a tenth
+        const int early = wheelState.angles[kPitch];
+        check(early > 0 && early < 65536 * 180 / 360 / 2,
+              "then winds up: after half a second it has not turned as far as full speed would");
+        g.use(fanRecord);
+        g.tick(33, 30); // about a second at 90 degrees a second
+        const double turned = fanState.angles[kYaw] * 360.0 / 65536.0;
+        check(turned > 84 && turned < 96, "started by name, it turns at its speed");
+        g.use(fanRecord);
+        g.tick(33, 10);
+        const std::uint16_t rest = fanState.angles[kYaw];
+        g.tick(33, 10);
+        check(fanState.angles[kYaw] == rest, "and used again, it stops");
+    }
+
+    void testUse()
+    {
+        BoxRoom room;
+        room.brushes = {
+            brush("func_button", "\"target\" \"x\"\n\"spawnflags\" \"1\"\n", 40, -8, 56, 44, 8, 72),
+            brush("func_button", "\"target\" \"x\"\n\"spawnflags\" \"257\"\n", -44, -8, 56, -40, 8, 72),
+            brush("func_door", "\"angle\" \"-1\"\n\"spawnflags\" \"256\"\n", -8, 60, 0, 8, 64, 100),
+        };
+        Game g;
+        build(g, room);
+        check(g.ok, "use room");
+        if (!g.ok)
+            return;
+        const fx eye[3] = {0, 0, fxFromInt(64)};
+        const fx east[3] = {kFxOne, 0, 0};
+        const fx west[3] = {-kFxOne, 0, 0};
+        const fx north[3] = {0, kFxOne, 0};
+        const fx up[3] = {0, 0, kFxOne};
+
+        check(logicFindUsable(g.logic, eye, east) == g.recordOfModel(1),
+              "facing a button within reach: it is what USE works on");
+        check(logicFindUsable(g.logic, eye, west) == -1,
+              "a touch-only button cannot be USEd");
+        check(logicFindUsable(g.logic, eye, north) == g.recordOfModel(3),
+              "a use-only door can");
+        check(logicFindUsable(g.logic, eye, up) == -1, "looking at the ceiling: nothing");
+        const fx farEye[3] = {fxFromInt(-60), 0, fxFromInt(64)};
+        check(logicFindUsable(g.logic, farEye, east) == -1, "100 units away is out of reach");
+
+        check(!(g.view.logic[g.recordOfModel(3)].flags & kLogicTouch),
+              "and a use-only door does not open by touch");
+        // The touch-only button works by being walked into.
+        g.player.origin[0] = fxFromInt(-23);
+        g.player.origin[2] = fxFromInt(64);
+        g.tick(33);
+        check(g.states[g.recordOfModel(2)].move != MoveState::AtBottom,
+              "the touch-only button is pressed by walking into it");
+    }
+    void testBreakingAndPushing()
+    {
+        // A crate that takes two blows; a pane only its name breaks; a plank
+        // that gives way when stood on; a box to shove; and three volumes: one
+        // that hurts, one that carries, one that sends the player elsewhere.
+        BoxRoom room;
+        room.brushes = {
+            brush("func_breakable", "\"health\" \"40\"\n\"target\" \"lamp\"\n", 40, -8, 0, 56, 8, 48),
+            brush("func_breakable", "\"targetname\" \"pane\"\n\"spawnflags\" \"1\"\n\"health\" \"5\"\n",
+                  40, 40, 0, 56, 56, 48),
+            brush("func_breakable", "\"spawnflags\" \"4\"\n\"delay\" \"0.3\"\n", -100, -100, 0, -60, -60, 8),
+            brush("func_pushable", "\"friction\" \"200\"\n\"spawnflags\" \"128\"\n\"health\" \"20\"\n",
+                  -16, 60, 0, 16, 92, 32),
+            brush("func_wall_toggle", "\"targetname\" \"lamp\"\n", 100, 100, 0, 110, 110, 20),
+            brush("trigger_hurt", "\"dmg\" \"20\"\n", 60, -120, 0, 120, -80, 64),
+            brush("trigger_teleport", "\"target\" \"there\"\n", -120, 60, 0, -90, 120, 64),
+        };
+        room.extraEntities = "{\n\"classname\" \"info_teleport_destination\"\n"
+                             "\"targetname\" \"there\"\n\"origin\" \"0 -60 4\"\n\"angle\" \"90\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "breaking room");
+        if (!g.ok)
+            return;
+        const int crate = g.recordOfModel(1), pane = g.recordOfModel(2), plank = g.recordOfModel(3),
+                  box = g.recordOfModel(4);
+        check(crate >= 0 && pane >= 0 && plank >= 0 && box >= 0,
+              "everything that breaks has a record, named or not");
+        if (crate < 0 || pane < 0 || plank < 0 || box < 0)
+            return;
+        check(g.view.logic[crate].extra[0] == 40 && (g.view.logic[pane].flags & kLogicTriggerOnly) &&
+                  (g.view.logic[plank].flags & kLogicPressure) &&
+                  g.view.logic[box].kind == static_cast<std::uint8_t>(LogicKind::Pushable) &&
+                  (g.view.logic[box].flags & kLogicBreaks) &&
+                  g.view.logic[box].extra[2] == static_cast<std::uint32_t>(fxFromInt(200)),
+              "with what it takes, how it breaks, and how fast a box can be pushed");
+
+        g.player.origin[0] = 0, g.player.origin[1] = 0, g.player.origin[2] = fxFromInt(36);
+        const BrushState &crateState = g.brushStates[g.view.logic[crate].brush];
+        const BrushState &lamp = g.brushOfModel(5);
+        const bool lampWas = lamp.active;
+        logicStrike(g.logic, g.player, crate, 20);
+        check(crateState.active, "one blow of twenty does not break forty");
+        logicStrike(g.logic, g.player, crate, 20);
+        check(!crateState.active && g.states[crate].dead && lamp.active != lampWas,
+              "the second does, and its target is fired");
+
+        const BrushState &paneState = g.brushStates[g.view.logic[pane].brush];
+        logicStrike(g.logic, g.player, pane, 1000);
+        check(paneState.active, "what only its name breaks takes any blow");
+        logicFire(g.logic, g.player, g.view.logic[pane].name, -1, kUseToggle, 0);
+        check(!paneState.active, "and breaks when its name is fired");
+
+        // Onto the plank: it holds for its delay, then goes, and the player
+        // with it.
+        g.player.origin[0] = fxFromInt(-80);
+        g.player.origin[1] = fxFromInt(-80);
+        g.player.origin[2] = fxFromInt(8 + 36 + 1);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        MoveCommand idle;
+        g.frame(idle, 5);
+        const BrushState &plankState = g.brushStates[g.view.logic[plank].brush];
+        check(plankState.active && g.player.onGround, "a plank holds for a moment when stood on");
+        g.frame(idle, 12);
+        check(!plankState.active, "then gives way");
+        g.frame(idle, 10);
+        check(toUnits(g.player.origin[2]) < 37, "and whoever stood on it lands on the floor");
+
+        // The box: walked into from the south, it moves north, no faster than
+        // it can be pushed, and stops when the pushing does.
+        g.player.origin[0] = 0, g.player.origin[1] = fxFromInt(20), g.player.origin[2] = fxFromInt(36);
+        g.frame(idle, 3);
+        const BrushState &boxState = g.brushStates[g.view.logic[box].brush];
+        const double boxWas = toUnits(boxState.pos[1]);
+        MoveCommand north;
+        north.forward = 1;
+        north.forwardXY[0] = 0, north.forwardXY[1] = kFxOne;
+        north.rightXY[0] = kFxOne, north.rightXY[1] = 0;
+        g.frame(north, 30);
+        const double pushed = toUnits(boxState.pos[1]) - boxWas;
+        check(pushed > 5 && pushed < 40, "a box moves when it is walked into, as far as the wall lets it");
+        const double restAt = toUnits(boxState.pos[1]);
+        g.frame(idle, 30);
+        check(std::fabs(toUnits(boxState.pos[1]) - restAt) < 1, "and stays where it is left");
+        logicStrike(g.logic, g.player, box, 20);
+        check(!boxState.active, "a box that can break breaks like anything else");
+
+        // The volume that hurts: twenty a second, in halves.
+        g.player.health = 100;
+        g.player.origin[0] = fxFromInt(90), g.player.origin[1] = fxFromInt(-100);
+        g.player.origin[2] = fxFromInt(36);
+        g.tick(33, 31);
+        check(g.player.health == 80 || g.player.health == 70,
+              "a second in a trigger_hurt costs a second of its damage");
+        g.player.origin[1] = 0;
+        const int after = g.player.health;
+        g.tick(33, 31);
+        check(g.player.health == after, "and nothing once out of it");
+
+        // And the one that sends them elsewhere.
+        g.logic.faceSet = false;
+        g.player.origin[0] = fxFromInt(-100), g.player.origin[1] = fxFromInt(90);
+        g.tick(33);
+        check(g.player.origin[0] == 0 && g.player.origin[1] == fxFromInt(-60) &&
+                  g.player.origin[2] == fxFromInt(40) && g.logic.faceSet && g.logic.faceYaw == 16384,
+              "a teleport puts the player on its destination, facing the way it faces");
+    }
+
+    void testWater()
+    {
+        // A pool: a func_water filling the bottom 80 units of the room's east
+        // half. (The box room has no water leaves of its own; a body of water
+        // that is a brush is the other way the game makes one.)
+        BoxRoom room;
+        room.maxs[2] = 200;
+        BrushBox pool;
+        pool.className = "func_water";
+        pool.mins[0] = 0, pool.mins[1] = -128, pool.mins[2] = 0;
+        pool.maxs[0] = 128, pool.maxs[1] = 128, pool.maxs[2] = 80;
+        pool.keys = "\"skin\" \"-3\"\n\"rendermode\" \"2\"\n\"renderamt\" \"120\"\n"
+                    "\"targetname\" \"pool\"\n\"wait\" \"-1\"\n";
+        room.brushes.push_back(pool);
+        Game g;
+        build(g, room);
+        check(g.ok, "pool room");
+        if (!g.ok)
+            return;
+        g.move.nodes = g.view.nodes;
+        g.move.leaves = g.view.leaves;
+        g.move.headNode = g.view.models[0].headNode;
+        check(g.view.brushCount == 1 &&
+                  static_cast<std::int8_t>(g.view.brushes[0].kind) == kContentsWater &&
+                  !(g.view.brushes[0].flags & kBrushSolid),
+              "a func_water is cooked as a body of water, not as something solid");
+
+        const fx inPool[3] = {fxFromInt(60), 0, fxFromInt(40)};
+        const fx above[3] = {fxFromInt(60), 0, fxFromInt(120)};
+        const fx dry[3] = {fxFromInt(-60), 0, fxFromInt(40)};
+        check(pointContents(g.move, inPool) == kContentsWater &&
+                  pointContents(g.move, above) == kContentsEmpty &&
+                  pointContents(g.move, dry) == kContentsEmpty,
+              "what is in its box is in water, and nothing else is");
+
+        // On the dry side nothing changes.
+        MoveCommand idle;
+        g.player.origin[0] = fxFromInt(-60), g.player.origin[1] = 0, g.player.origin[2] = fxFromInt(37);
+        g.frame(idle, 10);
+        check(g.player.waterLevel == 0 && g.player.onGround, "dry land is dry");
+
+        // Dropped in from above the pool: no longer falling at 800 a second
+        // squared, but sinking at a walk.
+        g.player.origin[0] = fxFromInt(60);
+        g.player.origin[2] = fxFromInt(60);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        g.frame(idle, 3);
+        check(g.player.waterLevel >= 2, "in over the waist is swimming");
+        const double sinking = toUnits(g.player.velocity[2]);
+        check(sinking < -20 && sinking > -70, "left alone in water, the player sinks slowly");
+        g.frame(idle, 60);
+        check(g.player.waterLevel == 3 && toUnits(g.player.origin[2]) < 40,
+              "to the bottom, eyes under");
+
+        // Jump is "up", to the surface and no higher than it.
+        MoveCommand up;
+        up.jump = true;
+        g.frame(up, 45);
+        check(toUnits(g.player.origin[2]) > 60 && toUnits(g.player.origin[2]) < 110,
+              "held jump swims up to the surface");
+        check(g.player.health == 100, "a few seconds under costs nothing");
+
+        // Kept under for a quarter of a minute: the air runs out.
+        g.player.origin[2] = fxFromInt(37);
+        g.frame(idle, 30 * 15);
+        check(g.player.health < 100 && g.player.health > 60, "but twelve seconds does, a little at a time");
+
+        // Swimming forwards goes where the player looks.
+        g.player.origin[0] = fxFromInt(40), g.player.origin[1] = 0, g.player.origin[2] = fxFromInt(40);
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        MoveCommand east;
+        east.forward = 1;
+        g.frame(east, 20);
+        check(toUnits(g.player.origin[0]) > 70, "forward swims the way the view points");
+    }
+
+    void testLevelChange()
+    {
+        // Map A: a volume by the east wall that leads to "mapb", a landmark,
+        // and a switch that outlives the map, set as the map starts.
+        BoxRoom a;
+        BrushBox way;
+        way.className = "trigger_changelevel";
+        way.mins[0] = 96, way.mins[1] = -32, way.mins[2] = 0;
+        way.maxs[0] = 120, way.maxs[1] = 32, way.maxs[2] = 96;
+        way.keys = "\"map\" \"MapB\"\n\"landmark\" \"join\"\n"
+                   "\"changetarget\" \"welcome\"\n\"changedelay\" \"0.5\"\n";
+        a.brushes.push_back(way);
+        a.extraEntities =
+            "{\n\"classname\" \"info_landmark\"\n\"targetname\" \"join\"\n"
+            "\"origin\" \"100 0 0\"\n}\n"
+            "{\n\"classname\" \"env_global\"\n\"globalstate\" \"power\"\n"
+            "\"spawnflags\" \"1\"\n\"initialstate\" \"1\"\n}\n";
+        // Map B: the same landmark somewhere else, a door the old map asks to
+        // have opened on arrival, and one that opens by itself if the switch
+        // is on.
+        BoxRoom b;
+        BrushBox welcome;
+        welcome.className = "func_door";
+        welcome.mins[0] = 60, welcome.mins[1] = 100, welcome.mins[2] = 0;
+        welcome.maxs[0] = 68, welcome.maxs[1] = 120, welcome.maxs[2] = 64;
+        welcome.keys = "\"targetname\" \"welcome\"\n\"angle\" \"-1\"\n\"wait\" \"-1\"\n";
+        b.brushes.push_back(welcome);
+        BrushBox powered = welcome;
+        powered.mins[0] = 80, powered.maxs[0] = 88;
+        powered.keys = "\"targetname\" \"powered\"\n\"angle\" \"-1\"\n\"wait\" \"-1\"\n";
+        b.brushes.push_back(powered);
+        b.extraEntities =
+            "{\n\"classname\" \"info_landmark\"\n\"targetname\" \"join\"\n"
+            "\"origin\" \"-90 20 0\"\n}\n"
+            "{\n\"classname\" \"trigger_auto\"\n\"target\" \"powered\"\n"
+            "\"globalstate\" \"power\"\n}\n"
+            "{\n\"classname\" \"trigger_auto\"\n\"target\" \"welcome\"\n"
+            "\"globalstate\" \"nothing_sets_this\"\n}\n";
+
+        Globals globals;
+        Game ga;
+        ga.logic.globals = &globals;
+        build(ga, a);
+        check(ga.ok, "map A cooks");
+        if (!ga.ok)
+            return;
+        const int way0 = ga.recordOfKind(LogicKind::ChangeLevel);
+        check(way0 >= 0 && ga.view.landmarkCount == 1, "a way out and a landmark are cooked");
+        if (way0 < 0)
+            return;
+        const LogicRecord &rec = ga.view.logic[way0];
+        check(std::strcmp(ga.view.strings + rec.extra[0], "mapb") == 0,
+              "the map's name, lower-cased");
+        check(rec.extra[1] == nameHash("join") && rec.extra[2] == nameHash("welcome") &&
+                  rec.extra[3] == 500 && (rec.flags & kLogicTouch),
+              "with its landmark, what to fire on arrival, and when");
+        check(globals.get(nameHash("power")) == kGlobalOn, "the switch is set as the map starts");
+
+        // Standing in the middle: nothing. Walking into the volume: the map
+        // asks to be changed, once.
+        ga.player.origin[0] = 0, ga.player.origin[1] = 0, ga.player.origin[2] = fxFromInt(36);
+        ga.tick(33, 5);
+        check(ga.logic.pendingChange < 0, "nothing happens away from the way out");
+        ga.player.origin[0] = fxFromInt(90);
+        ga.player.origin[1] = fxFromInt(-10);
+        ga.player.velocity[0] = fxFromInt(200);
+        ga.player.ducked = false;
+        ga.tick(33);
+        check(ga.logic.pendingChange == way0, "walking into it asks for the next map");
+
+        Arrival arrival = makeArrival(ga.logic, ga.view.landmarks, ga.view.landmarkCount,
+                                      ga.player, ga.logic.pendingChange);
+        check(arrival.valid && arrival.landmark == nameHash("join") &&
+                  arrival.offset[0] == fxFromInt(-10) && arrival.offset[1] == fxFromInt(-10) &&
+                  arrival.offset[2] == fxFromInt(36),
+              "what crosses: where the player is from the landmark");
+
+        Game gb;
+        gb.logic.globals = &globals;
+        build(gb, b);
+        check(gb.ok, "map B cooks");
+        if (!gb.ok)
+            return;
+        const bool placed =
+            applyArrival(gb.logic, gb.view.landmarks, gb.view.landmarkCount, gb.view.nameHashes,
+                         gb.view.nameCount, gb.player, arrival);
+        check(placed && gb.player.origin[0] == fxFromInt(-100) &&
+                  gb.player.origin[1] == fxFromInt(10) && gb.player.origin[2] == fxFromInt(36) &&
+                  gb.player.velocity[0] == fxFromInt(200),
+              "the player arrives as far from the new landmark, moving as before");
+
+        // The door the old map named opens half a second after arriving, not
+        // before; the one that waits on the switch opens by itself; and the
+        // trigger_auto whose switch nobody set does nothing.
+        const BrushState &welcomeDoor = gb.brushOfModel(1);
+        const BrushState &poweredDoor = gb.brushOfModel(2);
+        gb.tick(33, 12);
+        check(toUnits(welcomeDoor.pos[2]) < 0.01, "the arrival's door has not moved after 0.4 s");
+        check(toUnits(poweredDoor.pos[2]) > 1, "the door behind the switch is opening");
+        gb.tick(33, 6);
+        check(toUnits(welcomeDoor.pos[2]) > 1, "... and it opens once half a second has gone");
+
+        // A map that does not have the landmark: the caller is told.
+        Arrival lost = arrival;
+        lost.landmark = nameHash("no_such_place");
+        Game gc;
+        build(gc, b);
+        check(gc.ok && !applyArrival(gc.logic, gc.view.landmarks, gc.view.landmarkCount,
+                                     gc.view.nameHashes, gc.view.nameCount, gc.player, lost),
+              "without the landmark the player is left for the map's own start");
+    }
+} // namespace
+
+int main()
+{
+    testCookRules();
+    testCookedRecords();
+    testButtonManagerDoor();
+    testDoorsAndThePlayer();
+    testTriggersAndWiring();
+    testTrains();
+    testLadders();
+    testRotatingDoors();
+    testRotation();
+    testUse();
+    testBreakingAndPushing();
+    testWater();
+    testLevelChange();
+    if (g_failures == 0)
+        std::printf("test_logic: ok\n");
+    return g_failures == 0 ? 0 : 1;
+}

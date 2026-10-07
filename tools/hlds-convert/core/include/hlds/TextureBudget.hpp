@@ -1,0 +1,92 @@
+#pragma once
+
+// How big each of a map's textures may be, so that all of them fit.
+//
+// Two things on the DS are finite and shared by every texture of a map:
+//
+//  * TEXELS. 4x4 compressed data goes in a bank pair that holds 524,288
+//    texels. World textures are kept to one pair so the other is free for
+//    models and weapons, and so a map also fits the two-pass mode that only
+//    has one.
+//  * PALETTE. A compressed texture's palette offset is 14 bits counting pairs
+//    of colours: 32,768 colours for everything, which is also what the 64 KB
+//    palette bank holds.
+//
+// Every texture starts at its default size (TextureSize.hpp). If the map is
+// over on texels, the texture that is doing the LEAST with its memory -- the
+// fewest square units of wall per texel -- is halved along its longer side,
+// and that repeats until the map fits. A texture covering one small sign gives
+// way before one covering every corridor.
+//
+// The palette is then shared out by size: more texels, more colours, scaled
+// back for the whole map if the total would not fit.
+//
+// A3I5 textures (the '{' textures of brushes drawn with holes) have a budget
+// of their own, 8 bits a texel: the upper half of bank B. In two-pass mode
+// that half is the only texture memory 4x4 data cannot use, so it costs the
+// opaque textures nothing; go past it and every byte comes out of theirs.
+
+#include <string>
+#include <vector>
+
+#include "hlds/BrushInfo.hpp"
+#include "hlds/BspFile.hpp"
+#include "hlds/TextureSize.hpp"
+#include "hlds/WadFile.hpp"
+
+namespace hlds
+{
+    inline constexpr int kWorldTexelBudget = 480 * 1024;
+    inline constexpr int kPaletteColourBudget = 30000;
+    inline constexpr int kAlphaTexelBudget = 60 * 1024;
+
+    /// Which form each texture is wanted in, by texture lump index. Both can be
+    /// set: a '{' texture on a plain wall here and on a grate there.
+    struct TextureNeeds
+    {
+        std::vector<char> opaque; ///< 4x4 compressed
+        std::vector<char> alpha;  ///< A3I5
+        /// Square units of drawn face wearing each form: what the budget pass
+        /// weighs a texture's memory against.
+        std::vector<double> opaqueArea;
+        std::vector<double> alphaArea;
+    };
+
+    /// `hidden` (findHiddenTextures) may be empty.
+    TextureNeeds textureNeeds(const BspFile &bsp, const std::vector<BrushInfo> &brushes,
+                              const std::vector<char> &hidden);
+
+    struct TexturePlan
+    {
+        /// By texture lump index. Width 0 for a texture not wanted in that
+        /// form.
+        std::vector<TextureSize> sizes;      ///< 4x4 compressed
+        std::vector<TextureSize> alphaSizes; ///< A3I5
+        std::vector<int> paletteColours;     ///< of the 4x4 form; A3I5 is always 32
+        int usedTextures = 0;  ///< forms, not names: a texture wanted both ways is two
+        int texels = 0;
+        int alphaTexels = 0;
+        int colours = 0;
+        int shrunk = 0;  ///< textures made smaller than their default
+        bool fits = true; ///< false if even the smallest sizes are too much
+    };
+
+    /// Textures that are nothing but holes: a colour-keyed ('{') texture whose
+    /// every pixel is the key. Mappers use them for surfaces that must exist
+    /// but not be seen -- the faces of a ladder brush, for one. A face wearing
+    /// one can never show anything, so it is not drawn, which costs no
+    /// polygons; and such a texture must never reach the encoder, which has
+    /// nothing to encode. By texture lump index, 1 = hidden.
+    std::vector<char> findHiddenTextures(const BspFile &bsp, const WadSet &wads);
+
+    TexturePlan planTextures(const BspFile &bsp, const TextureNeeds &needs,
+                             int texelBudget = kWorldTexelBudget,
+                             int colourBudget = kPaletteColourBudget,
+                             int alphaBudget = kAlphaTexelBudget);
+
+    /// For a map taken as plain geometry -- every model opaque, no entities
+    /// consulted. `hidden` marks textures to leave out (findHiddenTextures).
+    TexturePlan planTextures(const BspFile &bsp, int texelBudget = kWorldTexelBudget,
+                             int colourBudget = kPaletteColourBudget,
+                             const std::vector<char> &hidden = {});
+} // namespace hlds
