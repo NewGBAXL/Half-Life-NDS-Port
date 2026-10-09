@@ -409,8 +409,9 @@ namespace hlrt
         // as a darker patch -- and lets a glow show through a pane.
         {
             const int marks = effectDraw.drawDecals();
-            stats_.polygons += marks;
-            stats_.vertices += marks * 4;
+            const int pieces = effectDraw.drawSolid();
+            stats_.polygons += marks + pieces;
+            stats_.vertices += marks * 4 + pieces * 3;
         }
         lampPass();
         const int effects = effectDraw.begin();

@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "HlActors.hpp"
 #include "HlFixed.hpp"
 
 namespace hlrt
@@ -36,8 +37,15 @@ namespace hlrt
         /// depth is. After everything solid, before what is see-through.
         /// Returns how many it drew.
         int drawDecals();
-        /// What the marks may cost a pass, at most.
+        /// The most marks drawn in a pass (half of it on a DS).
         static constexpr int kDecalPolygons = 24;
+        /// The small things that are solid (specks, casings, the pieces of
+        /// what is not glass), in as few runs as there are textures among
+        /// them. With the marks. Returns how many triangles it drew.
+        int drawSolid();
+        /// Add what the marks and the solid small things may cost this
+        /// pass: what there is of them, and nothing when there are none.
+        void reserve(int &polygons, int &vertices) const;
 
         /// A glow to be drawn with this frame's effects: at `at`, `alpha`
         /// solid (1..31), `half` units across either way. For whoever draws
@@ -70,6 +78,8 @@ namespace hlrt
         void drawGlow(int index);
         void drawMine(int index);
         void drawPiece(int index);
+        bool pieceSeen(const hldata::Piece &piece) const;
+        void pieceCorners(const hldata::Piece &piece, bool textured);
     };
 
     extern EffectDraw effectDraw;

@@ -266,6 +266,24 @@ Working:
   too, which R cannot reload while it has grenades to launch). One table (`shared/HlTouchLayout.hpp`) says where everything
   is, to the code that draws and the code that tests a touch alike. For
   a stylus in the left hand, "Buttons: left" in the options mirrors it.
+- Light that changes. The world's light is baked into its vertices, but
+  not all of the game's light is steady: lights a switch turns on and off
+  (its "styles" 32 and up) and lights that flicker, pulse or strobe (1 to
+  12, the game's own ten-a-second patterns). Where such light reaches a
+  face, the converter gives every vertex of it a colour word of its own
+  and records what the vertex is without that light and what each style
+  adds (`LightPatch`); the console works those words out again, in the
+  level's own geometry stream, whenever a style's strength changes
+  (`shared/HlLightStyle.hpp`). A named `light` is a thing the map's
+  switches can use. (People standing in such light are not relit by it.)
+- More of the game's machinery: a `func_train` keeps the angles it is
+  given (the tram's door at the station is a quarter turn round from how
+  it was built); `func_plat` and `func_platrot` (the round lift down to
+  the test chamber travels and turns, and whoever rides it turns with
+  it); lifts and trains have their going and stopping sounds;
+  `func_pendulum`; a named `infodecal` leaves its mark when triggered
+  (the microwave's last act); `env_beverage` (a can, and a point of
+  health, while the machine has any); `env_funnel`.
 - The picture is the player's to tune: OPTIONS > GRAPHICS in the pause
   menu (`shared/HlFog.hpp` has what each choice stands for).
   - **Fog**: *off*, *when needed* (only while a view too heavy to draw
@@ -319,12 +337,22 @@ Working:
     one small texture), each drawn as one quad in its wall's plane with
     the hardware's "same depth" test, which is what that test is for. A
     ring of them (24 on a DS, 64 on a DSi); one on a door or a pane goes
-    with it. Dust flies off a wall that is hit, and now and then the
+    with it. They are kept cheap: a new mark where one of its kind already
+    is takes that one's place (ten blows on one spot are one mark, a pane
+    has one crack, glass that never breaks takes none from a blow); each
+    fades out after twenty or forty seconds (twice that on a DSi); only
+    as many as there are are counted against the frame, and no more are
+    drawn than cover about a quarter of the screen between them. Dust flies off a wall that is hit, and now and then the
     round whines away.
   - **Breaking** -- what breaks throws pieces *of itself*: small tumbling
     patches of the broken brush's own texture (glass see-through), as
     many and as heavy as its material says, which fall, lie and go. No
-    shard models, no extra video memory.
+    shard models, no extra video memory. Each piece, speck and casing is
+    one triangle; the solid ones are sent in runs that share everything
+    (the plain ones in one, each texture's together) and only broken
+    glass takes a turn among what is see-through. They are gone in a
+    second or two (half as long again on a DSi), sooner once they lie,
+    and the far ones are not drawn at all when a frame is heavy.
   - **Being hurt** -- the screen reddens (a red sheet, as the game does
     it), a mark on each side of its middle the blow came from, and the
     head is knocked back. Falls hurt by the game's rule (safe to 580

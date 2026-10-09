@@ -215,7 +215,7 @@ namespace hldata
                 velocity[k] = normal[k] * (speed / 2) + fxFromInt(stray);
             }
             velocity[2] += fxFromInt(speed / 3);
-            Piece &speck = pieceAdd(a, kPieceSpeck, from, velocity, 260 + static_cast<int>((a.seed >> 9) % 180));
+            Piece &speck = pieceAdd(a, kPieceSpeck, from, velocity, 180 + static_cast<int>((a.seed >> 9) % 120));
             speck.half = 1;
             speck.colour = colour;
         }
@@ -339,8 +339,11 @@ namespace hldata
             const fx speed = piece.velocity[2] < 0 ? -piece.velocity[2] : piece.velocity[2];
             if (piece.bounces >= 2 || speed < fxFromInt(60))
             {
+                // It lies: and what lies is gone in a third of the time it
+                // had left (a floor of things lying is a floor of polygons).
                 piece.bounces = 2;
                 piece.velocity[0] = piece.velocity[1] = piece.velocity[2] = 0;
+                piece.leftMs = piece.leftMs / 3 < 300 ? (piece.leftMs < 300 ? piece.leftMs : 300) : piece.leftMs / 3;
                 continue;
             }
             piece.velocity[0] /= 3;

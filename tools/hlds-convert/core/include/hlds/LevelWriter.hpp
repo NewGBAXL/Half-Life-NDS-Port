@@ -57,6 +57,7 @@ namespace hlds
         std::vector<hldata::RoomRecord> rooms;
         std::vector<std::uint16_t> speech;
         std::vector<hldata::MessageRecord> messages;
+        std::vector<hldata::LightPatch> lightPatches;
         std::vector<hldata::SpriteRef> sprites;
         /// Not written: the game's path of each of `sprites`, and whether it
         /// is drawn as light (Converter cooks them and fills `sprites` in).

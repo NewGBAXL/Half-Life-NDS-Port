@@ -417,7 +417,8 @@ namespace hldata
             for (int k = 0; k < 3; ++k)
                 velocity[k] = velocity[k] > fxFromInt(1500) ? fxFromInt(1500)
                                                            : (velocity[k] < -fxFromInt(1500) ? -fxFromInt(1500) : velocity[k]);
-            Gib &gib = gibAdd(a, model, body, at, velocity, 12000 + static_cast<int>(detail::chance(a) % 4000));
+            Gib &gib = gibAdd(a, model, body, at, velocity,
+                              (6000 + static_cast<int>(detail::chance(a) % 2000)) * a.lifePercent / 100);
             gib.yaw = static_cast<std::uint16_t>(detail::chance(a));
             gib.spin = static_cast<std::int16_t>(40 + detail::chance(a) % 60);
             effectAdd(a, kEffectBlood, at, nullptr, human ? 0 : 1, 300);
@@ -2115,6 +2116,7 @@ namespace hldata
         // The small things in flight; a casing rings as it lands.
         if (piecesTick(a, *w.world, ms) > 0 && w.heard != nullptr)
             w.heard->add(CommonSound::Shell, nullptr, 70, kRadiusSmall);
+        decalsTick(a, ms);
         for (int i = 0; i < w.recordCount; ++i)
         {
             const auto kind = static_cast<LogicKind>(w.records[i].kind);
@@ -2358,15 +2360,26 @@ namespace hldata
                     w.struckFrom[1] = dir[1];
                     w.struckFrom[2] = dir[2];
                     logicStrike(w, player, i, damage);
-                    // Glass that takes it and stands: cracked, where it
-                    // was hit (the mark is the brush's: it goes with it).
+                    // Glass that takes it and stands (the marks are the
+                    // brush's: they go with it). Glass that will break is
+                    // cracked where it was hit -- one crack to a pane, moved
+                    // by the next hit. Glass that never breaks is not: a
+                    // shot leaves its small mark on it, a blow nothing but
+                    // dust.
+                    const std::uint32_t made = w.records[i].extra[1];
                     fx at[3], normal[3];
-                    if (w.actors != nullptr && !w.states[i].dead && (w.records[i].extra[1] == 0 || w.records[i].extra[1] == 7) &&
+                    if (w.actors != nullptr && !w.states[i].dead && (made == 0 || made == 7) &&
                         w.brushStates != nullptr && traceShotWall(*w.world, eye, end, at, normal))
                     {
+                        fx local[3];
                         for (int k = 0; k < 3; ++k)
-                            at[k] -= w.brushStates[shot.mover].pos[k];
-                        decalAdd(*w.actors, kDecalCrack, at, normal, 20, kMarkCrack, shot.mover);
+                            local[k] = at[k] - w.brushStates[shot.mover].pos[k];
+                        if (made == 0)
+                            decalAdd(*w.actors, kDecalCrack, local, normal, 20, kMarkCrack, shot.mover);
+                        else if (bullet)
+                            decalAdd(*w.actors, static_cast<std::uint8_t>(kDecalShot + detail::chance(*w.actors) % kDecalShots),
+                                     local, normal, 4, kMarkCrack, shot.mover);
+                        specksAdd(*w.actors, at, normal, 2, static_cast<std::uint16_t>(24 | 26 << 5 | 27 << 10), 60);
                     }
                     return true;
                 }

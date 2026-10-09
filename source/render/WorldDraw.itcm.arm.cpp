@@ -331,10 +331,11 @@ namespace hlrt
             // with the models: the world has what both leave.)
             effectDraw.gather(modelPolygons_, modelVertices_);
             // (... and the head-up display, which is drawn over it all.)
-            modelPolygons_ += HudDraw::kPolygons + (hudDraw.lampAlight() ? HudDraw::kLampPolygons : 0) +
-                              EffectDraw::kDecalPolygons;
-            modelVertices_ += HudDraw::kVertices + (hudDraw.lampAlight() ? HudDraw::kLampVertices : 0) +
-                              EffectDraw::kDecalPolygons * 4;
+            modelPolygons_ += HudDraw::kPolygons + (hudDraw.lampAlight() ? HudDraw::kLampPolygons : 0);
+            modelVertices_ += HudDraw::kVertices + (hudDraw.lampAlight() ? HudDraw::kLampVertices : 0);
+            // (... and the marks and small things there are: nothing, with
+            // none.)
+            effectDraw.reserve(modelPolygons_, modelVertices_);
             walk();
             // ... and the models' share is counted with the world's from here
             // on, so that the brushes are held to what is really left.

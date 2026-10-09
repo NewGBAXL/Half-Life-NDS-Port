@@ -57,7 +57,7 @@ namespace hlds
 
     void GxPacker::vertex(const GxVertex &v)
     {
-        if (!haveColour_ || colour_ != v.colour)
+        if (!haveColour_ || colour_ != v.colour || everyColour_)
         {
             commands_.push_back(Command{kCmdColor, 1, {v.colour, 0}});
             haveColour_ = true;
@@ -111,6 +111,7 @@ namespace hlds
     std::vector<std::uint32_t> GxPacker::finish()
     {
         std::vector<std::uint32_t> words;
+        colourWords_.clear();
         for (std::size_t i = 0; i < commands_.size(); i += 4)
         {
             std::uint32_t header = 0;
@@ -122,6 +123,8 @@ namespace hlds
             for (std::size_t k = 0; k < 4 && i + k < commands_.size(); ++k)
             {
                 const Command &c = commands_[i + k];
+                if (c.code == kCmdColor)
+                    colourWords_.push_back(static_cast<std::uint32_t>(words.size()));
                 for (int p = 0; p < c.paramCount; ++p)
                     words.push_back(c.params[p]);
             }

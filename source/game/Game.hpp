@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "HlLamp.hpp"
+#include "HlLightStyle.hpp"
 #include "HlMonsters.hpp"
 #include "HlSave.hpp"
 #include "HlTransition.hpp"
@@ -107,6 +108,9 @@ namespace hlrt
         hldata::WeaponState weapon_;
         int inHand_ = -1; ///< the weapon `held` is the model of
         int lastHealth_ = 100;
+        /// How strong each of the map's changing lights was when the
+        /// vertices they reach were last worked out (HlLightStyle.hpp).
+        std::uint16_t styleValues_[hldata::kLightStyles];
         /// Until what the map writes as it is come into is written (ms);
         /// negative: it has been, or is not to be.
         int startMessagesMs_ = -1;

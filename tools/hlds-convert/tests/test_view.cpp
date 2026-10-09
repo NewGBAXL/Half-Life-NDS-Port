@@ -222,13 +222,55 @@ namespace
         markBlast(a, g.move, feet, 48);
         check(marks() == 5 && a.decals[4].picture == kDecalScorch && a.decals[4].half >= 32 && a.decals[4].normal[2] > 3900,
               "a blast scorches the floor under it");
+        // One spot, hit again and again, is one mark: not a pile of them.
+        const int before = marks();
+        for (int n = 0; n < 20; ++n)
+            markShot(a, g.move, eye, down, false);
+        check(marks() == before, "twenty shots into one spot leave the one hole that was there");
+        for (int n = 0; n < 20; ++n)
+            markShot(a, g.move, eye, down, true);
+        check(marks() == before, "... and twenty blows the one dent");
+        // Apart, they are apart.
+        const fx aside[3] = {down[0] + fxFromInt(120), down[1], down[2]};
+        check(markShot(a, g.move, eye, aside, false) && marks() == before + 1, "a hole a step away is another hole");
+        // A pane has one crack, wherever it is hit.
+        {
+            const fx up[3] = {0, 0, kFxOne};
+            const fx here[3] = {fxFromInt(10), 0, 0}, there[3] = {fxFromInt(60), fxFromInt(30), 0};
+            const int had = marks();
+            decalAdd(a, kDecalCrack, here, up, 20, kMarkCrack, 3);
+            const Decal &crack = decalAdd(a, kDecalCrack, there, up, 20, kMarkCrack, 3);
+            decalAdd(a, kDecalCrack, here, up, 20, kMarkCrack, 4);
+            check(marks() == had + 2 && crack.at[0] == there[0] && crack.brush == 3,
+                  "a pane has one crack, moved to where it was last hit; another pane has its own");
+            for (Decal &decal : a.decals)
+                decal.active = decal.active && decal.brush < 0;
+        }
         // The ring: the oldest gives way.
         a.decalLimit = 6;
-        for (int n = 0; n < 4; ++n)
-            markShot(a, g.move, eye, down, false);
-        check(marks() == 6 && a.decals[0].picture < kDecalShots && a.decals[2].picture < kDecalShots &&
-                  a.decals[4].picture == kDecalScorch,
-              "when there is no room for another mark, the oldest gives way");
+        for (int n = 0; n < 8; ++n)
+        {
+            const fx spread[3] = {down[0] + fxFromInt(200 + 60 * n), down[1] + fxFromInt(40 * n), down[2]};
+            markShot(a, g.move, eye, spread, false);
+        }
+        check(marks() == 6, "when there is no room for another mark, the oldest gives way");
+        // They go: holes after a third of a minute, blood and soot after
+        // two thirds -- twice that where they are kept longer.
+        for (Decal &decal : a.decals)
+            decal.active = false;
+        a.decalNext = 0;
+        markShot(a, g.move, eye, down, false);
+        markBlood(a, g.move, wound, along, false, true);
+        const int both = decalsTick(a, 19000);
+        const int stain = decalsTick(a, 2000);
+        const int gone = decalsTick(a, 20000);
+        a.markLifePercent = 200;
+        markShot(a, g.move, eye, down, false);
+        const int kept = decalsTick(a, 30000);
+        const int later = decalsTick(a, 11000);
+        a.markLifePercent = 100;
+        check(both == 2 && stain == 1 && gone == 0 && kept == 1 && later == 0,
+              "marks go: a hole after twenty seconds, blood after forty; twice as long where they are kept longer");
         // Specks are gone in half a second.
         for (int n = 0; n < 20; ++n)
             g.frame();
@@ -251,27 +293,45 @@ namespace
         }
         check(glass >= 6 && glass <= 16 && flying(kPieceShard) == glass && own && inside,
               "broken glass throws a dozen or so pieces of itself, see-through, from where it was");
-        for (int n = 0; n < 45; ++n)
-            g.frame();
-        int lying = 0;
-        for (const Piece &piece : a.pieces)
-            lying += piece.kind == kPieceShard && piece.bounces >= 2 && piece.pos[2] < mins[2];
-        check(lying >= glass / 2, "... which fall, and lie");
+        int lay = 0, soonest = 100000;
         for (int n = 0; n < 60; ++n)
+        {
             g.frame();
-        check(flying(kPieceShard) == 0, "... and are soon gone");
+            int lying = 0;
+            for (const Piece &piece : a.pieces)
+            {
+                if (piece.kind == kPieceShard && piece.bounces >= 2 && piece.pos[2] < mins[2])
+                {
+                    ++lying;
+                    soonest = piece.leftMs < soonest ? piece.leftMs : soonest;
+                }
+            }
+            lay = lying > lay ? lying : lay;
+        }
+        check(lay >= glass / 3, "... which fall, and lie");
+        check(soonest <= 500, "what lies is not left lying long");
+        check(flying(kPieceShard) == 0, "... and all of it is gone within two seconds");
         check(piecesBurst(a, mins, maxs, 2, nullptr, 0) < glass && breakStyle(5).weight < breakStyle(2).weight &&
-                  breakStyle(1).lastMs > breakStyle(0).lastMs,
-              "metal breaks into fewer; ceiling tiles drift; wood lies longer than glass");
+                  breakStyle(1).lastMs > breakStyle(0).lastMs && breakStyle(1).lastMs <= 2000,
+              "metal breaks into fewer; ceiling tiles drift; wood lasts longer than glass, and none of it long");
+        // (Kept half as long again, where there is the room for it.)
+        {
+            const fx still[3] = {0, 0, 0};
+            const int plain = pieceAdd(a, kPieceShell, eye, still, 1200).leftMs;
+            a.lifePercent = 150;
+            const int longer = pieceAdd(a, kPieceShell, eye, still, 1200).leftMs;
+            a.lifePercent = 100;
+            check(plain == 1200 && longer == 1800, "small things last half as long again where they are kept longer");
+        }
         // A casing rings once as it lands.
         for (Piece &piece : a.pieces)
             piece.kind = 0;
         const fx toss[3] = {fxFromInt(40), 0, fxFromInt(60)};
-        pieceAdd(a, kPieceShell, eye, toss, 2500);
+        pieceAdd(a, kPieceShell, eye, toss, 1200);
         int rang = 0;
         for (int n = 0; n < 60; ++n)
             rang += piecesTick(a, g.move, 33);
-        check(rang == 1 && flying(kPieceShell) == 1, "a spent casing rings once as it lands, and lies a while");
+        check(rang == 1 && flying(kPieceShell) == 0, "a spent casing rings once as it lands, and is gone within two seconds");
     }
 } // namespace
 

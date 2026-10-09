@@ -5,6 +5,7 @@
 #include <new>
 
 #include "DebugLog.hpp"
+#include "Global.hpp"
 #include "data/LevelFile.hpp"
 #include "data/ModelCache.hpp"
 #include "game/Input.hpp"
@@ -61,6 +62,8 @@ namespace hlrt
     bool Game::create()
     {
         destroy();
+        // (Nothing of the changing lights has been worked out yet.)
+        std::memset(styleValues_, 0xFF, sizeof(styleValues_));
         // The chapter's name, half a second into the map (not from a save:
         // placeFromSave says so).
         startMessagesMs_ = 500;
@@ -139,6 +142,10 @@ namespace hlrt
         actors.effectLimit = isDSiMode() ? kMaxEffects : kMaxEffects / 2;
         actors.decalLimit = isDSiMode() ? kMaxDecals : 24;
         actors.pieceLimit = isDSiMode() ? kMaxPieces : 24;
+        // (... and keeps them longer: the small things half as long again,
+        // the marks twice.)
+        actors.lifePercent = isDSiMode() ? 150 : 100;
+        actors.markLifePercent = isDSiMode() ? 200 : 100;
         actors.boxes = actorBoxes_;
         world.boxes = actorBoxes_;
         world.boxCount = actorCount;
@@ -446,6 +453,17 @@ namespace hlrt
         // What fights, what lies about, and what is in hand.
         const int ms = (vblanks * 1000 + 30) / 60;
 
+        // The lights that change: when any is not as strong as it was (a
+        // switch, or a tenth of a second of a flicker), the colours of the
+        // vertices they reach are worked out again, in the level's own
+        // stream -- which is what is drawn from.
+        if (level.view.lightPatchCount != 0 &&
+            lightStyleValues(Global::vblanks() / 6, logic.stylesOff, styleValues_))
+        {
+            lightPatchApply(level.view.lightPatches, level.view.lightPatchCount, styleValues_,
+                            const_cast<std::uint32_t *>(level.view.gxStream));
+        }
+
         // What the map writes on the screen: as it is come into, and when
         // something in it says.
         {
@@ -596,7 +614,7 @@ namespace hlrt
                     velocity[a] = player.state.velocity[a] + camera.right[a] * (70 + static_cast<int>((toss >> 9) % 40)) +
                                   camera.up[a] * (90 + static_cast<int>((toss >> 15) % 40)) + camera.forward[a] * 15;
                 }
-                Piece &shell = pieceAdd(actors, kPieceShell, from, velocity, 2500);
+                Piece &shell = pieceAdd(actors, kPieceShell, from, velocity, 1200);
                 shell.half = 1;
                 shell.colour = inHand_ == kWeaponShotgun ? RGB15(24, 5, 4) : RGB15(27, 21, 6);
             }

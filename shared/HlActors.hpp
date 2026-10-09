@@ -151,7 +151,23 @@ namespace hldata
         std::uint16_t colour = 0;
         fx at[3] = {0, 0, 0};
         fx normal[3] = {0, 0, kFxOne}; ///< Q12: the way the wall faces
+        /// Until it is gone (its last second it fades). A crack lasts as
+        /// long as its pane.
+        std::int32_t leftMs = 0;
     };
+    /// Marks of one kind are one family: a new one where one of its
+    /// family already is takes that one's place (decalAdd).
+    constexpr int decalFamily(std::uint8_t picture)
+    {
+        return picture < 4 ? 0 : (picture >= 5 && picture <= 7 ? 5 : (picture == 13 ? 8 : picture));
+    }
+    /// How long each lasts (ms): holes and dents a third of a minute,
+    /// blood and scorches two thirds, a crack for as long as its pane.
+    constexpr std::int32_t decalLife(std::uint8_t picture)
+    {
+        const int family = decalFamily(picture);
+        return family == 9 ? 0x3FFFFFFF : (family == 0 || family == 4 ? 20000 : 40000);
+    }
     /// (All of these on a DSi; ActorWorld::decalLimit of them on a DS.)
     inline constexpr int kMaxDecals = 64;
 
@@ -195,13 +211,13 @@ namespace hldata
     {
         switch (material)
         {
-        case 0:  return {6, 6, 16, 3, 18, 140, 256, 1800};  // glass: many, light, soon gone
-        case 7:  return {6, 6, 16, 3, 18, 140, 256, 1800};
-        case 1:  return {4, 5, 12, 4, 31, 170, 256, 3500};  // wood
-        case 2:  return {3, 4, 10, 4, 31, 150, 256, 4000};  // metal: few and heavy
-        case 5:  return {4, 4, 10, 4, 31, 60, 110, 3500};   // ceiling tiles drift down
-        case 6:  return {4, 5, 12, 3, 31, 180, 256, 3500};  // a computer
-        default: return {4, 5, 12, 4, 31, 160, 256, 3500};  // cinder block, rock, flesh
+        case 0:  return {6, 6, 16, 3, 18, 140, 256, 1200};  // glass: many, light, soon gone
+        case 7:  return {6, 6, 16, 3, 18, 140, 256, 1200};
+        case 1:  return {4, 5, 12, 4, 31, 170, 256, 1800};  // wood
+        case 2:  return {3, 4, 10, 4, 31, 150, 256, 1800};  // metal: few and heavy
+        case 5:  return {4, 4, 10, 4, 31, 60, 110, 1800};   // ceiling tiles drift down
+        case 6:  return {4, 5, 12, 3, 31, 180, 256, 1800};  // a computer
+        default: return {4, 5, 12, 4, 31, 160, 256, 1800};  // cinder block, rock, flesh
         }
     }
 
@@ -263,6 +279,10 @@ namespace hldata
         int decalNext = 0; ///< where the next mark goes: round and round
         Piece pieces[kMaxPieces];
         int pieceLimit = 24;
+        /// How long the small things and the marks last, of what they are
+        /// made to (a hundredth each): a DSi keeps them longer.
+        int lifePercent = 100;
+        int markLifePercent = 100;
         int gibLimit = kMaxGibs / 2;
         int shotLimit = kMaxProjectiles / 2;
         int effectLimit = kMaxEffects / 2;
@@ -637,11 +657,42 @@ namespace hldata
                            std::uint16_t colour, int brush = -1)
     {
         const int limit = a.decalLimit < 1 ? 1 : (a.decalLimit > kMaxDecals ? kMaxDecals : a.decalLimit);
+        const std::int32_t life = decalLife(picture) / 100 * a.markLifePercent;
+        half = half < 1 ? 1 : (half > 60 ? 60 : half);
+        // One of its family there already -- on the same thing, facing the
+        // same way, its middle within this one's reach (anywhere on the
+        // pane, for a crack) -- is this one: moved to the new place and
+        // begun again. Ten blows on one spot are one mark, not ten sheets
+        // one on another for the hardware to draw.
+        for (int i = 0; i < limit; ++i)
+        {
+            Decal &old = a.decals[i];
+            if (!old.active || old.brush != brush || decalFamily(old.picture) != decalFamily(picture))
+                continue;
+            const std::int64_t facing = static_cast<std::int64_t>(old.normal[0]) * normal[0] +
+                                        static_cast<std::int64_t>(old.normal[1]) * normal[1] +
+                                        static_cast<std::int64_t>(old.normal[2]) * normal[2];
+            if (facing < (static_cast<std::int64_t>(kFxOne) * kFxOne * 9) / 10)
+                continue;
+            const fx d[3] = {old.at[0] - at[0], old.at[1] - at[1], old.at[2] - at[2]};
+            const int reach = old.half > half ? old.half : half;
+            if (decalFamily(picture) != 9 && fxLength(d) > fxFromInt(reach))
+                continue;
+            old.half = static_cast<std::uint8_t>(reach);
+            old.leftMs = life;
+            for (int k = 0; k < 3; ++k)
+            {
+                old.at[k] = at[k];
+                old.normal[k] = normal[k];
+            }
+            return old;
+        }
         Decal &decal = a.decals[a.decalNext % limit];
         a.decalNext = (a.decalNext + 1) % limit;
         decal.active = true;
+        decal.leftMs = life;
         decal.picture = picture;
-        decal.half = static_cast<std::uint8_t>(half < 1 ? 1 : (half > 60 ? 60 : half));
+        decal.half = static_cast<std::uint8_t>(half);
         a.seed = a.seed * 1664525u + 1013904223u;
         decal.turn = static_cast<std::uint8_t>((a.seed >> 12) & 3);
         decal.brush = static_cast<std::int16_t>(brush);
@@ -679,8 +730,26 @@ namespace hldata
             slot->pos[i] = pos[i];
             slot->velocity[i] = velocity[i];
         }
-        slot->leftMs = ms;
+        slot->leftMs = ms * a.lifePercent / 100;
         return *slot;
+    }
+
+    /// The marks, for `ms` more milliseconds: each goes when its time is
+    /// up. Returns how many there are.
+    inline int decalsTick(ActorWorld &a, int ms)
+    {
+        int live = 0;
+        for (Decal &decal : a.decals)
+        {
+            if (!decal.active)
+                continue;
+            decal.leftMs -= ms;
+            if (decal.leftMs <= 0)
+                decal.active = false;
+            else
+                ++live;
+        }
+        return live;
     }
 
     /// Something made of `material` and as big as the box `mins`..`maxs`
@@ -713,7 +782,7 @@ namespace hldata
                 velocity[k] = out * 3 + fxFromInt(static_cast<int>(chance() % static_cast<std::uint32_t>(style.speed * 2 + 1)) - style.speed);
             }
             velocity[2] += fxFromInt(style.speed / 2);
-            Piece &piece = pieceAdd(a, kPieceShard, at, velocity, style.lastMs + static_cast<int>(chance() % 800));
+            Piece &piece = pieceAdd(a, kPieceShard, at, velocity, style.lastMs + static_cast<int>(chance() % 400));
             piece.half = static_cast<std::uint8_t>(style.half + chance() % 3);
             piece.alpha = style.alpha;
             piece.weight = style.weight;

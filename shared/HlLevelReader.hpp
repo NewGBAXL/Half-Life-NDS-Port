@@ -88,6 +88,8 @@ namespace hldata
         std::uint32_t speechCount = 0;
         const MessageRecord *messages = nullptr;
         std::uint32_t messageCount = 0;
+        const LightPatch *lightPatches = nullptr;
+        std::uint32_t lightPatchCount = 0;
 
         std::uint32_t planeCount = 0;
         std::uint32_t nodeCount = 0;
@@ -209,6 +211,7 @@ namespace hldata
         sprites = section<SpriteRef>(data, dir, Section::Sprites, spriteCount);
         speech = section<std::uint16_t>(data, dir, Section::Speech, speechCount);
         messages = section<MessageRecord>(data, dir, Section::Messages, messageCount);
+        lightPatches = section<LightPatch>(data, dir, Section::LightPatch, lightPatchCount);
 
         LevelError result = planeTypeCount == planeCount ? validate() : LevelError::BadLayout;
         if (result != LevelError::Ok)
@@ -336,6 +339,15 @@ namespace hldata
         for (std::uint32_t i = 0; i < speechCount; ++i)
         {
             if (speech[i] != 0xFFFF && speech[i] >= sentenceCount)
+                return LevelError::BadIndex;
+        }
+        // Light patches: a word of the stream each, a style there is, and a
+        // base before anything is added to it.
+        for (std::uint32_t i = 0; i < lightPatchCount; ++i)
+        {
+            const LightPatch &p = lightPatches[i];
+            if (p.word >= gxWordCount || (p.style != kPatchBase && p.style >= kLightStyles) ||
+                (i == 0 && p.style != kPatchBase))
                 return LevelError::BadIndex;
         }
         // Messages: text that is in Strings (which ends in a NUL: checked

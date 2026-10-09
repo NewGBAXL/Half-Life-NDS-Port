@@ -74,6 +74,13 @@ namespace hlds
         void vertex(const GxVertex &v);
         /// The packed words. The packer is empty afterwards.
         std::vector<std::uint32_t> finish();
+        /// Every vertex is given a colour command of its own from here on,
+        /// whether or not it repeats the last: for vertices whose colours
+        /// the console changes one by one (the level's LightPatch).
+        void colourEvery(bool on) { everyColour_ = on; }
+        /// After finish(): which word of what it returned is each colour
+        /// command's parameter, in the order the vertices were given.
+        const std::vector<std::uint32_t> &colourWords() const { return colourWords_; }
 
     private:
         struct Command
@@ -87,6 +94,8 @@ namespace hlds
 
         std::vector<Command> commands_;
         bool haveColour_ = false;
+        bool everyColour_ = false;
+        std::vector<std::uint32_t> colourWords_;
         std::uint16_t colour_ = 0;
         bool havePrevious_ = false;
         std::int16_t previous_[3] = {0, 0, 0};

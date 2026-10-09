@@ -10,10 +10,12 @@
 // what is lost is detail inside a face, not the overall light.
 //
 // LIGHT STYLES. A face carries up to four lightmap layers, one per style. Style
-// 0 is plain light. 1..31 flicker or pulse and are baked as if steady.
-// 32 and up belong to lights a button switches: those are baked in when the
-// light starts on and left out when it starts off. Changing them at run time
-// is what the level format's LightPatch section is reserved for.
+// 0 is plain light. 1..31 flicker or pulse; 32 and up belong to lights a
+// button switches. What is baked into a vertex is its light as the map
+// starts (a switched light that starts off left out, a flickering one at its
+// steady strength); and for every vertex such light reaches, the level's
+// LightPatch section says what each style adds, so that the console can work
+// its colour out again as they change (sampleLayers, changingLayers).
 
 #include <cstdint>
 #include <vector>
@@ -55,6 +57,14 @@ namespace hlds
         Rgb sample(const BspFace &face, double s, double t) const;
 
         bool styleIsOn(int style) const;
+
+        /// The same, of some of the face's (up to four) layers only: bit n of
+        /// `layers` is its n-th. Whether a layer's style starts on is not
+        /// asked.
+        Rgb sampleLayers(const BspFace &face, double s, double t, unsigned layers) const;
+        /// Which of a face's layers are of light that changes -- any style
+        /// but 0 -- as bits (0: all of its light is steady).
+        unsigned changingLayers(const BspFace &face) const;
 
     private:
         const BspFile &bsp_;

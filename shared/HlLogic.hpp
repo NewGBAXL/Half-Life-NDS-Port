@@ -197,6 +197,9 @@ namespace hldata
         /// for which way they are thrown.
         std::uint16_t broke[4] = {};
         int brokeCount = 0;
+        /// Which switched lights are off (a bit per style under
+        /// kLightStyles): worked out each tick from the Light records.
+        std::uint64_t stylesOff = 0;
         fx struckFrom[3] = {0, 0, 0};
 
         /// One byte per path corner, the caller's: what has changed about a
@@ -774,6 +777,11 @@ namespace hldata
             state.phase = 0;
             state.move = MoveState::GoingUp;
             state.timer = -1;
+            // (Heard setting off from where it had stopped: not at every
+            // corner of a route it goes straight through.)
+            if (here.waitMs > 0 || (here.flags & kCornerWaitForUse) || !state.running)
+                recordSound(w, index, false);
+            state.running = true;
         }
 
         inline void trainArrived(LogicWorld &w, PlayerState &player, int index, std::uint16_t corner)
@@ -782,6 +790,9 @@ namespace hldata
             const PathCorner &here = w.corners[corner];
             state.bits = corner;
             state.move = MoveState::AtBottom;
+            // (... and stopping, where it stops.)
+            if (here.waitMs > 0 || (here.flags & kCornerWaitForUse) || here.next == kNoCorner)
+                recordSound(w, index, true);
             logicFire(w, player, here.fireTarget, index, kUseToggle, 0);
             if (here.flags & kCornerWaitForUse)
             {
@@ -1796,6 +1807,82 @@ namespace hldata
 
     namespace detail
     {
+        /// How a turning platform is turned, `phase` (Q30) of the way along
+        /// its travel: built turned, it is unturned at the far end (and the
+        /// other way about for one that starts there).
+        inline std::uint16_t platYaw(const LogicRecord &record, std::int32_t phase)
+        {
+            const auto turn = static_cast<std::int32_t>(record.extra[0]);
+            const std::int32_t along = (record.flags & kLogicStartOpen) ? phase : kFractionOne - phase;
+            return static_cast<std::uint16_t>((static_cast<std::int64_t>(turn) * along) >> kFractionShift);
+        }
+
+        /// A platform that travels and turns: whoever stands on it goes and
+        /// turns with it.
+        inline void platTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.brush == kNoBrush)
+                return;
+            // One that is not switched goes when stood on, and comes back
+            // three seconds after it gets there.
+            if (!(record.flags & kLogicToggle) && state.move == MoveState::AtBottom && player.onGround &&
+                player.groundMover == static_cast<int>(record.brush))
+                moverStart(w, index, MoveState::GoingUp);
+            if (state.move != MoveState::GoingUp && state.move != MoveState::GoingDown)
+                return;
+            const bool up = state.move == MoveState::GoingUp;
+            const fx distance = fxLength(state.travel);
+            std::int32_t step = kFractionOne;
+            if (distance > 0 && record.speed > 0)
+            {
+                const std::int64_t travelMs = (static_cast<std::int64_t>(distance) * 1000) / record.speed;
+                if (travelMs > ms)
+                    step = static_cast<std::int32_t>((static_cast<std::int64_t>(ms) << kFractionShift) / travelMs);
+            }
+            std::int32_t phase = up ? state.phase + step : state.phase - step;
+            if (phase > kFractionOne || phase < state.phase - step - 1)
+                phase = kFractionOne;
+            if (phase < 0)
+                phase = 0;
+            fx pos[3];
+            for (int a = 0; a < 3; ++a)
+                pos[a] = state.base[a] + static_cast<fx>((static_cast<std::int64_t>(state.travel[a]) * phase) >> kFractionShift);
+            carryBrush(w, player, record.brush, pos, platYaw(record, phase));
+            state.phase = phase;
+            if (phase == (up ? kFractionOne : 0))
+            {
+                state.move = up ? MoveState::AtTop : MoveState::AtBottom;
+                recordSound(w, index, true);
+                if (up && !(record.flags & kLogicToggle))
+                    state.timer = 3000;
+                if (record.target != 0)
+                    logicUseTargets(w, player, index, kUseToggle, 0);
+            }
+        }
+
+        /// A brush that swings: out by its distance and back, as a weight
+        /// on a string does (slow at the ends).
+        inline void pendulumTick(LogicWorld &w, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.brush == kNoBrush || !state.running || record.speed <= 0 || record.move[0] == 0)
+                return;
+            // Once out and back is twice the distance at the speed, and
+            // half as long again for slowing at the ends.
+            const fx far = record.move[0] < 0 ? -record.move[0] : record.move[0];
+            const std::int64_t wholeMs = (static_cast<std::int64_t>(far) * 3000) / record.speed;
+            state.phase = static_cast<std::int32_t>((state.phase + ms) % (wholeMs > 0 ? wholeMs : 1));
+            fx sine, cosine;
+            fxSinCos(static_cast<std::uint16_t>((static_cast<std::int64_t>(state.phase) << 16) / (wholeMs > 0 ? wholeMs : 1)), sine, cosine);
+            std::uint16_t angles[3] = {0, 0, 0};
+            angles[record.extra[0] % 3] =
+                static_cast<std::uint16_t>((static_cast<std::int64_t>(record.move[0]) * (kFxOne - cosine)) >> 13);
+            logicPlaceBrushTurned(w, record.brush, state.base, angles);
+        }
+
         inline void rotatingTick(LogicWorld &w, const PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -2153,6 +2240,70 @@ namespace hldata
             state.bits ^= 1; // the other way
             break;
 
+        case LogicKind::PlatRot:
+            // From rest, to its other end.
+            if (state.move == MoveState::AtBottom)
+                detail::moverStart(w, index, MoveState::GoingUp);
+            else if (state.move == MoveState::AtTop)
+                detail::moverStart(w, index, MoveState::GoingDown);
+            break;
+
+        case LogicKind::Light:
+            // On, off; "on" and "off" only ever do the one.
+            state.bits = useType == kUseOn ? 0u : (useType == kUseOff ? 1u : (state.bits ^ 1u));
+            break;
+
+        case LogicKind::Mark:
+            // Its mark, on whatever is within a hand's breadth of it.
+            if (w.actors != nullptr && w.world != nullptr)
+            {
+                static constexpr std::int8_t kWays[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+                for (const auto &way : kWays)
+                {
+                    const fx from[3] = {record.move[0] - fxFromInt(way[0] * 6), record.move[1] - fxFromInt(way[1] * 6),
+                                        record.move[2] - fxFromInt(way[2] * 6)};
+                    const fx to[3] = {record.move[0] + fxFromInt(way[0] * 6), record.move[1] + fxFromInt(way[1] * 6),
+                                      record.move[2] + fxFromInt(way[2] * 6)};
+                    fx at[3], normal[3];
+                    if (!traceShotWall(*w.world, from, to, at, normal))
+                        continue;
+                    const auto picture = static_cast<std::uint8_t>(record.extra[0]);
+                    const int family = decalFamily(picture);
+                    decalAdd(*w.actors, picture, at, normal, static_cast<int>(record.extra[1]),
+                             family == 8 ? kMarkAlien : (family == 5 ? kMarkBlood : (family == 10 ? kMarkSoot : kMarkShot)));
+                    break;
+                }
+            }
+            break;
+
+        case LogicKind::Pendulum:
+            state.running = !state.running;
+            break;
+
+        case LogicKind::Beverage:
+            // A can, while there are any: it drops out, and is a point of
+            // health to whoever is there to take it.
+            if (state.bits < record.extra[0])
+            {
+                ++state.bits;
+                logicHurt(player, -1);
+                if (w.actors != nullptr)
+                {
+                    const fx out[3] = {0, 0, -fxFromInt(40)};
+                    Piece &can = pieceAdd(*w.actors, kPieceShell, record.move, out, 1500);
+                    can.half = 2;
+                    can.colour = static_cast<std::uint16_t>(26 | 6 << 5 | 5 << 10);
+                }
+            }
+            break;
+
+        case LogicKind::Funnel:
+            if (w.actors != nullptr)
+            {
+                effectAdd(*w.actors, kEffectRing, record.move, nullptr, 160, 700);
+            }
+            break;
+
         default:
             // The triggers: a trigger volume cannot be "used", only
             // entered.
@@ -2231,7 +2382,13 @@ namespace hldata
                 {
                     fx pos[3];
                     detail::trainPosAt(w, i, record.firstAux, pos);
-                    logicPlaceBrush(w, record.brush, pos);
+                    // (Turned as it was made to be: a train keeps its
+                    // angles for good -- the tram's door is a quarter turn
+                    // round from how it was built.)
+                    const std::uint16_t turned[3] = {static_cast<std::uint16_t>(record.extra[0]),
+                                                     static_cast<std::uint16_t>(record.extra[1]),
+                                                     static_cast<std::uint16_t>(record.extra[2])};
+                    logicPlaceBrushTurned(w, record.brush, pos, turned);
                     if (record.name == 0)
                     {
                         state.running = true;
@@ -2271,6 +2428,19 @@ namespace hldata
                 }
                 if (startOpen)
                     logicPlaceBrush(w, record.brush, state.base);
+            }
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::PlatRot) && record.brush != kNoBrush)
+                logicPlaceBrush(w, record.brush, state.base, detail::platYaw(record, 0));
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Light))
+                state.bits = (record.flags & kLogicStartOpen) ? 1 : 0;
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Pendulum))
+            {
+                state.running = (record.flags & kLogicStartOpen) != 0;
+                if (record.brush != kNoBrush)
+                {
+                    for (int a = 0; a < 3; ++a)
+                        state.base[a] = w.brushes[record.brush].origin[a];
+                }
             }
             if (record.kind == static_cast<std::uint8_t>(LogicKind::TriggerAuto))
                 state.timer = 100; // a tenth of a second after the map starts
@@ -2410,6 +2580,10 @@ namespace hldata
                     case LogicKind::Rotating:
                         logicUse(w, player, i, -1, kUseToggle);
                         break;
+                    case LogicKind::PlatRot:
+                        if (state.move == MoveState::AtTop)
+                            detail::moverStart(w, i, MoveState::GoingDown);
+                        break;
                     case LogicKind::Breakable:
                         detail::breakIt(w, player, i, 0); // stood on, and its delay is up
                         break;
@@ -2431,6 +2605,10 @@ namespace hldata
                 detail::trainTick(w, player, i, ms);
             else if (kind == LogicKind::Rotating)
                 detail::rotatingTick(w, player, i, ms);
+            else if (kind == LogicKind::PlatRot)
+                detail::platTick(w, player, i, ms);
+            else if (kind == LogicKind::Pendulum)
+                detail::pendulumTick(w, i, ms);
             else if (kind == LogicKind::Pushable)
                 detail::pushableTick(w, player, i, ms);
             else if (kind == LogicKind::Script)
@@ -2594,7 +2772,19 @@ namespace hldata
             }
         }
 
-        // 4. What each brush shows of its textures, and the conveyors.
+        // 4. The switched lights: each style is as the last light of it
+        //    says.
+        w.stylesOff = 0;
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::Light) || record.extra[0] >= kLightStyles)
+                continue;
+            const std::uint64_t bit = std::uint64_t(1) << record.extra[0];
+            w.stylesOff = (w.states[i].bits & 1) ? (w.stylesOff | bit) : (w.stylesOff & ~bit);
+        }
+
+        // 5. What each brush shows of its textures, and the conveyors.
         for (int i = 0; i < w.recordCount; ++i)
         {
             const LogicRecord &record = w.records[i];

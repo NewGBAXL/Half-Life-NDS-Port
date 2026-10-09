@@ -41,7 +41,7 @@ namespace hlds
             blobOf(level.textures),
             blobOf(level.entities),
             Blob{level.entityText.data(), level.entityText.size(), level.entityText.size()},
-            Blob{nullptr, 0, 0}, // LightPatch
+            blobOf(level.lightPatches),
             blobOf(level.brushes),
             blobOf(level.brushLeaves),
             blobOf(level.logic),

@@ -83,7 +83,33 @@ namespace hlds
         return e;
     }
 
+    unsigned LightBake::changingLayers(const BspFace &face) const
+    {
+        const bool special = (bsp_.texInfos[face.texInfo].flags & kTexSpecial) != 0;
+        if (special || bsp_.lighting.empty() || face.lightOfs < 0)
+            return 0;
+        unsigned layers = 0;
+        for (int layer = 0; layer < 4 && face.styles[layer] != 255; ++layer)
+        {
+            if (face.styles[layer] != 0)
+                layers |= 1u << layer;
+        }
+        return layers;
+    }
+
     Rgb LightBake::sample(const BspFace &face, double s, double t) const
+    {
+        // (As the map starts: every layer whose style is on.)
+        unsigned layers = 0;
+        for (int layer = 0; layer < 4 && face.styles[layer] != 255; ++layer)
+        {
+            if (styleIsOn(face.styles[layer]))
+                layers |= 1u << layer;
+        }
+        return sampleLayers(face, s, t, layers);
+    }
+
+    Rgb LightBake::sampleLayers(const BspFace &face, double s, double t, unsigned layers) const
     {
         const bool special = (bsp_.texInfos[face.texInfo].flags & kTexSpecial) != 0;
         if (special || bsp_.lighting.empty())
@@ -113,7 +139,7 @@ namespace hlds
             const std::size_t base = static_cast<std::size_t>(face.lightOfs) + layer * layerBytes;
             if (base + layerBytes > bsp_.lighting.size())
                 break; // a lightmap that runs off the lump: use what is there
-            if (!styleIsOn(style))
+            if (!(layers & (1u << layer)))
                 continue;
             const std::uint8_t *px = bsp_.lighting.data() + base;
             for (int c = 0; c < 3; ++c)

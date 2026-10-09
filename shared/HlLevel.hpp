@@ -33,7 +33,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 20;
+    inline constexpr std::uint16_t kLevelVersion = 21;
 
     enum class Section : std::uint16_t
     {
@@ -50,7 +50,7 @@ namespace hldata
         Textures,   ///< TextureRef
         Entities,   ///< EntityRecord
         EntityText, ///< u8: the original entity lump, for the converter's own use
-        LightPatch, ///< reserved for switchable light styles; still empty
+        LightPatch, ///< LightPatch: the vertex colours that lights which change change
         Brushes,    ///< Brush: the map's brush entities (doors, grates, glass...)
         BrushLeaves, ///< u16: the world leaves each brush touches, grouped per brush
         Logic,      ///< LogicRecord: the entities that do something
@@ -465,6 +465,29 @@ namespace hldata
         /// texture -- slides `speed` texels a second (Q12, signed). Used,
         /// it runs the other way. extra[0] bit 0: it carries nothing.
         Conveyor,
+        /// A platform that travels `move` from where it was built and turns
+        /// extra[0] (turns * 65536, signed) about the vertical on the way,
+        /// carrying whoever stands on it: the round lift. kLogicToggle: it
+        /// goes when used and stays; otherwise it goes when stood on and
+        /// comes back by itself. kLogicStartOpen: it starts at the far end.
+        /// (Built where it is turned: it is the far end that is unturned.)
+        PlatRot,
+        /// A light that a switch turns on and off: extra[0] is its style
+        /// (HlLevel: LightPatch). kLogicStartOpen: it starts off.
+        Light,
+        /// A mark that appears on the wall at `move` when it is used:
+        /// extra[0] which (a kDecal*), extra[1] how big.
+        Mark,
+        /// A brush that swings about its origin: `move[0]` is how far
+        /// (turns * 65536), `speed` how fast (the same a second), extra[0]
+        /// which angle. kLogicStartOpen: swinging from the start. Used, it
+        /// starts and stops.
+        Pendulum,
+        /// A vending machine's works at `move`: used, a can drops out and
+        /// does whoever takes it a point of good, extra[0] times.
+        Beverage,
+        /// The rush of light the incident's portals open with, at `move`.
+        Funnel,
         Count
     };
 
@@ -878,6 +901,26 @@ namespace hldata
     static_assert(sizeof(LogicAux) == 8);
     static_assert(sizeof(PathCorner) == 28);
 
+    /// Light that changes. The world's light is in its vertices' colours,
+    /// in the geometry stream; where some of it comes from a light a switch
+    /// turns on and off, or one that flickers (the game's light "styles":
+    /// 1 to 12 are its patterns, 32 and up are switched), the colour word of
+    /// each vertex it reaches has records here: first one with `style`
+    /// kPatchBase and the colour with none of that light, then one for each
+    /// style reaching it with what that style adds at its full. The console
+    /// works the word out again whenever a style's strength changes
+    /// (HlLightStyle.hpp).
+    struct LightPatch
+    {
+        std::uint32_t word;   ///< into GxStream: a colour command's parameter
+        std::uint16_t colour; ///< five bits each of red, green, blue
+        std::uint8_t style;   ///< kPatchBase, or the style (under kLightStyles)
+        std::uint8_t pad;
+    };
+    static_assert(sizeof(LightPatch) == 8);
+    inline constexpr std::uint8_t kPatchBase = 0xFF;
+    inline constexpr int kLightStyles = 64;
+
     /// Something the map writes over the picture: a chapter's name, a name
     /// of the introduction, a lesson of the hazard course (the game's
     /// titles.txt says what and how; an env_message says when).
@@ -925,7 +968,7 @@ namespace hldata
         case Section::Textures:   return sizeof(TextureRef);
         case Section::Entities:   return sizeof(EntityRecord);
         case Section::EntityText: return 1;
-        case Section::LightPatch: return 1;
+        case Section::LightPatch: return sizeof(LightPatch);
         case Section::Brushes:    return sizeof(Brush);
         case Section::BrushLeaves: return 2;
         case Section::Logic:      return sizeof(LogicRecord);

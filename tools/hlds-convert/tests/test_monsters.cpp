@@ -296,7 +296,7 @@ namespace
         g.drain();
         check(g.times(CommonSound::BodySplat) == 1, "... heard");
         int lying = 0, frames = 0;
-        for (; frames < 30 * 8; ++frames)
+        for (; frames < 30 * 5; ++frames)
         {
             tickStill(g);
             for (const Gib &gib : g.actors.gibs)
@@ -310,7 +310,7 @@ namespace
             inWorld = inWorld && (!gib.active ||
                                   hullPointContents(g.move.crouched, g.move.crouched.root, gib.pos) != kContentsSolid);
         }
-        std::printf("test_monsters: gibs: %d of 4 lying after 8 s, the highest got %d units up\n", lying,
+        std::printf("test_monsters: gibs: %d of 4 lying after 5 s, the highest got %d units up\n", lying,
                     fxToInt(highest - actor.pos[2]));
         // (One thrown from inside a wall the monster stood against may have
         // been given up: three at least are left.)

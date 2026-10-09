@@ -398,8 +398,132 @@ namespace hlds
                 std::vector<const MeshFace *> members;
                 for (int index : group)
                     members.push_back(&meshFaces[index]);
-                const BuiltSurface built = buildGroupSurface(
+                BuiltSurface built = buildGroupSurface(
                     members, sizeOf(bspTexture, a3i5), tex.width, tex.height);
+                // Light that changes reaches this surface: each of its
+                // vertices gets a colour word of its own, and the level is
+                // told what each changing light adds to it (LightPatch).
+                std::vector<LightPatch> patches;
+                bool changing = false;
+                for (const MeshFace *member : members)
+                {
+                    for (int f : member->sources)
+                        changing = changing || light.changingLayers(bsp.faces[f]) != 0;
+                }
+                if (changing && !flatColour && !fullBright)
+                {
+                    std::vector<GxRun> runs;
+                    std::string why;
+                    if (decodeGxStream(built.words.data(), built.words.size(), runs, why))
+                    {
+                        GxPacker packer;
+                        packer.colourEvery(true);
+                        std::vector<GxVertex *> order;
+                        for (GxRun &run : runs)
+                        {
+                            for (GxVertex &v : run.vertices)
+                            {
+                                // Which of the faces this was made from the
+                                // vertex is on: the one whose light map it
+                                // falls in (or is nearest to).
+                                const double at[3] = {v.x / 4.0, v.y / 4.0, v.z / 4.0};
+                                const BspFace *best = nullptr;
+                                double bestOut = 1e30, bestS = 0, bestT = 0;
+                                for (const MeshFace *member : members)
+                                {
+                                    for (int f : member->sources)
+                                    {
+                                        const BspFace &face = bsp.faces[f];
+                                        const BspTexInfo &ti = bsp.texInfos[face.texInfo];
+                                        const double s = at[0] * ti.vecs[0][0] + at[1] * ti.vecs[0][1] +
+                                                         at[2] * ti.vecs[0][2] + ti.vecs[0][3];
+                                        const double t = at[0] * ti.vecs[1][0] + at[1] * ti.vecs[1][1] +
+                                                         at[2] * ti.vecs[1][2] + ti.vecs[1][3];
+                                        double lo[2] = {1e30, 1e30}, hi[2] = {-1e30, -1e30};
+                                        for (int i = 0; i < face.edgeCount; ++i)
+                                        {
+                                            double st[2];
+                                            light.texCoords(face, i, st[0], st[1]);
+                                            for (int k = 0; k < 2; ++k)
+                                            {
+                                                lo[k] = std::min(lo[k], st[k]);
+                                                hi[k] = std::max(hi[k], st[k]);
+                                            }
+                                        }
+                                        const double out = std::max({lo[0] - s, s - hi[0], lo[1] - t, t - hi[1], 0.0});
+                                        if (out < bestOut)
+                                        {
+                                            bestOut = out;
+                                            best = &face;
+                                            bestS = s;
+                                            bestT = t;
+                                        }
+                                    }
+                                }
+                                if (best == nullptr)
+                                    continue;
+                                const unsigned moving = light.changingLayers(*best);
+                                unsigned steady = 0;
+                                for (int layer = 0; layer < 4 && best->styles[layer] != 255; ++layer)
+                                {
+                                    if (best->styles[layer] == 0)
+                                        steady |= 1u << layer;
+                                }
+                                const Rgb base = light.sampleLayers(*best, bestS, bestT, steady);
+                                const std::uint16_t baseColour = rgb555(base.r, base.g, base.b);
+                                // (The word is filled in once the vertices
+                                // are packed: its number in order, for now.)
+                                patches.push_back(LightPatch{static_cast<std::uint32_t>(order.size()), baseColour, kPatchBase, 0});
+                                int now[3] = {baseColour & 31, (baseColour >> 5) & 31, (baseColour >> 10) & 31};
+                                for (int layer = 0; layer < 4 && best->styles[layer] != 255; ++layer)
+                                {
+                                    if (!(moving & (1u << layer)) || best->styles[layer] >= kLightStyles)
+                                        continue;
+                                    const Rgb with = light.sampleLayers(*best, bestS, bestT, steady | (1u << layer));
+                                    const std::uint16_t lit = rgb555(with.r, with.g, with.b);
+                                    const int more[3] = {std::max(0, (lit & 31) - (baseColour & 31)),
+                                                         std::max(0, ((lit >> 5) & 31) - ((baseColour >> 5) & 31)),
+                                                         std::max(0, ((lit >> 10) & 31) - ((baseColour >> 10) & 31))};
+                                    if (more[0] == 0 && more[1] == 0 && more[2] == 0)
+                                        continue;
+                                    patches.push_back(LightPatch{static_cast<std::uint32_t>(order.size()),
+                                                                 static_cast<std::uint16_t>(more[0] | more[1] << 5 | more[2] << 10),
+                                                                 best->styles[layer], 0});
+                                    if (light.styleIsOn(best->styles[layer]))
+                                    {
+                                        for (int c = 0; c < 3; ++c)
+                                            now[c] = std::min(31, now[c] + more[c]);
+                                    }
+                                }
+                                // (As the map starts, by the same sum the
+                                // console will do.)
+                                v.colour = static_cast<std::uint16_t>(now[0] | now[1] << 5 | now[2] << 10);
+                                order.push_back(&v);
+                            }
+                        }
+                        for (GxRun &run : runs)
+                        {
+                            packer.begin(run.type);
+                            for (const GxVertex &v : run.vertices)
+                                packer.vertex(v);
+                        }
+                        built.words = packer.finish();
+                        const std::vector<std::uint32_t> &where = packer.colourWords();
+                        // A vertex nothing changing reaches needs no record.
+                        std::vector<LightPatch> kept;
+                        for (std::size_t n = 0; n < patches.size(); ++n)
+                        {
+                            const bool alone = patches[n].style == kPatchBase &&
+                                               (n + 1 == patches.size() || patches[n + 1].style == kPatchBase);
+                            if (alone || patches[n].word >= where.size())
+                                continue;
+                            LightPatch patch = patches[n];
+                            patch.word = where[patch.word];
+                            kept.push_back(patch);
+                        }
+                        patches = std::move(kept);
+                    }
+                }
                 // What was sent must cover the faces it was made from. Held
                 // group by group, on the grid, and one way only: a face a
                 // fraction of a unit wide can fold over itself when snapped
@@ -478,6 +602,11 @@ namespace hlds
                         surfaceOfFace[f] = static_cast<int>(level.surfaces.size());
                 }
                 level.surfaces.push_back(surface);
+                for (LightPatch patch : patches)
+                {
+                    patch.word += surface.gxOfs;
+                    level.lightPatches.push_back(patch);
+                }
                 level.gxStream.insert(level.gxStream.end(), built.words.begin(),
                                       built.words.end());
                 report.polygons += built.polygons;

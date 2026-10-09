@@ -2,6 +2,8 @@
 #include "HlSprite.hpp"
 #include "hlds/EntityCook.hpp"
 
+#include "HlUi.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <array>
@@ -1014,6 +1016,108 @@ namespace hlds
                         fxFromDouble((double(model->mins[a]) + model->maxs[a]) / 2 + origin[a]);
                 const auto first = cornerOfName.find(std::string(entity.value("target")));
                 trainCorner = first != cornerOfName.end() ? first->second : kNoCorner;
+                // A train keeps the angles it is given (it is not a door,
+                // for which "angle" is a way to go): built round an origin,
+                // it is drawn turned about it. (pitch, yaw, roll.)
+                double origin3[3];
+                if (entity.vec3("origin", origin3))
+                {
+                    double angles[3] = {0, 0, 0};
+                    if (!entity.vec3("angles", angles))
+                        angles[1] = numberKey(entity, "angle");
+                    for (int a = 0; a < 3; ++a)
+                        record.extra[a] = static_cast<std::uint16_t>(std::lround(angles[a] * 65536.0 / 360.0));
+                }
+            }
+            else if ((cls == "func_platrot" || cls == "func_plat") && brushRecordOfEntity[e] >= 0 && model != nullptr)
+            {
+                // A platform: from where it is built to `height` under it
+                // (its own height, less a step, if it says none), turning
+                // on the way if it is the kind that does.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::PlatRot);
+                double height = numberKey(entity, "height");
+                if (height == 0)
+                    height = double(model->maxs[2]) - model->mins[2] - 8;
+                record.move[2] = fxFromDouble(-height);
+                double speed = numberKey(entity, "speed");
+                record.speed = fxFromDouble(speed > 0 ? speed : 150);
+                if (cls == "func_platrot")
+                    record.extra[0] = static_cast<std::uint32_t>(
+                        static_cast<std::int32_t>(std::lround(numberKey(entity, "rotation") * 65536.0 / 360.0)));
+                if (spawnflags & 1)
+                    record.flags |= kLogicToggle;
+                // (With no name it waits at the far end to be stood on.)
+                if (!named)
+                    record.flags |= kLogicStartOpen;
+            }
+            else if ((cls == "light" || cls == "light_spot") && named)
+            {
+                // A light something switches: its style is the handle on
+                // the light it gives (the level's LightPatch).
+                const int style = static_cast<int>(numberKey(entity, "style"));
+                if (style >= 32 && style < kLightStyles)
+                {
+                    make = true;
+                    record.kind = static_cast<std::uint8_t>(LogicKind::Light);
+                    record.extra[0] = static_cast<std::uint32_t>(style);
+                    if (spawnflags & 1)
+                        record.flags |= kLogicStartOpen;
+                }
+            }
+            else if (cls == "infodecal" && named)
+            {
+                // A mark that appears when it is told to: the nearest of
+                // the marks the card has to the picture it names.
+                std::string picture(entity.value("texture"));
+                for (char &c : picture)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                int which = -1, half = 12;
+                if (picture.rfind("{yblood", 0) == 0)
+                    which = (picture.back() & 1) ? kDecalAlien : kDecalAlien2;
+                else if (picture.rfind("{blood", 0) == 0 || picture.rfind("{bigblood", 0) == 0)
+                    which = kDecalBlood + (picture.back() % kDecalBloods), half = picture[1] == 'b' && picture[2] == 'i' ? 28 : 16;
+                else if (picture.rfind("{scorch", 0) == 0 || picture.rfind("{smscorch", 0) == 0)
+                    which = kDecalScorch, half = picture[1] == 's' && picture[2] == 'm' ? 16 : 40;
+                else if (picture.rfind("{shot", 0) == 0 || picture.rfind("{bigshot", 0) == 0)
+                    which = kDecalShot, half = 7;
+                else if (picture.rfind("{spit", 0) == 0)
+                    which = kDecalSpit, half = 14;
+                if (which >= 0)
+                {
+                    make = true;
+                    record.kind = static_cast<std::uint8_t>(LogicKind::Mark);
+                    for (int a = 0; a < 3; ++a)
+                        record.move[a] = fxFromDouble(origin[a]);
+                    record.extra[0] = static_cast<std::uint32_t>(which);
+                    record.extra[1] = static_cast<std::uint32_t>(half);
+                }
+            }
+            else if (cls == "func_pendulum" && brushRecordOfEntity[e] >= 0)
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Pendulum);
+                record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
+                record.move[0] = static_cast<fx>(std::lround(numberKey(entity, "distance", 90) * 65536.0 / 360.0));
+                record.speed = static_cast<fx>(std::lround(std::max(1.0, numberKey(entity, "speed", 100)) * 65536.0 / 360.0));
+                if (spawnflags & 1)
+                    record.flags |= kLogicStartOpen;
+            }
+            else if (cls == "env_beverage")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Beverage);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+                const double cans = numberKey(entity, "health");
+                record.extra[0] = static_cast<std::uint32_t>(cans > 0 ? cans : 10);
+            }
+            else if (cls == "env_funnel")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Funnel);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
             }
             else if (cls == "func_tracktrain" && brushRecordOfEntity[e] >= 0)
             {
@@ -1824,6 +1928,27 @@ namespace hlds
             else if (cls == "func_button")
             {
                 sound.move = numbered("buttons/button", static_cast<int>(numberKey(entity, "sounds")), 11);
+            }
+            else if (cls == "func_train" || cls == "func_plat" || cls == "func_platrot")
+            {
+                // A lift's or a train's sounds are numbers into two more of
+                // the game's lists (its plats.cpp): going, and stopping.
+                static const char *const kMoves[] = {"",
+                                                     "plats/bigmove1.wav",     "plats/bigmove2.wav",  "plats/elevmove1.wav",
+                                                     "plats/elevmove2.wav",    "plats/elevmove3.wav", "plats/freightmove1.wav",
+                                                     "plats/freightmove2.wav", "plats/heavymove1.wav", "plats/rackmove1.wav",
+                                                     "plats/railmove1.wav",    "plats/squeekmove1.wav", "plats/talkmove1.wav",
+                                                     "plats/talkmove2.wav"};
+                static const char *const kStops[] = {"",
+                                                     "plats/bigstop1.wav",    "plats/bigstop2.wav",  "plats/freightstop1.wav",
+                                                     "plats/heavystop2.wav",  "plats/rackstop1.wav", "plats/railstop1.wav",
+                                                     "plats/squeekstop1.wav", "plats/talkstop1.wav"};
+                const int move = static_cast<int>(numberKey(entity, "movesnd"));
+                const int stop = static_cast<int>(numberKey(entity, "stopsnd"));
+                if (move >= 1 && move <= 13)
+                    sound.move = soundIndex(kMoves[move], false);
+                if (stop >= 1 && stop <= 8)
+                    sound.stop = soundIndex(kStops[stop], false);
             }
             else if (cls == "func_breakable" || cls == "func_pushable")
             {
