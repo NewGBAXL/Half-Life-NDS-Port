@@ -72,7 +72,11 @@ namespace hldata
             std::uint32_t done = frame - (from << 8);
             if (done > span)
                 done = span;
-            along = static_cast<std::int32_t>((static_cast<std::uint64_t>(done) << 12) / span);
+            // (In 32 bits wherever the keys are less than 4096 frames apart,
+            // which is everywhere: a 64-bit divide is a call.)
+            along = span < (1u << 20)
+                        ? static_cast<std::int32_t>((done << 12) / span)
+                        : static_cast<std::int32_t>((static_cast<std::uint64_t>(done) << 12) / span);
             return index;
         }
 
@@ -118,8 +122,13 @@ namespace hldata
                 const auto length = static_cast<std::int32_t>(isqrt64(static_cast<std::uint64_t>(length2)));
                 if (length > 0)
                 {
+                    // One divide for the four of them: by its reciprocal
+                    // (Q14; the length is never less than 0.7, two unit
+                    // quaternions being never more than a right angle apart
+                    // once the nearer is taken, so this fits 32 bits).
+                    const std::int32_t reciprocal = (1 << 28) / length;
                     for (int i = 0; i < 4; ++i)
-                        quat[i] = (quat[i] << 14) / length;
+                        quat[i] = (quat[i] * reciprocal) >> 14;
                 }
             }
 
@@ -141,15 +150,69 @@ namespace hldata
         }
     } // namespace detail
 
+    /// What a controller set to `value` comes to: kept within its travel,
+    /// as the game's SetController keeps it. (There, a travel written
+    /// backwards turns the value round; a turn that has the whole circle is
+    /// wrapped into it, and one that has not is first brought to within half
+    /// a circle of its middle.)
+    inline std::int32_t controlValue(const ModelController &control, std::int32_t value)
+    {
+        std::int32_t low = control.start, high = control.end;
+        if (control.kind != kControlSlide)
+        {
+            if (high < low)
+                value = -value;
+            if (control.flags & kControlLoops)
+                return low + static_cast<std::int32_t>(static_cast<std::uint32_t>(value - low) & 0xFFFF);
+            const std::int32_t middle = (low + high) / 2;
+            value = middle + static_cast<std::int16_t>(static_cast<std::uint32_t>(value - middle));
+        }
+        if (high < low)
+        {
+            const std::int32_t swap = low;
+            low = high;
+            high = swap;
+        }
+        return value < low ? low : (value > high ? high : value);
+    }
+
+    namespace detail
+    {
+        /// The matrix (Q14) of a turn of `angle` (65536 to the circle) about
+        /// the unit `axis` (Q14).
+        inline void axisTurn(const std::int16_t *axis, std::int32_t angle, std::int32_t *m)
+        {
+            std::int32_t sine, cosine; // Q30
+            fxSinCosFine(static_cast<std::uint16_t>(angle), sine, cosine);
+            const std::int32_t s = sine >> 16, c = cosine >> 16; // Q14
+            const std::int32_t k = (1 << 14) - c;
+            const auto mul = [](std::int32_t a, std::int32_t b)
+            { return static_cast<std::int32_t>((static_cast<std::int64_t>(a) * b) >> 14); };
+            const std::int32_t x = axis[0], y = axis[1], z = axis[2];
+            m[0] = c + mul(mul(x, x), k);
+            m[1] = mul(mul(x, y), k) - mul(z, s);
+            m[2] = mul(mul(x, z), k) + mul(y, s);
+            m[3] = mul(mul(y, x), k) + mul(z, s);
+            m[4] = c + mul(mul(y, y), k);
+            m[5] = mul(mul(y, z), k) - mul(x, s);
+            m[6] = mul(mul(z, x), k) - mul(y, s);
+            m[7] = mul(mul(z, y), k) + mul(x, s);
+            m[8] = c + mul(mul(z, z), k);
+        }
+    } // namespace detail
+
     /// The model's pose at `frame` (Q8, in the clip's own frames; clamped to
     /// its last) of clip `clip`: `out[bone]` for every bone, in model space.
     ///
-    /// `slideBone`, if not negative, is a bone moved `slide` further along
-    /// its own second axis than the clip has it: what the game calls a bone
-    /// controller, and uses to let a barnacle's tongue out.
+    /// `controls`, if given, is what the model's bone controllers are set to
+    /// (HlModel.hpp ModelController), by their number: kModelControls
+    /// values, a turn as 65536 to the circle and a slide as units in Q12.
+    /// As the game sets them, except that there a setting is kept as one
+    /// byte: here it is as fine as it is given.
     inline void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
-                          int slideBone = -1, fx slide = 0)
+                          const std::int32_t *controls = nullptr)
     {
+        const int controllers = controls != nullptr ? model.header->controllerCount : 0;
         const ModelClip &c = model.clips[clip];
         const std::uint32_t lastFrame = c.frameCount - 1u;
         if (frame > (lastFrame << 8))
@@ -161,10 +224,37 @@ namespace hldata
             std::int32_t quat[4];
             fx pos[3];
             detail::sampleTrack(tracks[b], model.keys, frame, lastFrame, quat, pos);
-            if (b == slideBone)
-                pos[1] += slide;
             std::int32_t local[9];
             detail::quatToMatrix(quat, local);
+            for (int n = 0; n < controllers; ++n)
+            {
+                const ModelController &control = model.controllers[n];
+                if (control.bone != b)
+                    continue;
+                const std::int32_t value = controlValue(control, controls[control.index]);
+                const std::int16_t *axis = model.controlAxes[clip * controllers + n].v;
+                if (control.kind == kControlSlide)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        pos[i] += static_cast<fx>((static_cast<std::int64_t>(value) * axis[i]) >> 14);
+                    continue;
+                }
+                std::int32_t turn[9], turned[9];
+                detail::axisTurn(axis, value, turn);
+                const std::int32_t *first = control.kind == kControlTurn ? turn : local;
+                const std::int32_t *second = control.kind == kControlTurn ? local : turn;
+                for (int row = 0; row < 3; ++row)
+                {
+                    for (int column = 0; column < 3; ++column)
+                        turned[row * 3 + column] = static_cast<std::int32_t>(
+                            (static_cast<std::int64_t>(first[row * 3]) * second[column] +
+                             static_cast<std::int64_t>(first[row * 3 + 1]) * second[3 + column] +
+                             static_cast<std::int64_t>(first[row * 3 + 2]) * second[6 + column]) >>
+                            kBoneRotShift);
+                }
+                for (int i = 0; i < 9; ++i)
+                    local[i] = turned[i];
+            }
             const int parent = model.parents[b];
             BoneMatrix &m = out[b];
             if (parent < 0)
@@ -192,6 +282,25 @@ namespace hldata
                                                      kBoneRotShift);
             }
         }
+    }
+
+    /// Where the model's attachment `which` is, in the model's space (Q12
+    /// units), posed as `bones` have it. False if it has no such.
+    inline bool attachmentPoint(const ModelView &model, const BoneMatrix *bones, int which, fx *at)
+    {
+        if (which < 0 || which >= model.header->attachmentCount)
+            return false;
+        const ModelAttachment &a = model.attachments[which];
+        const BoneMatrix &bone = bones[a.bone];
+        const fx local[3] = {static_cast<fx>(a.at[0]) << (kFxShift - kHitboxShift),
+                             static_cast<fx>(a.at[1]) << (kFxShift - kHitboxShift),
+                             static_cast<fx>(a.at[2]) << (kFxShift - kHitboxShift)};
+        for (int row = 0; row < 3; ++row)
+            at[row] = bone.t[row] + static_cast<fx>((static_cast<std::int64_t>(bone.r[row * 3]) * local[0] +
+                                                    static_cast<std::int64_t>(bone.r[row * 3 + 1]) * local[1] +
+                                                    static_cast<std::int64_t>(bone.r[row * 3 + 2]) * local[2]) >>
+                                                   kBoneRotShift);
+        return true;
     }
 
     /// How far into a clip `ms` more milliseconds takes `frame` (Q8). A clip

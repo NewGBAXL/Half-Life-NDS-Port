@@ -15,6 +15,7 @@
 // height at 30.
 
 #include "HlPlayerMove.hpp"
+#include "HlView.hpp"
 
 namespace hlrt
 {
@@ -22,7 +23,10 @@ namespace hlrt
     {
     public:
         hldata::PlayerState state;
-        /// Free flight through walls, for looking at a map. Toggled by Select.
+        /// What moves the view besides the stylus, and what being hurt
+        /// shows (shared/HlView.hpp).
+        hldata::ViewState view;
+        /// Free flight through walls, for looking at a map (the command line's "noclip").
         bool noclip = false;
 
         /// Stand at the loaded level's player start.

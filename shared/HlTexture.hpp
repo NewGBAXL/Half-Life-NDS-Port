@@ -40,6 +40,9 @@ namespace hldata
     inline constexpr std::uint32_t kTextureLiquid = 4;
     /// One side of the map's sky box, not something on a surface.
     inline constexpr std::uint32_t kTextureSky = 8;
+    /// A conveyor's belt: its coordinates go through the texture matrix
+    /// too, which slides them along at the belt's speed.
+    inline constexpr std::uint32_t kTextureScroll = 16;
     inline constexpr int kSkySide = 128; ///< texels along each side of a sky picture
     inline constexpr int kA3I5Colours = 32;
 

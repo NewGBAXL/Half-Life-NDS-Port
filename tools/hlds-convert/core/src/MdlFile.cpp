@@ -185,12 +185,73 @@ namespace hlds
             {
                 bone.value[c] = r.f32(at + 64 + c * 4);
                 bone.scale[c] = r.f32(at + 88 + c * 4);
+                bone.controller[c] = r.i32(at + 40 + c * 4);
             }
             // The cooker and the DS both build a pose parents first, in
             // order: a parent must come before its children.
             if (bone.parent >= i || bone.parent < -1)
                 return fail("a bone comes before its parent");
             bones.push_back(std::move(bone));
+        }
+
+        // ---- bone controllers and hit boxes
+        const int controllerCount = r.i32(148);
+        const std::size_t controllerIndex = static_cast<std::uint32_t>(r.i32(152));
+        if (controllerCount < 0 || controllerCount > 8)
+            return fail("an impossible number of bone controllers");
+        for (int i = 0; i < controllerCount; ++i)
+        {
+            const std::size_t at = controllerIndex + static_cast<std::size_t>(i) * 24;
+            MdlController c;
+            c.bone = r.i32(at);
+            c.type = r.i32(at + 4);
+            c.start = r.f32(at + 8);
+            c.end = r.f32(at + 12);
+            c.index = r.i32(at + 20);
+            if (c.bone < 0 || c.bone >= boneCount)
+                return fail("a bone controller on a bone there is not");
+            controllers.push_back(c);
+        }
+        for (MdlBone &bone : bones)
+        {
+            for (int &c : bone.controller)
+                c = c >= 0 && c < controllerCount ? c : -1;
+        }
+        const int hitboxCount = r.i32(156);
+        const std::size_t hitboxIndex = static_cast<std::uint32_t>(r.i32(160));
+        if (hitboxCount < 0 || hitboxCount > 128)
+            return fail("an impossible number of hit boxes");
+        for (int i = 0; i < hitboxCount; ++i)
+        {
+            const std::size_t at = hitboxIndex + static_cast<std::size_t>(i) * 32;
+            MdlHitbox box;
+            box.bone = r.i32(at);
+            box.group = r.i32(at + 4);
+            for (int a = 0; a < 3; ++a)
+            {
+                box.mins[a] = r.f32(at + 8 + a * 4);
+                box.maxs[a] = r.f32(at + 20 + a * 4);
+            }
+            if (box.bone < 0 || box.bone >= boneCount)
+                return fail("a hit box on a bone there is not");
+            hitboxes.push_back(box);
+        }
+
+        // ---- attachments
+        const int attachmentCount = r.i32(212);
+        const std::size_t attachmentIndex = static_cast<std::uint32_t>(r.i32(216));
+        if (attachmentCount < 0 || attachmentCount > 8)
+            return fail("an impossible number of attachments");
+        for (int i = 0; i < attachmentCount; ++i)
+        {
+            const std::size_t at = attachmentIndex + static_cast<std::size_t>(i) * 88;
+            Attachment a;
+            a.bone = r.i32(at + 36);
+            for (int k = 0; k < 3; ++k)
+                a.at[k] = r.f32(at + 40 + k * 4);
+            if (a.bone < 0 || a.bone >= boneCount)
+                return fail("an attachment on a bone there is not");
+            attachments.push_back(a);
         }
 
         // ---- sequence groups: the files the animation of some sequences is in

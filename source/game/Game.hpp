@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "HlLamp.hpp"
 #include "HlMonsters.hpp"
 #include "HlSave.hpp"
 #include "HlTransition.hpp"
@@ -42,6 +43,11 @@ namespace hlrt
         hldata::ActorState held;
         /// What has been heard and not yet played (audio/Sound empties it).
         hldata::SoundQueue heard;
+        /// The suit's lamp; and, while it is alight, its beam as it is this
+        /// frame (`lampLit`: it has one).
+        hldata::LampState lamp;
+        hldata::LampBeam lampBeam;
+        bool lampLit = false;
         /// The switches that outlive a map. Not reset by create() or
         /// destroy(): only a new game clears them.
         hldata::Globals globals;
@@ -96,12 +102,14 @@ namespace hlrt
         std::uint8_t *cornerState_ = nullptr;
         hldata::ActorState *actorStates_ = nullptr;
         hldata::SolidBox *actorBoxes_ = nullptr;
-        bool dimmed_ = false;
         /// Put in hand the model of the weapon the player has out.
         void takeInHand();
         hldata::WeaponState weapon_;
         int inHand_ = -1; ///< the weapon `held` is the model of
         int lastHealth_ = 100;
+        /// Until what the map writes as it is come into is written (ms);
+        /// negative: it has been, or is not to be.
+        int startMessagesMs_ = -1;
         std::uint32_t stepCount_ = 0;
         std::vector<hldata::SaveMapState> visited_;
     };

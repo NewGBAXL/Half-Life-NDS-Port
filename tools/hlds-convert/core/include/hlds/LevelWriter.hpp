@@ -55,6 +55,13 @@ namespace hlds
         std::vector<hldata::SentenceRecord> sentences;
         std::vector<std::uint16_t> sentenceWords;
         std::vector<hldata::RoomRecord> rooms;
+        std::vector<std::uint16_t> speech;
+        std::vector<hldata::MessageRecord> messages;
+        std::vector<hldata::SpriteRef> sprites;
+        /// Not written: the game's path of each of `sprites`, and whether it
+        /// is drawn as light (Converter cooks them and fills `sprites` in).
+        std::vector<std::string> spritePaths;
+        std::vector<bool> spriteLights;
         /// Not written: what `sounds` are made from (the game's own paths,
         /// and which loop), for whoever cooks the sound files and settles
         /// what each is called on the card (Converter).

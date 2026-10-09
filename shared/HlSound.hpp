@@ -186,6 +186,32 @@ namespace hldata
         HoundBlast,
         HoundPain,
         HoundDie,
+        TurretAlert,
+        TurretDeploy,
+        TurretPing,
+        SentryFire,   ///< a miniturret's and a sentry's shot
+        TurretDie,
+        TurretFire,   ///< the big turret's, and its barrels getting going and stopping
+        TurretSpinUp,
+        TurretSpinDown,
+        BodySplat, ///< something coming apart
+        Mp5Fire,   ///< the player's MP5, and its launcher
+        Launcher,
+        PythonFire, ///< the .357, and its reload
+        PythonReload,
+        MineActivate, ///< a tripmine's beam coming on
+        GruntFire1,   ///< a soldier's gun, his reload, and what he says of being hurt and killed
+        GruntFire2,
+        GruntReload,
+        GruntPain1,
+        GruntPain2,
+        GruntDie1,
+        GruntDie2,
+        Ricochet1, ///< a shot glancing off a wall, two ways
+        Ricochet2,
+        FallPain,  ///< landing too hard
+        Shell,     ///< a spent casing on the floor
+        BulletFlesh, ///< a round going into something that bleeds
         Count
     };
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -209,7 +235,16 @@ namespace hldata
             "aslave/slv_die1.wav",    "bullchicken/bc_attackgrowl.wav", "bullchicken/bc_attack1.wav",
             "bullchicken/bc_bite1.wav", "bullchicken/bc_pain1.wav", "bullchicken/bc_die1.wav",
             "bullchicken/bc_spithit1.wav", "houndeye/he_alert1.wav", "houndeye/he_attack1.wav",
-            "houndeye/he_blast1.wav", "houndeye/he_pain1.wav",   "houndeye/he_die1.wav"};
+            "houndeye/he_blast1.wav", "houndeye/he_pain1.wav",   "houndeye/he_die1.wav",
+            "turret/tu_alert.wav",    "turret/tu_deploy.wav",    "turret/tu_ping.wav",
+            "weapons/hks1.wav",       "turret/tu_die.wav",       "turret/tu_fire1.wav",
+            "turret/tu_spinup.wav",   "turret/tu_spindown.wav",  "common/bodysplat.wav",
+            "weapons/hks2.wav",       "weapons/glauncher.wav",   "weapons/357_shot1.wav",
+            "weapons/357_reload1.wav", "weapons/mine_activate.wav", "hgrunt/gr_mgun1.wav",
+            "hgrunt/gr_mgun2.wav",    "hgrunt/gr_reload1.wav",   "hgrunt/gr_pain1.wav",
+            "hgrunt/gr_pain3.wav",    "hgrunt/gr_die1.wav",      "hgrunt/gr_die2.wav",
+            "weapons/ric1.wav",       "weapons/ric4.wav",        "player/pl_fallpain3.wav",
+            "player/pl_shell1.wav",   "weapons/bullet_hit1.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }
@@ -259,6 +294,19 @@ namespace hldata
         }
     }
 
+    /// What kind of thing a sound is: each kind has its own share of the
+    /// voices, its own place in the order of who gives way to whom, and its
+    /// own volume (HlMixer.hpp). The music is beside these.
+    enum class SoundLayer : std::uint8_t
+    {
+        Player,   ///< the player's own: their gun, their pain, what they pick up
+        World,    ///< monsters, doors, blasts: whatever has a place
+        Voice,    ///< spoken lines
+        Ambience, ///< the loops of a place
+        Ui,       ///< the menu
+        Count
+    };
+
     struct SoundEvent
     {
         std::uint16_t sound = kNoSound; ///< into the level's Sounds; or a sentence, with kSoundSentence
@@ -266,6 +314,7 @@ namespace hldata
         std::uint8_t flags = 0;         ///< kSound*
         std::int16_t radius = kRadiusLarge;
         fx pos[3] = {0, 0, 0};
+        SoundLayer layer = SoundLayer::World;
     };
     inline constexpr std::uint8_t kSoundHere = 1;     ///< at the listener: no place, no fading
     inline constexpr std::uint8_t kSoundSentence = 2; ///< `sound` is an index into Sentences
@@ -290,6 +339,10 @@ namespace hldata
             event.radius = static_cast<std::int16_t>(radius);
             for (int i = 0; i < 3; ++i)
                 event.pos[i] = pos != nullptr ? pos[i] : 0;
+            // What is spoken is a voice; what is heard at the listener is
+            // the player's own; the rest is the world's.
+            event.layer = (flags & kSoundSentence) ? SoundLayer::Voice
+                                                   : (pos == nullptr ? SoundLayer::Player : SoundLayer::World);
         }
         void add(CommonSound sound, const fx *pos, int volume = 127, int radius = kRadiusLarge)
         {

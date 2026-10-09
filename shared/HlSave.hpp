@@ -61,6 +61,10 @@ namespace hldata
         std::int16_t ammoBuck = 0;
         std::int16_t armor = 0;
         std::int16_t grenades = 0;
+        std::int16_t clipMp5 = 0;
+        std::int16_t clipPython = 0;
+        std::int16_t ammo357 = 0;
+        std::int16_t ammoAr = 0;
 
         std::vector<std::uint32_t> globalHash;
         std::vector<std::uint8_t> globalState;
@@ -80,13 +84,13 @@ namespace hldata
         {
             ar &map &origin[0] &origin[1] &origin[2] &velocity[0] &velocity[1] &velocity[2] &yaw
                 &pitch &ducked &health &weapons &weapon &clipGlock &clipShotgun &ammo9mm &ammoBuck
-                &armor &grenades &globalHash &globalState &train &trainPos[0] &trainPos[1]
+                &armor &grenades &clipMp5 &clipPython &ammo357 &ammoAr &globalHash &globalState &train &trainPos[0] &trainPos[1]
                 &trainPos[2] &trainYaw &trainSpeed &trainSelfDriven &maps;
         }
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 3;
+    inline constexpr std::uint16_t kSaveVersion = 4;
     /// A save is a few hundred bytes; one that claims to be more than this is
     /// not one.
     inline constexpr std::uint32_t kSaveMaxBytes = 32 * 1024;
@@ -100,6 +104,35 @@ namespace hldata
         std::uint32_t crc32;
     };
     static_assert(sizeof(SaveHeader) == 16);
+
+    // ------------------------------------------------------------- dying
+    //
+    // Where a death goes back to. There are two saves: the latest (a
+    // trigger of the map's, the menu's SAVE) and the one made on coming
+    // into the map. A save made a moment before certain death would
+    // otherwise be a loop with no way out: so dying soon after going back,
+    // three times running, goes back to the coming-in instead -- and if
+    // that is no better either, to the map's own start.
+
+    inline constexpr int kQuickDeathMs = 20000;
+    inline constexpr int kBackLatest = 0;
+    inline constexpr int kBackArrival = 1;
+    inline constexpr int kBackStart = 2;
+    struct DeathLoop
+    {
+        int quick = 0; ///< deaths on end, each soon after going back
+    };
+    /// A death, `sinceBackMs` after the game last went back (or began).
+    inline int deathChoice(DeathLoop &loop, int sinceBackMs)
+    {
+        loop.quick = sinceBackMs < kQuickDeathMs ? loop.quick + 1 : 0;
+        if (loop.quick >= 6)
+        {
+            loop.quick = 0;
+            return kBackStart;
+        }
+        return loop.quick >= 3 ? kBackArrival : kBackLatest;
+    }
 
     inline std::vector<std::uint8_t> writeSave(const SaveData &data)
     {

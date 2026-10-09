@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # usage: play.sh <ds|dsi> "<script>"     (see README.md)
 # EMU_START="x y z yaw" starts the player there (whole units, degrees), armed;
-# a fifth number starts that track of the music.
+# a fifth number starts that track of the music (-1: none); a sixth says how
+# to draw (1 single-pass, 2 two-pass, 3 two-pass DMA); a seventh how many
+# models may be drawn at once (up to 12).
 # EMU_AUDIO=<file> captures the sound (see below).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

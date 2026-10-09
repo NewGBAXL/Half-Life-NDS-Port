@@ -79,10 +79,15 @@ namespace hldata
         const PathNode *pathNodes = nullptr;
         const std::uint8_t *pathNext = nullptr;
         const SoundRef *sounds = nullptr;
+        const SpriteRef *sprites = nullptr;
         const LogicSound *logicSounds = nullptr;
         const SentenceRecord *sentences = nullptr;
         const std::uint16_t *sentenceWords = nullptr;
         const RoomRecord *rooms = nullptr;
+        const std::uint16_t *speech = nullptr;
+        std::uint32_t speechCount = 0;
+        const MessageRecord *messages = nullptr;
+        std::uint32_t messageCount = 0;
 
         std::uint32_t planeCount = 0;
         std::uint32_t nodeCount = 0;
@@ -113,6 +118,7 @@ namespace hldata
         std::uint32_t sentenceCount = 0;
         std::uint32_t sentenceWordCount = 0;
         std::uint32_t roomCount = 0;
+        std::uint32_t spriteCount = 0;
 
         /// Validate `data` and point this view into it. On any failure the view
         /// is left empty. `checkCrc` exists so a caller that has just computed
@@ -200,6 +206,9 @@ namespace hldata
         sentences = section<SentenceRecord>(data, dir, Section::Sentences, sentenceCount);
         sentenceWords = section<std::uint16_t>(data, dir, Section::SentenceWords, sentenceWordCount);
         rooms = section<RoomRecord>(data, dir, Section::Rooms, roomCount);
+        sprites = section<SpriteRef>(data, dir, Section::Sprites, spriteCount);
+        speech = section<std::uint16_t>(data, dir, Section::Speech, speechCount);
+        messages = section<MessageRecord>(data, dir, Section::Messages, messageCount);
 
         LevelError result = planeTypeCount == planeCount ? validate() : LevelError::BadLayout;
         if (result != LevelError::Ok)
@@ -261,7 +270,18 @@ namespace hldata
             if (!validChild(m.headNode) ||
                 (m.clipStanding >= 0 && static_cast<std::uint32_t>(m.clipStanding) >= clipNodeCount) ||
                 (m.clipCrouched >= 0 && static_cast<std::uint32_t>(m.clipCrouched) >= clipNodeCount) ||
+                (m.clipLarge >= 0 && static_cast<std::uint32_t>(m.clipLarge) >= clipNodeCount) ||
                 static_cast<std::uint32_t>(m.firstSurface) + m.surfaceCount > surfaceCount)
+                return LevelError::BadIndex;
+        }
+        // A texture's other pictures are in the table: the rest of its
+        // cycle straight after it, its other face where it says.
+        for (std::uint32_t i = 0; i < textureCount; ++i)
+        {
+            const TextureRef &t = textures[i];
+            if (t.frames == 0 || i + t.frames > textureCount)
+                return LevelError::BadIndex;
+            if (t.other != kNoTexture && (t.otherFrames == 0 || static_cast<std::uint32_t>(t.other) + t.otherFrames > textureCount))
                 return LevelError::BadIndex;
         }
         for (std::uint32_t i = 0; i < textureCount; ++i)
@@ -303,8 +323,39 @@ namespace hldata
         {
             if (actors[i].model >= modelRefCount || actors[i].name >= nameCount ||
                 actors[i].kind >= static_cast<std::uint8_t>(ActorKind::Count) ||
-                actors[i].item >= static_cast<std::uint32_t>(ItemKind::Count) ||
+                (actors[i].kind == static_cast<std::uint8_t>(ActorKind::Item)
+                     ? actors[i].item >= static_cast<std::uint32_t>(ItemKind::Count)
+                     : (actors[i].item >> kActorSquadShift) >= nameCount) ||
                 actors[i].target >= nameCount)
+                return LevelError::BadIndex;
+        }
+        // What soldiers say: all of the table or none of it, and lines the
+        // map has.
+        if (speechCount != 0 && speechCount != static_cast<std::uint32_t>(kSpeechGroups * kSpeechLines))
+            return LevelError::BadIndex;
+        for (std::uint32_t i = 0; i < speechCount; ++i)
+        {
+            if (speech[i] != 0xFFFF && speech[i] >= sentenceCount)
+                return LevelError::BadIndex;
+        }
+        // Messages: text that is in Strings (which ends in a NUL: checked
+        // with the map names), an effect there is.
+        for (std::uint32_t i = 0; i < messageCount; ++i)
+        {
+            if (messages[i].text >= stringsSize || messages[i].effect > kMessageScan)
+                return LevelError::BadIndex;
+        }
+        // Sprites: a name that ends; an atlas its frames fit in.
+        for (std::uint32_t i = 0; i < spriteCount; ++i)
+        {
+            const SpriteRef &s = sprites[i];
+            if (s.name[sizeof(s.name) - 1] != '\0')
+                return LevelError::BadIndex;
+            if (s.frames == 0)
+                continue;
+            if (s.columns == 0 || s.cellWidth == 0 || s.cellHeight == 0 ||
+                static_cast<std::uint32_t>(s.columns) * s.cellWidth > s.width ||
+                static_cast<std::uint32_t>((s.frames + s.columns - 1) / s.columns) * s.cellHeight > s.height)
                 return LevelError::BadIndex;
         }
         // Sounds: a name becomes a file name on the card, so it must end;
@@ -366,6 +417,8 @@ namespace hldata
                 if (!ends)
                     return LevelError::BadIndex;
             }
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Message) && r.extra[0] >= messageCount)
+                return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Script) && r.extra[0] >= nameCount)
                 return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Ambient) &&
@@ -398,9 +451,9 @@ namespace hldata
                         return LevelError::BadIndex;
                 }
             }
-            else
+            else if (r.kind != static_cast<std::uint8_t>(LogicKind::Beam))
             {
-                // Anyone else's holds names.
+                // Anyone else's holds names (a beam's: places).
                 for (std::uint32_t a = 0; a < r.auxCount; ++a)
                 {
                     if (logicAux[r.firstAux + a].target >= nameCount)

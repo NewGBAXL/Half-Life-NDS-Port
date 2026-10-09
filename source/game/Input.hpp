@@ -4,17 +4,21 @@
 // touch screen turns the view, the D-pad moves. ABXY mirror the D-pad so a
 // left-handed player can hold the stylus in the other hand.
 //
-// The touch screen is one large aim pad. Tapping it twice quickly jumps, as
-// in the DS's own first-person shooters (and holding the second tap keeps
-// the jump held, for swimming up); the drag of that second tap still turns
-// the view. Along the bottom are USE in the middle and DUCK on the right,
-// with WEAPON above DUCK. A touch that starts on a button is a button press
-// and never turns the view, however far it then slides. L fires.
+// The touch screen is an aim pad with controls round it, where
+// shared/HlTouchLayout.hpp says: MENU, USE and RELOAD in a bar along the top, JUMP
+// and DUCK in a column beside the pad, a slot for each weapon along the
+// bottom. Tapping the pad twice quickly jumps as well, as in the DS's own
+// first-person shooters (and holding the second tap keeps the jump held,
+// for swimming up); the drag of that second tap still turns the view. A
+// touch that starts on a control is that control and never turns the view,
+// however far it then slides. L fires.
 //
 // poll() is called once per frame and leaves the result in plain fields, so
 // nothing else touches the hardware's input registers.
 
 #include <cstdint>
+
+#include "HlTouchLayout.hpp"
 
 namespace hlrt
 {
@@ -27,8 +31,17 @@ namespace hlrt
         bool duck = false;
         bool usePressed = false; ///< the USE button went down this frame
         bool attack = false;     ///< L is held: swing, or fire
-        bool weaponPressed = false; ///< the WEAPON button went down this frame
-        bool noclipPressed = false; ///< Select went down this frame
+        bool second = false;     ///< R is held: the weapon's other use, or reload
+        /// A weapon's slot was touched this frame: that weapon (a kWeapon*),
+        /// or 0.
+        int weaponPick = 0;
+        bool menuPressed = false; ///< the MENU tab was touched this frame
+        bool reloadPressed = false; ///< ... RELOAD was
+        /// What the stylus is on (a kTouch*; kTouchAim also when it is up):
+        /// for whoever draws the controls.
+        int touchOn = hldata::kTouchAim;
+        /// The lamp's switch: its button on the touch screen, or Select.
+        bool lampPressed = false;
         bool startPressed = false;  ///< Start went down this frame
         /// The stylus touched down this frame, at (tapX, tapY). Reported
         /// wherever it lands; what it means is the caller's business.
@@ -40,31 +53,13 @@ namespace hlrt
 
         void poll();
 
-        // The buttons' rectangles on the touch screen, shared with the code
-        // that draws them (BottomScreen).
         /// Two taps this close together -- a third of a second, forty pixels
         /// -- are a double tap.
         static constexpr std::uint32_t kDoubleTapBlanks = 20;
         static constexpr int kDoubleTapReach = 40;
-        static constexpr int kButtonWidth = 64;
-        static constexpr int kButtonTop = 152;
-        static constexpr int kUseLeft = 96; ///< the USE button: kButtonWidth wide from here
-        // The WEAPON button, on the right above DUCK: the next weapon.
-        static constexpr int kWeaponLeft = 192;
-        static constexpr int kWeaponTop = 88;
-        static constexpr int kWeaponBottom = 128;
 
     private:
-        enum class Touch
-        {
-            None,
-            Aim,
-            Duck,
-            Use,
-            Weapon,
-        };
-
-        Touch touch_ = Touch::None;
+        int touch_ = hldata::kTouchAim; ///< what this touch started on
         bool touching_ = false;
         bool jumping_ = false;            ///< this touch is the second of a double tap
         std::uint32_t lastTapBlank_ = 0;  ///< when the aim pad was last touched

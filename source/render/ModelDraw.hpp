@@ -25,14 +25,22 @@ namespace hlrt
     class ModelDraw
     {
     public:
-        /// The most actors drawn in one pass, nearest first.
-        static constexpr int kMaxDrawn = 8;
+        /// The most actors that can be drawn in one pass, nearest first; and
+        /// how many may be on this machine (setLimit): what there is time to
+        /// pose, not what there is room to draw.
+        static constexpr int kMaxDrawn = 12;
+        void setLimit(int limit) { limit_ = limit < 1 ? 1 : (limit > kMaxDrawn ? kMaxDrawn : limit); }
+        int limit() const { return limit_; }
 
         /// The most of a pass that models may take between them, what the
         /// player holds included. The world gets the rest -- which is all of
         /// it where there is nobody about.
         static constexpr int kMaxPolygons = 1200;
         static constexpr int kMaxVertices = 3400;
+        /// A model whose finest level is of more polygons than this has the
+        /// game's own mesh for it (a DSi's file): for the nearest model in
+        /// a frame with room, and nobody else.
+        static constexpr int kWholeModel = 420;
 
         /// Decide what will be drawn this pass -- what is held, and the
         /// actors the eye can see, nearest first, as many as fit -- and say
@@ -51,12 +59,16 @@ namespace hlrt
         void drawHeld();
         /// The kept poses are of this map's models: forget them with it.
         void forgetPoses();
+        /// For the readout: the levels the actors are drawn at this pass, a
+        /// digit each, nearest first.
+        void levelsText(char *out, int size) const;
 
     private:
         /// `turn` is the actor's own turning: its nine, row by row, Q12
         /// (world = turn * model).
+        /// `level`: which of the model's levels of detail.
         void drawActor(const hldata::ActorState &actor, const hldata::ModelView &model,
-                       unsigned modelIndex, const hldata::fx *turn, int id);
+                       unsigned modelIndex, const hldata::fx *turn, int id, int level);
         const hldata::BoneMatrix *posed(const hldata::ActorState &actor,
                                         const hldata::ModelView &model, unsigned modelIndex,
                                         int id);
@@ -64,7 +76,20 @@ namespace hlrt
         void lightOff();
 
         int order_[kMaxDrawn] = {};
+        /// The level of detail each of those is drawn at this pass, and the
+        /// one what is held is.
+        std::uint8_t level_[kMaxDrawn] = {};
+        std::uint8_t heldLevel_ = 0;
+        /// What each actor was last drawn at, one more than the level (0:
+        /// not lately), by its number: a model near the distance where two
+        /// levels meet keeps the one it has.
+        std::uint8_t lastLevel_[256] = {};
         int found_ = 0;
+        int limit_ = 8;
+        /// The pieces of what has come apart that plan() chose (into
+        /// ActorWorld::gibs): after the actors, in what room they left.
+        std::uint8_t gibOrder_[hldata::kMaxGibs] = {};
+        int gibFound_ = 0;
         int cut_ = 0;
         bool heldDrawn_ = false;
     };

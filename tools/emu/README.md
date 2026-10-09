@@ -22,6 +22,7 @@ separated by `;`:
 | command | |
 |---|---|
 | `sleep <s>` | wait |
+| `ready [s]` | wait until the game is on screen (the emulator can take half a minute over the card first; at most `s` seconds, 90 if not given) |
 | `key <keysym> <s>` | hold a key (your melonDS key mapping applies) |
 | `drag <x0> <y0> <x1> <y1>` | stylus drag, in window pixels |
 | `tap <x> <y>` | a quick touch (two close together are a jump) |
@@ -34,6 +35,17 @@ separated by `;`:
 instead of playing it: raw 16-bit stereo samples at 48 kHz (SDL's "disk" audio
 driver), which can be measured, or listened to with
 `ffplay -f s16le -ar 48000 -ac 2 <file>`.
+
+`EMU_START="x y z yaw [track [mode]]"` starts the player at a place, armed
+and wearing the suit, with the debug readout on: `track` starts that track of
+the music (-1 for none) and `mode` says how to draw (1 single-pass, 2
+two-pass, 3 two-pass DMA).
+
+The private card images are a gigabyte each (`setup.sh` says so to melonDS):
+a whole cooked campaign is a quarter of that, and an image that is full
+silently leaves new files out. If something on `sdroot/` is "not on the
+card" in the emulator, delete `build/emu/cfg_*/*.bin*` and run `setup.sh`
+again.
 
 The window is 256 wide; the top screen starts at about y = 55 and the touch
 screen at about y = 247.

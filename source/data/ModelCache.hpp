@@ -33,6 +33,8 @@ namespace hlrt
         int count() const { return count_; }
         NEA_Material *skin(unsigned index) const { return materials_[index]; }
         int missing() const { return missing_; }
+        /// Models whose skin did not load (not on the card, or no room).
+        int bare() const { return bare_; }
 
         ModelCache() = default;
         ModelCache(const ModelCache &) = delete;
@@ -47,6 +49,7 @@ namespace hlrt
         NEA_Palette **palettes_ = nullptr;
         int count_ = 0;
         int missing_ = 0;
+        int bare_ = 0;
     };
 
     extern ModelCache modelCache;

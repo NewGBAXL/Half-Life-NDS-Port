@@ -1,0 +1,73 @@
+#pragma once
+
+// What is cooked once for the card, not for a map (shared/HlUi.hpp): the
+// game's fonts, the pictures of its head-up display, its loading picture.
+
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "HlUi.hpp"
+#include "hlds/SpriteCook.hpp"
+#include "hlds/TextureImage.hpp"
+#include "hlds/WadFile.hpp"
+
+namespace hlds
+{
+    /// One lump of a WAD by its name (any case), whatever it is.
+    bool readWadLump(const std::filesystem::path &wad, const std::string &name, std::vector<std::uint8_t> &out,
+                     std::string &error);
+
+    /// A font as the game keeps one: a picture 256 wide, and for each of 256
+    /// characters where in it its glyph starts and how wide it is.
+    struct QFont
+    {
+        int rowHeight = 0;
+        int imageHeight = 0;
+        struct Glyph
+        {
+            std::uint16_t start = 0; ///< y * 256 + x
+            std::uint16_t width = 0;
+        } glyphs[256];
+        std::vector<std::uint8_t> pixels;  ///< 256 * imageHeight indices
+        std::vector<std::uint8_t> palette; ///< 256 RGB triples
+    };
+    bool parseQFont(const std::vector<std::uint8_t> &lump, QFont &out, std::string &error);
+
+    /// The file the console reads (HlUi.hpp: FontHeader and what follows),
+    /// for characters 32 to 127. `outlined`: the game's menu fonts, which are
+    /// a light letter with a dark edge; otherwise how bright a pixel is is
+    /// how solid.
+    std::vector<std::uint8_t> cookFont(const QFont &font, bool outlined);
+
+    /// A plain picture lump (the game's "qpic").
+    bool parseQPic(const std::vector<std::uint8_t> &lump, IndexedImage &out, std::string &error);
+
+    /// The head-up display's texture, laid out as HlUi.hpp says, from the
+    /// game's 320-wide set (sprites/320hud2.spr and crosshairs.spr).
+    RgbaImage hudAtlas(const SprFile &hud, const SprFile &crosshairs);
+
+    /// The weapons' pictures for the touch screen's slots (HlUi.hpp:
+    /// IconsHeader and what follows), from the game's 320-wide set
+    /// (sprites/320hud1.spr): what each picture fills of its box, fitted
+    /// into `width` by `height` by averaging (never enlarged), how bright
+    /// it was becoming how solid it is, in four steps.
+    std::vector<std::uint8_t> weaponIcons(const SprFile &hud, int width = hldata::kWeaponIconWidth,
+                                          int height = hldata::kWeaponIconHeight);
+
+    /// The game's title for the top screen (HlUi.hpp: kTitleFile): the two
+    /// halves of it in the 320-wide set (sprites/320hud3.spr), side by
+    /// side, as one picture of the icons' form.
+    std::vector<std::uint8_t> titlePicture(const SprFile &hud);
+
+    /// The marks' texture (HlUi.hpp: kDecalAtlasFile), from the game's
+    /// decals.wad: each picture made the size of its cell, how dark the
+    /// game has a pixel becoming how solid it is. `missing` is how many
+    /// the WAD has not got.
+    RgbaImage decalAtlas(const WadFile &decals, int &missing);
+
+    /// The loading picture as a texture: scaled to the screen, in the top
+    /// rows of a square.
+    RgbaImage loadingTexture(const IndexedImage &picture);
+} // namespace hlds

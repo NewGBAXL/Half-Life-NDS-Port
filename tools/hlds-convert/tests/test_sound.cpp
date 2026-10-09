@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -420,8 +421,29 @@ namespace
     }
 } // namespace
 
+/// A sound's better copy for a DSi is the same name at another rate.
+static void testTwin()
+{
+    hldata::SoundRef ref{};
+    char out[48];
+    std::strcpy(ref.name, "weapons_hks1.11k");
+    hldstest::check(!hldata::soundTwinName(ref, out, sizeof(out)), "a sound with no better copy has no name for one");
+    ref.twin = 22;
+    hldstest::check(hldata::soundTwinName(ref, out, sizeof(out)) && std::string(out) == "weapons_hks1.22k",
+                "a DSi's copy is the same name at its own rate");
+    std::strcpy(ref.name, "ambience_wind2.5l");
+    ref.twin = 11;
+    hldstest::check(hldata::soundTwinName(ref, out, sizeof(out)) && std::string(out) == "ambience_wind2.11l",
+                "... a looping one, halved for a DS, too");
+    std::strcpy(ref.name, "noextension");
+    hldstest::check(!hldata::soundTwinName(ref, out, sizeof(out)), "a name of no such shape has none");
+    hldstest::check(hlds::soundCardName("weapons/hks1.wav", 22050, false) == "weapons_hks1.22k",
+                "the converter names it the same way");
+}
+
 int main()
 {
+    testTwin();
     testWav();
     testEncode();
     testSentences();

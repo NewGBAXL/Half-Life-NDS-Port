@@ -38,6 +38,11 @@ namespace hlds
     /// or under it is left alone. Three or four people at this fit a pass
     /// with the world; at their original 600 to 800 triangles, one did.
     inline constexpr int kModelTriangleTarget = 350;
+    /// Below that there are two coarser levels, of a half and of about a
+    /// third of it (a person in fewer than that has lost half of their
+    /// outline: measured) -- but none of fewer triangles than this, and none
+    /// at all for a model of not twice as many.
+    inline constexpr int kModelLevelLeast = 60;
 
     /// The first-person model every map is given.
     inline constexpr const char *kViewModelName = "v_crowbar";
@@ -53,14 +58,29 @@ namespace hlds
         std::vector<hldata::ModelTrack> tracks;
         std::vector<hldata::ModelKey> keys;
         std::vector<hldata::ModelEvent> events;
+        std::vector<hldata::ModelController> controllers;
+        std::vector<hldata::ModelControlAxis> controlAxes;
+        std::vector<hldata::ModelHitbox> hitboxes;
+        std::vector<hldata::ModelAttachment> attachments;
         /// The skin, before it is encoded: empty for a model with no textures.
         RgbaImage atlas;
+        /// Each level's error, as the header has it (ModelHeader::levelError).
+        std::uint8_t levelError[hldata::kModelLevels] = {0, hldata::kModelNoLevel, hldata::kModelNoLevel,
+                                                         hldata::kModelNoLevel};
     };
 
     struct ModelCookReport
     {
         int sourceTriangles = 0; ///< body 0, as the model had them
-        int triangles = 0;     ///< body 0, as cooked
+        int triangles = 0;     ///< body 0, as cooked, at its finest level
+        /// Body 0 at each level of detail the file has, finest first.
+        struct Level
+        {
+            int triangles = 0;
+            int vertices = 0; ///< as sent: what its strips cost
+            double error = 0; ///< units (MeshLevel::error)
+        };
+        std::vector<Level> levels;
         int batches = 0;
         int clips = 0;
         int sourceFrames = 0;  ///< frames * bones of the clips, as the model had them
@@ -77,8 +97,11 @@ namespace hlds
     /// Cook `mdl` with the sequences named in `clipNames` (labels, any case).
     /// Its skin is at most `skinTexels` texels (a power of two each way; the
     /// smallest is 32 x 32).
+    /// `full`: with the model as the game has it as its finest level, above
+    /// the thinned ones (where it was thinned at all) -- a DSi's file.
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
-                   ModelCookReport &report, std::string &error, int skinTexels = kModelSkinTexels);
+                   ModelCookReport &report, std::string &error, int skinTexels = kModelSkinTexels,
+                   bool full = false);
 
     /// Serialize, then open the result with the DS's reader: fails rather
     /// than return a file the console would refuse.

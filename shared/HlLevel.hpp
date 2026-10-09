@@ -33,7 +33,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 14;
+    inline constexpr std::uint16_t kLevelVersion = 20;
 
     enum class Section : std::uint16_t
     {
@@ -46,7 +46,7 @@ namespace hldata
         Surfaces,   ///< Surface: world model first, sorted by texture
         GxStream,   ///< u32: packed geometry-engine command words
         Models,     ///< Model; model 0 is the world
-        ClipNodes,  ///< ClipNode: hulls 1 (standing) and 3 (crouched)
+        ClipNodes,  ///< ClipNode: hulls 1 (standing) and 3 (crouched), and the world's 2 (large)
         Textures,   ///< TextureRef
         Entities,   ///< EntityRecord
         EntityText, ///< u8: the original entity lump, for the converter's own use
@@ -68,6 +68,12 @@ namespace hldata
         Sentences,  ///< SentenceRecord: the spoken lines the map has
         SentenceWords, ///< u16: indices into Sounds, grouped per sentence
         Rooms,      ///< RoomRecord: what the map's rooms sound like (env_sound)
+        Sprites,    ///< SpriteRef: the sprites the map draws (HlSprite.hpp); the common ones first
+        /// u16, kSpeechGroups * kSpeechLines of them (or none): for each
+        /// thing a soldier may call out, the Sentences that say it; 0xFFFF
+        /// where there are fewer.
+        Speech,
+        Messages,   ///< MessageRecord: what the map writes on the screen (env_message)
         Count
     };
     inline constexpr int kSectionCount = static_cast<int>(Section::Count);
@@ -185,6 +191,10 @@ namespace hldata
         /// Roots in ClipNodes; negative when the whole hull is one contents value.
         std::int32_t clipStanding;
         std::int32_t clipCrouched;
+        /// The hull of something 64 units across and as high (the game's
+        /// third): the world's only. What is that wide may stand only where
+        /// this is not solid. A brush's is empty.
+        std::int32_t clipLarge;
         std::uint16_t firstSurface;
         std::uint16_t surfaceCount;
     };
@@ -205,6 +215,15 @@ namespace hldata
         std::uint16_t sourceWidth; ///< as the game had it
         std::uint16_t sourceHeight;
         std::uint32_t flags; ///< kTexture* (HlTexture.hpp)
+        /// A texture that is more than one picture (the game's '+'
+        /// textures): how many its cycle has, ten a second, this one first
+        /// and the rest straight after it in Textures (1: it is still). And
+        /// its other face -- what a brush shows when its "frame" is set: a
+        /// light off, a button in, a charger empty -- where that starts and
+        /// how many pictures it has (kNoTexture: it has none).
+        std::uint8_t frames;
+        std::uint8_t otherFrames;
+        std::uint16_t other;
     };
 
     /// How a brush entity is drawn. From the entity's "rendermode" and
@@ -383,6 +402,69 @@ namespace hldata
         /// Starts a track of the game's music: extra[0] is its number. A
         /// volume (mins/maxs) walked into once (kLogicTouch), or used.
         Music,
+        // What is only seen (and felt): HlEffects.hpp.
+        /// A sprite at a place (`move`): env_sprite, env_glow. extra[0] is
+        /// the sprite (into Sprites); extra[1] its frames a second (Q8);
+        /// extra[2] its colour (RGB555) in the low 16 bits, how solid it is
+        /// (1..31) in the next 8 and its scale (Q4) in the top 8; extra[3]
+        /// bit 0: it plays through once and goes out; bit 1: it is a glow,
+        /// seen through what it sits in. Used, it is switched
+        /// on and off (kLogicStartOpen: on from the start).
+        Sprite,
+        /// A beam from `move` to `mins` (whole units): env_beam, env_laser.
+        /// extra[0] is its picture (into Sprites); extra[1] its width in
+        /// tenths of a unit (low 16 bits) and how far lightning is thrown
+        /// about (the rest); extra[2] colour and solidity as a Sprite's;
+        /// extra[3] how long a strike lasts in ms (low 16 bits; 0: it stays
+        /// while it is on) and how long until it strikes again (the rest).
+        /// `damage` is what it does a second to whoever stands in it.
+        /// kLogicStartOpen: on from the start. kLogicToggle: switched on and
+        /// off; otherwise each use is one strike.
+        /// Its ends need not be fixed. `target` is the name id of what its
+        /// start follows, `netName` of what its end follows (a brush, an
+        /// actor: wherever that is now); 0: the place given. A list
+        /// (firstAux, auxCount) is places its end is picked from at each
+        /// strike (LogicAux: x, y, z in whole units in its three fields).
+        /// `maxs[1]` is kBeam* flags: with kBeamRandom it has no end, and
+        /// each strike goes to wherever the world stops a line of `maxs[0]`
+        /// units in a direction taken at random.
+        Beam,
+        /// An explosion at `move`: extra[0] is its size (the game's
+        /// "magnitude": its damage, and its reach by 2.5), extra[1] its
+        /// flags as the game has them (1: no damage, 2: can go off again,
+        /// 4: no fireball, 64: no sound).
+        Explosion,
+        /// Shakes the view: extra[0] how hard (units, Q8), extra[1] for how
+        /// long (ms), extra[2] within how far of `move` (units; 0:
+        /// everywhere).
+        Shake,
+        /// Sparks at `move`, at random moments no more than `waitMs` apart,
+        /// while it is on (kLogicStartOpen: from the start; used, on and
+        /// off).
+        Spark,
+        /// Throws things out from `move`: extra[0] is how many, extra[1]
+        /// the time between two (ms), extra[2] how fast (units a second),
+        /// extra[3] how long each lasts (ms). `mins` is the way, a unit
+        /// vector in thousandths. kLogicToggle: it can do it again. What it
+        /// throws: pieces of a model (`damage` is the model's index in
+        /// ModelRefs, plus 1), or a sprite (`maxs[0]` is its index in
+        /// Sprites, plus 1), or with neither plain scraps.
+        Shooter,
+        /// Changes how what it targets is drawn: extra[0] how solid (0..255,
+        /// the game's "render amount"), extra[1] the game's render mode.
+        Render,
+        /// Fades the screen to black and back: extra[0] the fade (ms),
+        /// extra[1] how long it holds (ms), extra[2] how dark (0..255),
+        /// extra[3] bit 0: from black to clear, not the other way.
+        Fade,
+        /// Writes on the screen: extra[0] is which of the level's Messages.
+        /// kLogicFireOnce: only the first time it is used.
+        Message,
+        /// A conveyor: a brush whose top carries whatever stands on it,
+        /// `move` units a second (Q12), and whose belt -- its "scroll"
+        /// texture -- slides `speed` texels a second (Q12, signed). Used,
+        /// it runs the other way. extra[0] bit 0: it carries nothing.
+        Conveyor,
         Count
     };
 
@@ -455,6 +537,8 @@ namespace hldata
         std::uint32_t extra[4];   ///< what its kind says (LogicKind)
     };
     inline constexpr std::uint16_t kNoBrush = 0xFFFF;
+    inline constexpr std::uint16_t kBeamRandom = 1; ///< LogicKind::Beam, in maxs[1]
+    inline constexpr std::uint16_t kBeamRing = 2;   ///< ... a circle between its two ends
 
     /// An entry of a list a logic record owns. For a multi_manager: one target
     /// and how long after the manager is used it fires. For a multisource: one
@@ -550,13 +634,69 @@ namespace hldata
         /// The scientist at a desk: sits where the map has him, going from
         /// one of his five ways of sitting to another.
         Sitter,
+        // The guns that mind a place by themselves (HlMonsters.hpp).
+        Miniturret, ///< small, on a floor or a ceiling; folds away
+        Sentry,     ///< on three legs; woken by a touch, a shot or a tripwire
+        Turret,     ///< the big one: has to spin up before it fires
+        Grunt,      ///< a soldier (HlGrunt.hpp)
+        Tripmine,   ///< a mine on a wall, with its beam
         Count
     };
+
+    inline bool isTurret(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Miniturret) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Sentry) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Turret);
+    }
 
     inline constexpr std::uint8_t kActorSolid = 1; ///< the player cannot walk through it
     /// Not there when the map starts: a place kept for what a monstermaker
     /// makes.
     inline constexpr std::uint8_t kActorDormant = 2;
+    /// A turret: hung from a ceiling, upside down; and one that comes out
+    /// by itself when it sees someone (the others wait to be switched on).
+    /// A monster the map keeps as a prisoner (the game's flag): it goes
+    /// for nobody. The things glimpsed during the cascade are these.
+    inline constexpr std::uint8_t kActorPrisoner = 16;
+    inline constexpr std::uint8_t kActorCeiling = 4;
+    inline constexpr std::uint8_t kActorAuto = 8;
+    /// A tripmine: armed a second after the map starts, not two and a half.
+    inline constexpr std::uint8_t kActorQuick = kActorAuto;
+    /// A soldier: one who does nothing until a script has had him; his
+    /// squad's leader; one who does nothing until the player has seen him;
+    /// one who has nothing to say while all is quiet.
+    inline constexpr std::uint8_t kActorWaitScript = kActorAuto;
+    inline constexpr std::uint8_t kActorLeader = 32;
+    inline constexpr std::uint8_t kActorWaitSeen = 64;
+    inline constexpr std::uint8_t kActorGag = 128;
+
+    // What a soldier carries (ActorRecord::item, the low 8 bits): the
+    // game's own "weapons" bits.
+    inline constexpr std::uint32_t kGruntMp5 = 1;
+    inline constexpr std::uint32_t kGruntGrenades = 2;
+    inline constexpr std::uint32_t kGruntLauncher = 4;
+    inline constexpr std::uint32_t kGruntShotgun = 8;
+    /// ... and in the four bits above them, when he sets off what his
+    /// record's `target` names (the game's "TriggerCondition": 1 and 7 to
+    /// 11 at the sight or sound of the player, 2 hurt, 3 down to half his
+    /// health, 4 killed). Once.
+    inline constexpr int kGruntTriggerShift = 4;
+
+    // What a soldier calls out (Section::Speech): the game's HG_ groups.
+    inline constexpr int kSpeakGrenade = 0; ///< a grenade lands by him
+    inline constexpr int kSpeakAlert = 1;   ///< the leader, at the sight of the player
+    inline constexpr int kSpeakCover = 2;   ///< hurt, and running for cover
+    inline constexpr int kSpeakThrow = 3;   ///< about to throw or launch a grenade
+    inline constexpr int kSpeakTaunt = 4;   ///< staying put
+    inline constexpr int kSpeakCharge = 5;  ///< going in after someone out of sight
+    inline constexpr int kSpeakIdle = 6;    ///< nothing doing
+    inline constexpr int kSpeakQuestion = 7; ///< ... a question, and the answer to one
+    inline constexpr int kSpeakAnswer = 8;
+    inline constexpr int kSpeakCheck = 9;   ///< "check in", and "all clear"
+    inline constexpr int kSpeakClear = 10;
+    inline constexpr int kSpeechGroups = 11;
+    inline constexpr int kSpeechLines = 6;
 
     enum class ItemKind : std::uint8_t
     {
@@ -570,16 +710,78 @@ namespace hldata
         Battery,
         Suit, ///< the HEV suit: armour is for someone wearing it
         Grenades, ///< hand grenades: five of them
+        Mp5,        ///< the MP5: comes with 25 rounds
+        Python,     ///< the .357: comes loaded
+        Mp5Clip,    ///< 50 of 9 mm
+        AmmoBox,    ///< 200 of 9 mm
+        ArGrenades, ///< two for the MP5's launcher
+        Ammo357,    ///< six
         Count
     };
 
     /// A sound the map plays: the file it is in under snd/ on the card,
     /// without the extension ("ambience_labdrone2.11k"). Empty: the map has
     /// no use for the sound of this index.
+    ///
+    /// `twin`, if not 0: a DSi has a better copy of it beside that one, at
+    /// that many thousand samples a second (the same name with that number
+    /// in it: "weapons_hks1.22k"). A DS has not the memory for those.
     struct SoundRef
     {
-        char name[48];
+        char name[47];
+        std::uint8_t twin;
     };
+    static_assert(sizeof(SoundRef) == 48);
+
+    /// The name of a sound's better copy (SoundRef::twin): `name` with its
+    /// rate changed. False if `name` is not of the usual shape.
+    inline bool soundTwinName(const SoundRef &ref, char *out, std::size_t size)
+    {
+        const char *dot = nullptr;
+        for (const char *c = ref.name; *c != '\0'; ++c)
+            dot = *c == '.' ? c : dot;
+        if (ref.twin == 0 || dot == nullptr)
+            return false;
+        const std::size_t stem = static_cast<std::size_t>(dot - ref.name) + 1;
+        std::size_t end = stem;
+        while (ref.name[end] >= '0' && ref.name[end] <= '9')
+            ++end;
+        // (stem, two digits, the letter that says whether it loops, NUL.)
+        if (stem + 4 > size || ref.name[end] == '\0' || ref.name[end + 1] != '\0')
+            return false;
+        for (std::size_t i = 0; i < stem; ++i)
+            out[i] = ref.name[i];
+        out[stem] = static_cast<char>('0' + (ref.twin / 10) % 10);
+        out[stem + 1] = static_cast<char>('0' + ref.twin % 10);
+        out[stem + 2] = ref.name[end];
+        out[stem + 3] = '\0';
+        return true;
+    }
+    /// A sprite the map draws: its atlas (spr/<name>.<w>x<h>.htx on the
+    /// card) and how that is cut into frames -- `columns` to a row, each
+    /// `cellWidth` by `cellHeight` texels -- and how big it is in the world
+    /// at scale 1 (units). No frames: the map has no use for the sprite of
+    /// this index, or the game has no such file.
+    struct SpriteRef
+    {
+        char name[24];
+        std::uint16_t width;  ///< of the atlas, texels
+        std::uint16_t height;
+        std::uint8_t cellWidth;
+        std::uint8_t cellHeight;
+        std::uint8_t columns;
+        std::uint8_t frames;
+        std::uint16_t worldWidth;
+        std::uint16_t worldHeight;
+        std::uint8_t kind; ///< kSprite*: which way it faces
+        /// How many frames the game's own sprite has: what its animation is
+        /// timed by (the atlas may hold fewer, evenly taken).
+        std::uint8_t sourceFrames;
+        std::uint8_t pad[2];
+    };
+    static_assert(sizeof(SpriteRef) == 40);
+    inline constexpr std::uint16_t kNoSprite = 0xFFFF;
+
     /// What a logic record sounds like: indices into Sounds, 0xFFFF for
     /// none. A door's or a button's moving and stopping; what something that
     /// breaks sounds like breaking (in `move`).
@@ -629,9 +831,18 @@ namespace hldata
         std::uint32_t clip;   ///< nameHash of the clip it starts in; 0 = the model's first
         std::uint8_t flags;   ///< kActor*
         std::uint8_t light;   ///< how bright it stands, 0..31
-        std::uint16_t target; ///< name id of what an item fires when it is taken; 0 = nothing
-        std::uint32_t item;   ///< ItemKind, for an ActorKind::Item
+        /// Name id of what an item fires when it is taken, or a turret when
+        /// it comes out, folds away or is destroyed; 0 = nothing.
+        std::uint16_t target;
+        /// For an ActorKind::Item: its ItemKind. For anything else: its
+        /// skin in bits 8..15 (kActorSkinShift), and for a soldier which
+        /// weapons he has in the low 8 (kGrunt*) and the name id of his
+        /// squad in the top 16. A tripmine's low 8 are how far up it
+        /// points, in 256ths of a turn.
+        std::uint32_t item;
     };
+    inline constexpr int kActorSkinShift = 8;
+    inline constexpr int kActorSquadShift = 16;
 
     enum class EntityClass : std::uint16_t
     {
@@ -655,9 +866,9 @@ namespace hldata
     static_assert(sizeof(Node) == 20);
     static_assert(sizeof(Leaf) == 24);
     static_assert(sizeof(Surface) == 24);
-    static_assert(sizeof(Model) == 40);
+    static_assert(sizeof(Model) == 44);
     static_assert(sizeof(ClipNode) == 8);
-    static_assert(sizeof(TextureRef) == 28);
+    static_assert(sizeof(TextureRef) == 32);
     static_assert(sizeof(EntityRecord) == 32);
     static_assert(sizeof(Brush) == 40);
     static_assert(sizeof(LogicRecord) == 80);
@@ -666,6 +877,34 @@ namespace hldata
     static_assert(sizeof(ActorRecord) == 32);
     static_assert(sizeof(LogicAux) == 8);
     static_assert(sizeof(PathCorner) == 28);
+
+    /// Something the map writes over the picture: a chapter's name, a name
+    /// of the introduction, a lesson of the hazard course (the game's
+    /// titles.txt says what and how; an env_message says when).
+    struct MessageRecord
+    {
+        std::uint32_t text;     ///< into Strings: its lines, '\n' between them
+        /// Where: 0..256 of the room left over across and down the screen;
+        /// -1 in the middle.
+        std::int16_t x, y;
+        std::uint8_t effect;    ///< kMessage*: how it comes and goes
+        std::uint8_t flags;     ///< kMessageLogo, kMessageAtStart
+        std::uint16_t colour;   ///< five bits each of red, green, blue
+        std::uint16_t colour2;  ///< kMessageScan: what a letter is while it is new
+        std::uint16_t fadeInMs; ///< (kMessageScan: for each letter)
+        std::uint16_t fadeOutMs;
+        std::uint16_t holdMs;
+        std::uint16_t fxMs;     ///< kMessageScan: how long a letter stays new
+        std::uint16_t pad;
+    };
+    static_assert(sizeof(MessageRecord) == 24);
+    inline constexpr std::uint8_t kMessageFade = 0;
+    inline constexpr std::uint8_t kMessageFlicker = 1; ///< (shown as a fade)
+    inline constexpr std::uint8_t kMessageScan = 2;    ///< written out letter by letter
+    /// Not text: the game's own title, as a picture (ui/title.hic).
+    inline constexpr std::uint8_t kMessageLogo = 1;
+    /// Shown by itself when the map is come into (the chapter's name).
+    inline constexpr std::uint8_t kMessageAtStart = 2;
 
     /// The size of one record of a section, which is how both the writer and
     /// the reader know that `size == count * recordSize`.
@@ -704,6 +943,9 @@ namespace hldata
         case Section::Sentences:  return sizeof(SentenceRecord);
         case Section::SentenceWords: return 2;
         case Section::Rooms:      return sizeof(RoomRecord);
+        case Section::Sprites:    return sizeof(SpriteRef);
+        case Section::Speech:     return 2;
+        case Section::Messages:   return sizeof(MessageRecord);
         default:                  return 0;
         }
     }

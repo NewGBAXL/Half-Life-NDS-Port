@@ -21,6 +21,10 @@ int main()
     save.pitch = -2000;
     save.ducked = 1;
     save.health = 63;
+    save.clipMp5 = 31;
+    save.clipPython = 4;
+    save.ammo357 = 12;
+    save.ammoAr = 3;
     save.globalHash = {nameHash("power"), nameHash("gate")};
     save.globalState = {1, 2};
     save.train = nameHash("intro_train");
@@ -39,6 +43,8 @@ int main()
     check(back.map == "c1a0" && back.origin[2] == fxFromInt(-176) && back.velocity[1] == -1234 &&
               back.yaw == 49152 && back.pitch == -2000 && back.ducked == 1 && back.health == 63,
           "the player as they were");
+    check(back.clipMp5 == 31 && back.clipPython == 4 && back.ammo357 == 12 && back.ammoAr == 3,
+          "what is in the newer guns, and carried for them");
     check(back.globalHash == save.globalHash && back.globalState == save.globalState,
           "the switches");
     check(back.train == save.train && back.trainPos[2] == fxFromInt(-254) &&
@@ -71,6 +77,24 @@ int main()
     const std::vector<std::uint8_t> slyBytes = writeSave(sly);
     check(!readSave(slyBytes.data(), slyBytes.size(), untouched) && untouched.map == "sentinel",
           "nor one that names something other than a map");
+
+    // Dying: back to the latest save -- unless that is itself the trouble.
+    {
+        DeathLoop loop;
+        check(deathChoice(loop, 300000) == kBackLatest && deathChoice(loop, 5000) == kBackLatest &&
+                  deathChoice(loop, 5000) == kBackLatest,
+              "a death goes back to the latest save, and so does dying soon after, twice");
+        check(deathChoice(loop, 5000) == kBackArrival && deathChoice(loop, 3000) == kBackArrival,
+              "a third death on end, each soon after going back, goes back to coming into the map instead");
+        check(deathChoice(loop, 3000) == kBackArrival && deathChoice(loop, 3000) == kBackStart,
+              "... and if that is no better, to the map's own start");
+        check(deathChoice(loop, 3000) == kBackLatest, "after which it is counted afresh");
+        DeathLoop calm;
+        deathChoice(calm, 4000);
+        deathChoice(calm, 4000);
+        check(deathChoice(calm, 60000) == kBackLatest && deathChoice(calm, 4000) == kBackLatest,
+              "a death after a good while alive is not one of a run");
+    }
 
     if (g_failures == 0)
         std::printf("test_save: ok\n");

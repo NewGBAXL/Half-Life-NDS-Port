@@ -1,5 +1,8 @@
 #include "HlSound.hpp"
+#include "HlSprite.hpp"
+#include "hlds/UiCook.hpp"
 #include "hlds/SoundCook.hpp"
+#include "hlds/SpriteCook.hpp"
 #include "hlds/Converter.hpp"
 #include "hlds/EntityCook.hpp"
 #include "hlds/MdlFile.hpp"
@@ -94,6 +97,10 @@ namespace hlds
     {
         /// What all of a map's sounds may take in the console's memory.
         constexpr std::size_t kMapSoundBytes = 350 * 1024;
+        /// ... and a DSi, which has four times the memory: its sounds at
+        /// the rate the game has them, up to this.
+        constexpr std::size_t kMapSoundBytesDsi = 2 * 1024 * 1024;
+        constexpr int kSoundRateDsi = 22050;
 
         /// `relative` under `root`, whatever case each part of it is in on
         /// disk (the game's files are named in whatever case their authors
@@ -177,7 +184,12 @@ namespace hlds
         {
             std::string name;
             std::vector<std::uint8_t> bytes;
+            /// The same with the model as the game has it for its finest
+            /// level, for a DSi; empty where that is no more than `bytes`.
+            std::vector<std::uint8_t> bytesDsi;
             RgbaImage atlas;
+            int triangles = 0, fullTriangles = 0; ///< body 0 at its finest, in each
+            int far = 0;                          ///< ... and at its coarsest
         };
         std::vector<ModelOut> models;
         int modelTexels = 0;
@@ -218,6 +230,14 @@ namespace hlds
                 // (Grenades are first found in c1a1b.)
                 {"v_grenade", !before && map != "c1a1" && map != "c1a1a" && map != "c1a1f",
                  {"idle", "throw1", "draw"}},
+                // (The MP5 is first found in c1a3, the .357 in c1a4g.)
+                {"v_9mmar", !before && !early && map.rfind("c1a2", 0) != 0,
+                 {"longidle", "shoot", "grenade", "reload", "deploy"}},
+                {"v_357",
+                 !before && !early && map.rfind("c1a2", 0) != 0 && map.rfind("c1a3", 0) != 0 && map != "c1a4" &&
+                     map != "c1a4b" && map != "c1a4d" && map != "c1a4e" && map != "c1a4f" && map != "c1a4k" &&
+                     map != "c1a4i",
+                 {"idle1", "fire1", "reload", "draw"}},
             };
             for (const Held &one : kHeld)
             {
@@ -284,6 +304,19 @@ namespace hlds
                 return false;
             }
             out.atlas = std::move(cooked.atlas);
+            out.triangles = modelReport.triangles;
+            out.fullTriangles = modelReport.sourceTriangles;
+            out.far = modelReport.levels.empty() ? modelReport.triangles : modelReport.levels.back().triangles;
+            // A DSi's file, where the game's own mesh is more than that.
+            if (modelReport.sourceTriangles > modelReport.triangles)
+            {
+                CookedModel whole;
+                ModelCookReport wholeReport;
+                std::string ignored;
+                if (!cookModel(mdl, clips, whole, wholeReport, ignored, skinTexels, true) ||
+                    !writeModel(whole, out.bytesDsi, ignored))
+                    out.bytesDsi.clear();
+            }
             return true;
         };
         // What lies on the floor is a few pixels on the screen; what is held
@@ -293,7 +326,12 @@ namespace hlds
         for (std::size_t n = 0; n < needs.size(); ++n)
         {
             const ModelNeed &need = needs[n];
-            const int skin = need.name.rfind("w_", 0) == 0 ? 64 * 64 : kModelSkinTexels;
+            // (What lies about to be picked up, and the pieces things come
+            // apart into, are small on screen: a small skin does.)
+            const int skin = need.name.rfind("w_", 0) == 0 || need.name.find("gib") != std::string::npos ||
+                                     need.name == "v_tripmine"
+                                 ? 64 * 64
+                                 : kModelSkinTexels;
             ModelOut out;
             if (!cookOne(need, skin, out, false))
                 continue;
@@ -330,7 +368,13 @@ namespace hlds
             models[largest] = std::move(smaller);
         }
         for (const ModelOut &out : models)
+        {
             result.modelKb += static_cast<int>(out.bytes.size() / 1024);
+            result.modelKbDsi += static_cast<int>((out.bytesDsi.empty() ? out.bytes : out.bytesDsi).size() / 1024);
+            result.modelTriangles += out.triangles;
+            result.modelTrianglesFar += out.far;
+            result.modelTrianglesFull += out.fullTriangles;
+        }
         result.models = static_cast<int>(models.size());
         result.modelTexelKb = modelTexels / 1024;
 
@@ -339,7 +383,8 @@ namespace hlds
             planTextures(bsp, textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads)),
                          kWorldTexelBudget - skyTexels,
                          kPaletteColourBudget - (skyName.empty() ? 0 : 6 * 256) -
-                             static_cast<int>(models.size()) * kModelSkinColours);
+                             static_cast<int>(models.size()) * kModelSkinColours - kSpriteColourBudget,
+                         kAlphaTexelBudget - kSpriteTexelBudget);
         if (!plan.fits)
             result.warnings.push_back("its textures do not fit the DS even at their smallest");
         result.texturesUsed = plan.usedTextures;
@@ -363,6 +408,16 @@ namespace hlds
                 book = parseSentences(std::string(text.begin(), text.end()));
         }
         cookOptions.sentences = &book;
+        // ... and what it writes on the screen, in its titles.txt.
+        TitlesBook titles;
+        {
+            std::vector<std::uint8_t> text;
+            std::string ignored;
+            const fs::path file = findNoCase(options_.gameDir, "titles.txt");
+            if (!file.empty() && readFile(file, text, ignored))
+                titles = parseTitles(std::string(text.begin(), text.end()));
+        }
+        cookOptions.titles = &titles;
         CookedLevel level;
         CookReport report;
         std::vector<std::uint8_t> bytes;
@@ -380,6 +435,7 @@ namespace hlds
                 WavData wav;
                 std::uint32_t sourceHash = 0;
                 CookedSound cooked;
+                CookedSound twin; ///< a DSi's copy, if it is to have a better one
             };
             std::vector<One> made;
             std::size_t total = 0;
@@ -414,17 +470,24 @@ namespace hlds
                     total += one.cooked.data.size();
                 made.push_back(std::move(one));
             }
+            std::uint32_t shortest = 8000;
             while (total > kMapSoundBytes)
             {
                 // The longest that is still at the full rate and long enough
-                // for the loss to be worth it.
+                // for the loss to be worth it (and, if that is not enough,
+                // the shorter ones after all).
                 One *longest = nullptr;
                 for (One &one : made)
                 {
                     if (kept[one.index] && one.cooked.rate == hldata::kSoundRate &&
-                        one.cooked.samples > 8000 &&
+                        one.cooked.samples > shortest &&
                         (longest == nullptr || one.cooked.samples > longest->cooked.samples))
                         longest = &one;
+                }
+                if (longest == nullptr && shortest > 2000)
+                {
+                    shortest = 2000;
+                    continue;
                 }
                 if (longest == nullptr)
                     break;
@@ -437,6 +500,31 @@ namespace hlds
             if (total > kMapSoundBytes)
                 result.warnings.push_back("its sounds are " + std::to_string(total / 1024) +
                                           " KB, over what a DS has room for");
+            // A DSi's copies: whatever the game has at a better rate than a
+            // DS is given, at that rate (22 kHz at most) -- while they fit
+            // what a DSi is allowed, the longest going without first.
+            std::size_t totalDsi = total;
+            for (One &one : made)
+            {
+                if (!kept[one.index] || one.wav.rate <= one.cooked.rate)
+                    continue;
+                one.twin = encodeSound(one.wav, std::min(one.wav.rate, kSoundRateDsi), level.soundLoops[one.index]);
+                totalDsi += one.twin.data.size() - one.cooked.data.size();
+            }
+            while (totalDsi > kMapSoundBytesDsi)
+            {
+                One *longest = nullptr;
+                for (One &one : made)
+                {
+                    if (!one.twin.data.empty() &&
+                        (longest == nullptr || one.twin.data.size() > longest->twin.data.size()))
+                        longest = &one;
+                }
+                if (longest == nullptr)
+                    break;
+                totalDsi -= longest->twin.data.size() - longest->cooked.data.size();
+                longest->twin = CookedSound();
+            }
             for (const One &one : made)
             {
                 const bool loops = level.soundLoops[one.index];
@@ -444,27 +532,37 @@ namespace hlds
                     soundCardName(level.soundPaths[one.index], one.cooked.rate, loops);
                 hldata::SoundRef ref{};
                 std::strncpy(ref.name, name.c_str(), sizeof(ref.name) - 1);
+                // (Its better copy is written below, the same way.)
+                const bool twinned = !one.twin.data.empty();
+                ref.twin = twinned ? static_cast<std::uint8_t>(one.twin.rate / 1000) : std::uint8_t(0);
                 level.sounds[one.index] = ref;
-                // (The hash is of the source and of how it was cooked: the
-                // file is made again only if either changed.)
-                const std::uint32_t settings[] = {static_cast<std::uint32_t>(one.cooked.rate),
-                                                  loops ? 1u : 0u, hldata::kSoundVersion};
-                const std::uint32_t hash =
-                    one.sourceHash ^
-                    hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
-                const fs::path file = dataDir(options_.cardRoot) / "snd" / (name + ".hsn");
-                std::vector<std::uint8_t> existing;
-                std::string why;
-                CookedSound old;
-                hldata::SoundHeader oldHeader;
-                if (readFile(file, existing, why) && unpackSound(existing, old, oldHeader) &&
-                    oldHeader.sourceHash == hash)
-                    continue;
-                if (!writeFileAtomic(file, packSound(one.cooked, hash), result.error))
-                    return result;
+                result.soundsTwinned += twinned ? 1 : 0;
+                for (int which = 0; which < (twinned ? 2 : 1); ++which)
+                {
+                    const CookedSound &cooked = which == 0 ? one.cooked : one.twin;
+                    const std::string cardName = soundCardName(level.soundPaths[one.index], cooked.rate, loops);
+                    // (The hash is of the source and of how it was cooked:
+                    // the file is made again only if either changed.)
+                    const std::uint32_t settings[] = {static_cast<std::uint32_t>(cooked.rate), loops ? 1u : 0u,
+                                                      hldata::kSoundVersion};
+                    const std::uint32_t hash =
+                        one.sourceHash ^
+                        hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
+                    const fs::path file = dataDir(options_.cardRoot) / "snd" / (cardName + ".hsn");
+                    std::vector<std::uint8_t> existing;
+                    std::string why;
+                    CookedSound old;
+                    hldata::SoundHeader oldHeader;
+                    if (readFile(file, existing, why) && unpackSound(existing, old, oldHeader) &&
+                        oldHeader.sourceHash == hash)
+                        continue;
+                    if (!writeFileAtomic(file, packSound(cooked, hash), result.error))
+                        return result;
+                }
             }
             result.sounds = static_cast<int>(made.size());
             result.soundKb = static_cast<int>(total / 1024);
+            result.soundKbDsi = static_cast<int>(totalDsi / 1024);
         }
         // The music the map starts: each track decoded once, to something
         // that can be read off the card as it plays.
@@ -521,6 +619,89 @@ namespace hlds
                 return result;
         }
 
+        // The sprites: each cooked to its atlas, the common ones as the
+        // port's own effects want them, a map's own at a middling size; and
+        // while they are more than a map may have, the largest is made
+        // smaller. (A sprite the game folder has not got is left with no
+        // frames: nothing is drawn for it.)
+        struct SpriteOut
+        {
+            std::size_t index = 0;
+            SprFile spr;
+            int cell = 32, frames = 8;
+            CookedSprite cooked;
+            std::uint32_t sourceHash = 0;
+        };
+        std::vector<SpriteOut> sprites;
+        {
+            static const int kCommon[][2] = {{32, 8}, {32, 2}, {16, 6}, {32, 1}, {32, 1}, {32, 3}, {16, 4}, {32, 1}};
+            int texels = 0;
+            for (std::size_t n = 0; n < level.spritePaths.size(); ++n)
+            {
+                SpriteOut one;
+                one.index = n;
+                std::vector<std::uint8_t> source;
+                std::string why;
+                const fs::path file = findNoCase(options_.gameDir, level.spritePaths[n]);
+                if (file.empty() || !readFile(file, source, why) || !one.spr.parse(source, why))
+                {
+                    ++result.spritesMissing;
+                    continue;
+                }
+                if (n < static_cast<std::size_t>(hldata::CommonSprite::Count))
+                {
+                    one.cell = kCommon[n][0];
+                    one.frames = kCommon[n][1];
+                }
+                one.sourceHash = hldata::crc32(source.data(), static_cast<std::uint32_t>(source.size()));
+                if (!cookSprite(one.spr, one.cell, one.frames, level.spriteLights[n], one.cooked, why))
+                    continue;
+                texels += one.cooked.atlas.width * one.cooked.atlas.height;
+                sprites.push_back(std::move(one));
+            }
+            while (texels > kSpriteTexelBudget)
+            {
+                SpriteOut *largest = nullptr;
+                for (SpriteOut &one : sprites)
+                {
+                    const int size = one.cooked.atlas.width * one.cooked.atlas.height;
+                    if (size > 256 && (one.cell > 8 || one.frames > 1) &&
+                        (largest == nullptr ||
+                         size > largest->cooked.atlas.width * largest->cooked.atlas.height))
+                        largest = &one;
+                }
+                if (largest == nullptr)
+                    break;
+                texels -= largest->cooked.atlas.width * largest->cooked.atlas.height;
+                // (Fewer frames first, while it has many; then smaller ones.)
+                if (largest->frames > 4)
+                    largest->frames /= 2;
+                else if (largest->cell > 8)
+                    largest->cell /= 2;
+                else
+                    largest->frames = 1;
+                std::string why;
+                cookSprite(largest->spr, largest->cell, largest->frames, level.spriteLights[largest->index],
+                           largest->cooked, why);
+                texels += largest->cooked.atlas.width * largest->cooked.atlas.height;
+            }
+            if (texels > kSpriteTexelBudget)
+                result.warnings.push_back("its sprites are " + std::to_string(texels / 1024) +
+                                          "K texels, over what is kept for them");
+            for (const SpriteOut &one : sprites)
+            {
+                hldata::SpriteRef ref = one.cooked.ref;
+                // (Its name says whether it was cooked as light: the same
+                // file may be wanted both ways.)
+                const std::string name =
+                    spriteName(level.spritePaths[one.index]) + (level.spriteLights[one.index] ? "-l" : "");
+                std::strncpy(ref.name, name.c_str(), sizeof(ref.name) - 1);
+                level.sprites[one.index] = ref;
+            }
+            result.sprites = static_cast<int>(sprites.size());
+            result.spriteTexelKb = texels / 1024;
+        }
+
         if (!writeLevel(level, bytes, result.error))
             return result;
         result.warnings.insert(result.warnings.end(), report.warnings.begin(),
@@ -572,6 +753,33 @@ namespace hlds
                     !writeFileAtomic(skin, packTexture(encoded, 0, hash), why))
                     result.warnings.push_back("the skin of model '" + model.name + "' was not made: " + why);
             }
+            // The sprites' atlases, likewise.
+            for (const SpriteOut &one : sprites)
+            {
+                if (!ok)
+                    break;
+                const hldata::SpriteRef &ref = level.sprites[one.index];
+                const std::uint32_t settings[] = {static_cast<std::uint32_t>(one.cell),
+                                                  static_cast<std::uint32_t>(one.frames),
+                                                  level.spriteLights[one.index] ? 1u : 0u, encoder.version(), 1u};
+                const std::uint32_t hash =
+                    one.sourceHash ^
+                    hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
+                const fs::path file = dataDir(options_.cardRoot) / "spr" /
+                                      hldata::spriteFile(ref.name, ref.width, ref.height);
+                std::vector<std::uint8_t> existing;
+                std::string ignored;
+                CookedTexture old;
+                hldata::TextureHeader oldHeader;
+                if (readFile(file, existing, ignored) && unpackTexture(existing, old, oldHeader) &&
+                    oldHeader.sourceHash == hash)
+                    continue;
+                CookedTexture encoded;
+                std::string why;
+                if (!encoder.encode(one.cooked.atlas, hldata::kA3I5Colours, TextureFormat::A3I5, encoded, why) ||
+                    !writeFileAtomic(file, packTexture(encoded, hldata::kTextureA3I5, hash), why))
+                    result.warnings.push_back("the sprite '" + std::string(ref.name) + "' was not made: " + why);
+            }
             std::error_code ec;
             fs::remove_all(temp, ec);
             if (!ok)
@@ -588,6 +796,14 @@ namespace hlds
             const fs::path file =
                 dataDir(options_.cardRoot) / "mdl" / result.name / (model.name + ".hmd");
             if (!writeFileAtomic(file, model.bytes, result.error))
+                return result;
+            // (A DSi's, beside it -- and none left over from a cook that
+            // had one where this has not.)
+            const fs::path dsi = dataDir(options_.cardRoot) / "mdl" / result.name / (model.name + ".dsi.hmd");
+            std::error_code gone;
+            if (model.bytesDsi.empty())
+                fs::remove(dsi, gone);
+            else if (!writeFileAtomic(dsi, model.bytesDsi, result.error))
                 return result;
         }
         result.actors = static_cast<int>(level.actors.size());
@@ -615,12 +831,157 @@ namespace hlds
         return result;
     }
 
+    CommonResult Converter::cookCommon()
+    {
+        CommonResult result;
+        const fs::path ui = dataDir(options_.cardRoot);
+        std::string why;
+        // A file is written only if it is not already what it would be.
+        auto put = [&](const fs::path &file, const std::vector<std::uint8_t> &bytes) -> bool
+        {
+            std::vector<std::uint8_t> existing;
+            std::string ignored;
+            if (readFile(file, existing, ignored) && existing == bytes)
+                return true;
+            return writeFileAtomic(file, bytes, why);
+        };
+
+        // The fonts: the game's two smaller menu faces, and the one its
+        // credits are in for titles.
+        struct Face
+        {
+            const char *wad, *lump;
+            bool outlined;
+        };
+        const Face kFaces[hldata::kFontCount] = {
+            {"fonts.wad", "FONT0", true}, {"fonts.wad", "FONT1", true}, {"gfx.wad", "CREDITSFONT", false}};
+        for (int n = 0; n < hldata::kFontCount; ++n)
+        {
+            std::vector<std::uint8_t> lump;
+            QFont font;
+            const fs::path wad = findNoCase(options_.gameDir, kFaces[n].wad);
+            if (wad.empty() || !readWadLump(wad, kFaces[n].lump, lump, why) || !parseQFont(lump, font, why) ||
+                !put(ui / hldata::kFontFiles[n], cookFont(font, kFaces[n].outlined)))
+            {
+                result.warnings.push_back(std::string("the font ") + kFaces[n].lump + " was not made" +
+                                          (why.empty() ? "" : ": " + why));
+                continue;
+            }
+            ++result.fonts;
+        }
+
+        // The menu's sounds.
+        for (int n = 0; n < hldata::kUiSoundCount; ++n)
+        {
+            std::vector<std::uint8_t> source;
+            WavData wav;
+            const fs::path file = findNoCase(options_.gameDir / "sound", hldata::kUiSoundSources[n]);
+            if (file.empty() || !readFile(file, source, why) || !parseWav(source, wav, why))
+            {
+                result.warnings.push_back(std::string("the sound ") + hldata::kUiSoundSources[n] + " was not made");
+                continue;
+            }
+            const std::uint32_t hash = hldata::crc32(source.data(), static_cast<std::uint32_t>(source.size())) ^
+                                       hldata::kSoundVersion;
+            const CookedSound cooked = encodeSound(wav, hldata::kSoundRate, false);
+            if (put(ui / "snd" / (std::string(hldata::kUiSoundFiles[n]) + ".hsn"), packSound(cooked, hash)))
+                ++result.sounds;
+        }
+
+        // The pictures: these go through the texture encoder.
+        if (!options_.textures)
+            return result;
+        const fs::path exe = findPtexconv(options_.ptexconv);
+        if (exe.empty())
+            return result;
+        const fs::path temp = fs::temp_directory_path() / "hlds-convert-ui";
+        PtexconvEncoder encoder(exe, temp);
+        auto texture = [&](const RgbaImage &image, TextureFormat format, int colours, std::uint32_t flags,
+                           const char *name) -> bool
+        {
+            const std::uint32_t settings[] = {static_cast<std::uint32_t>(colours), flags, encoder.version()};
+            const std::uint32_t hash =
+                hldata::crc32(image.rgba.data(), static_cast<std::uint32_t>(image.rgba.size())) ^
+                hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
+            std::vector<std::uint8_t> existing;
+            std::string ignored;
+            CookedTexture old;
+            hldata::TextureHeader oldHeader;
+            if (readFile(ui / name, existing, ignored) && unpackTexture(existing, old, oldHeader) &&
+                oldHeader.sourceHash == hash)
+                return true;
+            CookedTexture encoded;
+            return encoder.encode(image, colours, format, encoded, why) &&
+                   writeFileAtomic(ui / name, packTexture(encoded, flags, hash), why);
+        };
+        {
+            SprFile hud, crosshairs;
+            const fs::path hudFile = findNoCase(options_.gameDir, "sprites/320hud2.spr");
+            const fs::path crossFile = findNoCase(options_.gameDir, "sprites/crosshairs.spr");
+            if (!hudFile.empty() && hud.load(hudFile, why) && !crossFile.empty() && crosshairs.load(crossFile, why) &&
+                texture(hudAtlas(hud, crosshairs), TextureFormat::A3I5, hldata::kA3I5Colours, hldata::kTextureA3I5,
+                        hldata::kHudAtlasFile))
+                result.hud = true;
+            else
+                result.warnings.push_back("the head-up display's pictures were not made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            // The weapons' pictures for the touch screen's slots.
+            SprFile sheet;
+            const fs::path file = findNoCase(options_.gameDir, "sprites/320hud1.spr");
+            if (!file.empty() && sheet.load(file, why) && put(ui / hldata::kWeaponIconsFile, weaponIcons(sheet)))
+                result.icons = true;
+            else
+                result.warnings.push_back("the weapons' pictures were not made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            // The marks shots and blood leave.
+            WadFile decals;
+            int missing = 0;
+            const fs::path file = findNoCase(options_.gameDir, "decals.wad");
+            if (!file.empty() && decals.open(file, why) &&
+                texture(decalAtlas(decals, missing), TextureFormat::A3I5, hldata::kA3I5Colours, hldata::kTextureA3I5,
+                        hldata::kDecalAtlasFile) &&
+                missing == 0)
+                result.decals = true;
+            else
+                result.warnings.push_back("the marks' pictures were not all made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            // The game's title, for the first map.
+            SprFile sheet;
+            const fs::path file = findNoCase(options_.gameDir, "sprites/320hud3.spr");
+            if (!file.empty() && sheet.load(file, why) && put(ui / hldata::kTitleFile, titlePicture(sheet)))
+                result.title = true;
+            else
+                result.warnings.push_back("the game's title was not made" + (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            std::vector<std::uint8_t> lump;
+            IndexedImage picture;
+            const fs::path wad = findNoCase(options_.gameDir, "cached.wad");
+            if (!wad.empty() && readWadLump(wad, "LOADING", lump, why) && parseQPic(lump, picture, why) &&
+                texture(loadingTexture(picture), TextureFormat::Tex4x4, 1024, 0, hldata::kLoadingFile))
+                result.loading = true;
+            else
+                result.warnings.push_back("the loading picture was not made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        std::error_code ec;
+        fs::remove_all(temp, ec);
+        return result;
+    }
+
     int Converter::cookMaps(const std::vector<std::string> &names,
                             const std::function<void(std::size_t, const std::string &)> &progress,
                             const std::function<void(const MapResult &)> &done,
                             const std::atomic<bool> *cancel, std::string &error)
     {
         int failed = 0;
+        common_ = cookCommon();
         for (std::size_t i = 0; i < names.size(); ++i)
         {
             if (cancel != nullptr && cancel->load())

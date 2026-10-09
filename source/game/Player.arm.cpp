@@ -1,5 +1,8 @@
 #include "game/Player.hpp"
 
+#include "HlLogic.hpp"
+#include "Settings.hpp"
+
 #include "Global.hpp"
 
 #include <nds.h>
@@ -66,7 +69,7 @@ namespace hlrt
                 state.origin[2] = fxFromInt(z);
                 camera.yaw = static_cast<std::uint16_t>((yaw * 65536) / 360);
                 // ... and armed, wherever that is.
-                state.inv.have = (1u << kWeaponCrowbar) | (1u << kWeaponGlock) | (1u << kWeaponShotgun) |
+                state.inv.have = kHaveSuit | (1u << kWeaponCrowbar) | (1u << kWeaponGlock) | (1u << kWeaponShotgun) |
                                  (1u << kWeaponGrenade);
                 state.inv.grenades = 5;
                 state.inv.current = kWeaponCrowbar;
@@ -110,9 +113,17 @@ namespace hlrt
         if (vblanks > kMaxVblanks)
             vblanks = kMaxVblanks;
 
-        turn();
-        if (input.noclipPressed)
-            noclip = !noclip;
+        const bool dead = state.health <= 0 && !noclip;
+        // (The dead do not look about, or go anywhere but down.)
+        if (dead)
+        {
+            input.moveForward = input.moveSide = 0;
+            input.jump = input.duck = false;
+        }
+        else
+        {
+            turn();
+        }
 
         if (noclip)
         {
@@ -144,9 +155,72 @@ namespace hlrt
             playerMove(state, cmd, game.world, kVblankTime * vblanks);
         }
 
+        // What the move did to the view: a landing jolts it and, hard
+        // enough, hurts; a blow reddens the screen, shows where it came
+        // from and knocks the head back.
+        const int ms = (vblanks * 1000 + 30) / 60;
+        if (!noclip)
+        {
+            if (state.landed > 0 && !dead)
+            {
+                const int speed = fxToInt(state.landed);
+                viewLand(view, speed);
+                if (const int cost = fallDamage(speed))
+                {
+                    logicHurt(state, cost);
+                    game.heard.add(CommonSound::FallPain, nullptr);
+                }
+            }
+            if (state.hurt > 0)
+            {
+                fx forward = 0, right = 0;
+                if (state.hurtKnown)
+                {
+                    const fx d[2] = {state.hurtFrom[0] - state.origin[0], state.hurtFrom[1] - state.origin[1]};
+                    const fx c = cosLerp(static_cast<s16>(camera.yaw >> 1)), s = sinLerp(static_cast<s16>(camera.yaw >> 1));
+                    forward = static_cast<fx>((static_cast<std::int64_t>(d[0]) * c + static_cast<std::int64_t>(d[1]) * s) >> 12);
+                    right = static_cast<fx>((static_cast<std::int64_t>(d[0]) * s - static_cast<std::int64_t>(d[1]) * c) >> 12);
+                }
+                viewHurt(view, state.hurt, forward, right);
+                state.hurt = 0;
+            }
+            const fx flat[3] = {state.velocity[0], state.velocity[1], 0};
+            const fx s = sinLerp(static_cast<s16>(camera.yaw >> 1)), c = cosLerp(static_cast<s16>(camera.yaw >> 1));
+            const fx side = static_cast<fx>((static_cast<std::int64_t>(state.velocity[0]) * s -
+                                             static_cast<std::int64_t>(state.velocity[1]) * c) >> 12);
+            view.walks = settings.viewBob;
+            viewTick(view, ms, fxLength(flat), side, state.onGround, dead);
+        }
+        else
+        {
+            view = ViewState();
+            state.hurt = 0;
+        }
+        camera.kickPitch = static_cast<std::int16_t>(viewTurns(view.punch[0]));
+        camera.kickYaw = static_cast<std::int16_t>(viewTurns(view.punch[1]));
+        camera.roll = static_cast<std::int16_t>(viewTurns(view.roll + view.punch[2] + deathRoll(view.deadMs)));
+
         camera.pos[0] = state.origin[0];
         camera.pos[1] = state.origin[1];
-        camera.pos[2] = state.origin[2] + state.viewHeight;
+        // (Dead, the eye sinks to a hand's breadth off the floor.)
+        const fx standing = state.viewHeight + view.bob;
+        const fx fallen = -kStandingFeet + fxFromInt(8);
+        camera.pos[2] = state.origin[2] + standing + (((fallen - standing) * deathSink(view.deadMs)) >> 8);
+        // Something is shaking the view (an explosion, an env_shake): the
+        // eye is thrown about, less and less as it dies away.
+        const LogicWorld &logic = game.logic;
+        if (logic.shakeMs > 0 && logic.shakeWholeMs > 0)
+        {
+            static std::uint32_t seed = 99;
+            const fx reach = static_cast<fx>((static_cast<std::int64_t>(logic.shakeAmplitude) * logic.shakeMs) /
+                                             logic.shakeWholeMs);
+            for (int a = 0; a < 3; ++a)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                const int part = static_cast<int>((seed >> 12) & 511) - 256; // -256..255
+                camera.pos[a] += (reach * part) >> 8;
+            }
+        }
         camera.update();
     }
 } // namespace hlrt

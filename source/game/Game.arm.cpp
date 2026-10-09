@@ -10,6 +10,10 @@
 #include "game/Input.hpp"
 #include "game/Player.hpp"
 #include "game/Trace.hpp"
+#include "audio/Sound.hpp"
+#include "render/HudDraw.hpp"
+#include "render/ScreenFade.hpp"
+#include "render/TopText.hpp"
 #include "render/BottomScreen.hpp"
 #include "render/Camera.hpp"
 
@@ -49,11 +53,17 @@ namespace hlrt
         states_ = nullptr;
         world = MoveWorld();
         logic = LogicWorld();
+        topText.clear();
+        // (A map is come into with the lamp out and full: it is not kept.)
+        lamp = LampState();
     }
 
     bool Game::create()
     {
         destroy();
+        // The chapter's name, half a second into the map (not from a save:
+        // placeFromSave says so).
+        startMessagesMs_ = 500;
         const LevelView &view = level.view;
 
         // + 1: a level with no brushes or no logic still gets a valid pointer.
@@ -90,6 +100,7 @@ namespace hlrt
             Hull{view.clipNodes, view.planes, view.planeTypes, view.models[0].clipStanding};
         world.crouched =
             Hull{view.clipNodes, view.planes, view.planeTypes, view.models[0].clipCrouched};
+        world.large = Hull{view.clipNodes, view.planes, view.planeTypes, view.models[0].clipLarge};
         world.movers = movers_;
         world.moverCount = static_cast<int>(view.brushCount);
         world.trace = traceFast;
@@ -120,11 +131,22 @@ namespace hlrt
         actors.count = actorCount;
         actors.models = modelCache.views();
         actors.modelCount = modelCache.count();
+        gibModelsFind(actors, view.modelRefs, static_cast<int>(view.modelRefCount));
+        // (A DSi has the memory for twice as much lying about.)
+        // (A DSi has the memory for twice as much going on at once.)
+        actors.gibLimit = isDSiMode() ? kMaxGibs : kMaxGibs / 2;
+        actors.shotLimit = isDSiMode() ? kMaxProjectiles : kMaxProjectiles / 2;
+        actors.effectLimit = isDSiMode() ? kMaxEffects : kMaxEffects / 2;
+        actors.decalLimit = isDSiMode() ? kMaxDecals : 24;
+        actors.pieceLimit = isDSiMode() ? kMaxPieces : 24;
         actors.boxes = actorBoxes_;
         world.boxes = actorBoxes_;
         world.boxCount = actorCount;
         logic.actors = &actors;
         logic.nameHashes = view.nameHashes;
+        logic.sprites = view.sprites;
+        logic.speech = view.speechCount != 0 ? view.speech : nullptr;
+        logic.spriteCount = static_cast<int>(view.spriteCount);
         logic.nameCount = static_cast<int>(view.nameCount);
         logic.sounds = view.logicSoundCount != 0 ? view.logicSounds : nullptr;
         logic.heard = &heard;
@@ -146,9 +168,9 @@ namespace hlrt
 
     void Game::takeInHand()
     {
-        static const char *const kModels[] = {nullptr, "v_crowbar", "v_9mmhandgun", "v_shotgun",
-                                              "v_grenade"};
-        static const char *const kIdle[] = {nullptr, "idle1", "idle1", "sm_idle", "idle"};
+        static const char *const kModels[] = {nullptr,     "v_crowbar", "v_9mmhandgun", "v_shotgun",
+                                              "v_grenade", "v_9mmar",   "v_357"};
+        static const char *const kIdle[] = {nullptr, "idle1", "idle1", "sm_idle", "idle", "longidle", "idle1"};
         const LevelView &view = level.view;
         const int weapon = player.state.inv.current;
         inHand_ = weapon;
@@ -176,7 +198,9 @@ namespace hlrt
                 held.restClip = static_cast<std::int16_t>(idle < 0 ? 0 : idle);
             }
             actorRest(held);
-            actorPlay(actors, held, nameHash("draw"), true);
+            // (The MP5's is called "deploy".)
+            if (!actorPlay(actors, held, nameHash("draw"), true))
+                actorPlay(actors, held, nameHash("deploy"), true);
             return;
         }
     }
@@ -238,7 +262,7 @@ namespace hlrt
             const ActorState &actor = actorStates_[i];
             if (actors.records[i].flags & kActorDormant)
                 continue;
-            if (!actor.active || (isMonster(actor.kind) && actor.ai >= kAiDying))
+            if (!actor.active || (fights(actor.kind) && actor.ai >= kAiDying))
                 slot->gone[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         }
     }
@@ -268,7 +292,7 @@ namespace hlrt
                 // says.
                 const std::uint8_t kind = actors.records[i].kind;
                 if (!(map.gone[i >> 3] & (1u << (i & 7))) ||
-                    !(isMonster(kind) || kind == static_cast<std::uint8_t>(ActorKind::Item)))
+                    !(fights(kind) || kind == static_cast<std::uint8_t>(ActorKind::Item)))
                     continue;
                 actorStates_[i].active = false;
                 actorPlaceBox(actors, i);
@@ -299,6 +323,10 @@ namespace hlrt
         save.ammoBuck = inv.ammoBuck;
         save.armor = inv.armor;
         save.grenades = inv.grenades;
+        save.clipMp5 = inv.clipMp5;
+        save.clipPython = inv.clipPython;
+        save.ammo357 = inv.ammo357;
+        save.ammoAr = inv.ammoAr;
         for (int i = 0; i < globals.count; ++i)
         {
             save.globalHash.push_back(globals.hash[i]);
@@ -334,6 +362,7 @@ namespace hlrt
 
     void Game::placeFromSave(const SaveData &save)
     {
+        startMessagesMs_ = -1;
         for (int a = 0; a < 3; ++a)
         {
             player.state.origin[a] = save.origin[a];
@@ -354,6 +383,10 @@ namespace hlrt
         inv.ammoBuck = within(save.ammoBuck, 125);
         inv.armor = within(save.armor, 100);
         inv.grenades = within(save.grenades, 10);
+        inv.clipMp5 = within(save.clipMp5, 50);
+        inv.clipPython = within(save.clipPython, 6);
+        inv.ammo357 = within(save.ammo357, 36);
+        inv.ammoAr = within(save.ammoAr, 10);
         if (inv.grenades == 0)
             inv.have &= static_cast<std::uint8_t>(~(1u << kWeaponGrenade));
         camera.yaw = save.yaw;
@@ -412,24 +445,183 @@ namespace hlrt
         }
         // What fights, what lies about, and what is in hand.
         const int ms = (vblanks * 1000 + 30) / 60;
+
+        // What the map writes on the screen: as it is come into, and when
+        // something in it says.
+        {
+            const LevelView &view = level.view;
+            if (startMessagesMs_ >= 0 && (startMessagesMs_ -= ms) < 0)
+            {
+                for (std::uint32_t i = 0; i < view.messageCount; ++i)
+                {
+                    if (view.messages[i].flags & kMessageAtStart)
+                        topText.show(view.messages[i], view.strings + view.messages[i].text);
+                }
+            }
+            for (int n = 0; n < logic.shownCount; ++n)
+            {
+                if (logic.shown[n] < view.messageCount)
+                    topText.show(view.messages[logic.shown[n]], view.strings + view.messages[logic.shown[n]].text);
+            }
+            logic.shownCount = 0;
+            topText.tick(ms);
+        }
+
+        // The lamp: its switch and its battery. (What it lights is the
+        // renderer's business: HudDraw::drawLamp, ModelDraw.)
+        {
+            const bool suit = (player.state.inv.have & kHaveSuit) != 0;
+            if (input.lampPressed && player.state.health > 0 && lampToggle(lamp, suit))
+                sound.ui(kUiSoundLamp);
+            if (lampTick(lamp, ms))
+                sound.ui(kUiSoundLamp);
+            lampLit = false;
+            if (lamp.on && !player.noclip)
+            {
+                // Where it points: what the middle of the view falls on.
+                // The lamp itself is carried a little to the right of the
+                // eyes and below them, and shines at that point: so what is
+                // near is lit a little off the view's middle, and what is
+                // far in it.
+                const fx eye[3] = {player.state.origin[0], player.state.origin[1],
+                                   player.state.origin[2] + player.state.viewHeight};
+                fx end[3], at[3], normal[3];
+                for (int a = 0; a < 3; ++a)
+                    end[a] = eye[a] + camera.forward[a] * kLampReach;
+                int distance = kLampReach;
+                if (traceShotWall(world, eye, end, at, normal))
+                {
+                    std::int64_t along = 0;
+                    for (int a = 0; a < 3; ++a)
+                        along += static_cast<std::int64_t>(at[a] - eye[a]) * camera.forward[a];
+                    distance = static_cast<int>(along >> 24);
+                    distance = distance < 16 ? 16 : (distance > kLampReach ? kLampReach : distance);
+                }
+                LampBeam &beam = lampBeam;
+                fx axis[3];
+                for (int a = 0; a < 3; ++a)
+                {
+                    beam.from[a] = eye[a] + camera.right[a] * 7 - camera.up[a] * 9;
+                    axis[a] = eye[a] + camera.forward[a] * distance - beam.from[a];
+                }
+                const fx length = fxLength(axis);
+                if (length > 0)
+                {
+                    for (int a = 0; a < 3; ++a)
+                        beam.axis[a] = static_cast<fx>((static_cast<std::int64_t>(axis[a]) << 12) / length);
+                    // Across it: the view's right, squared up to the beam,
+                    // and what is square to both.
+                    std::int32_t lean = 0;
+                    for (int a = 0; a < 3; ++a)
+                        lean += camera.right[a] * beam.axis[a];
+                    lean >>= 12;
+                    fx across[3];
+                    for (int a = 0; a < 3; ++a)
+                        across[a] = camera.right[a] - ((beam.axis[a] * lean) >> 12);
+                    const fx wide = fxLength(across);
+                    if (wide > 0)
+                    {
+                        for (int a = 0; a < 3; ++a)
+                            beam.u[a] = static_cast<fx>((static_cast<std::int64_t>(across[a]) << 12) / wide);
+                        beam.v[0] = (beam.axis[1] * beam.u[2] - beam.axis[2] * beam.u[1]) >> 12;
+                        beam.v[1] = (beam.axis[2] * beam.u[0] - beam.axis[0] * beam.u[2]) >> 12;
+                        beam.v[2] = (beam.axis[0] * beam.u[1] - beam.axis[1] * beam.u[0]) >> 12;
+                        beam.radius = lampRadius(distance);
+                        beam.reach = distance + beam.radius * 2 < kLampReach ? distance + beam.radius * 2 : kLampReach;
+                        beam.strength = lampStrength(distance);
+                        lampLit = beam.strength > 0;
+                    }
+                }
+            }
+            bottomScreen.setLamp(suit, lamp.on, lampPercent(lamp));
+            hudDraw.setLamp(lamp.on, lampPercent(lamp));
+            hudDraw.setHurt(player.view.flash, player.view.pain);
+        }
         if (!player.noclip)
         {
             const DebugLog::Perf::Scope scope(DebugLog::Section::Logic);
             monstersTick(logic, player.state, ms);
             const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                player.state.origin[2] + player.state.viewHeight};
+            const bool alive = player.state.health > 0;
             const std::uint32_t did = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
-                                                  camera.right, camera.up, input.attack,
-                                                  input.weaponPressed, ms);
+                                                  camera.right, camera.up, alive && input.attack,
+                                                  false, ms, alive && input.second, alive ? input.weaponPick : 0,
+                                                  alive && input.reloadPressed);
+            // What has broken: its pieces, each a patch of the thing's
+            // own texture, thrown from where it was.
+            for (int n = 0; n < logic.brokeCount; ++n)
+            {
+                const LevelView &view = level.view;
+                const LogicRecord &record = view.logic[logic.broke[n]];
+                if (record.brush == kNoBrush || record.brush >= view.brushCount)
+                    continue;
+                const Brush &brush = view.brushes[record.brush];
+                const Model &model = view.models[brush.model];
+                const fx *pos = brushStates_[record.brush].pos;
+                fx mins[3], maxs[3];
+                for (int a = 0; a < 3; ++a)
+                {
+                    mins[a] = fxFromInt(brush.mins[a]) + pos[a] - brush.origin[a];
+                    maxs[a] = fxFromInt(brush.maxs[a]) + pos[a] - brush.origin[a];
+                }
+                std::uint16_t textures[8];
+                int textureCount = 0;
+                for (int s = 0; s < model.surfaceCount && textureCount < 8; ++s)
+                {
+                    const std::uint16_t texture = view.surfaces[model.firstSurface + s].texture;
+                    if (texture != kNoTexture)
+                        textures[textureCount++] = texture;
+                }
+                piecesBurst(actors, mins, maxs, static_cast<int>(record.extra[1]), textures, textureCount);
+                // (The marks that were on it go with it.)
+                for (Decal &decal : actors.decals)
+                {
+                    if (decal.active && decal.brush == static_cast<std::int16_t>(record.brush))
+                        decal.active = false;
+                }
+            }
+            logic.brokeCount = 0;
+            // A round fired throws its casing out of the breech: to the
+            // right, up a little, and it falls.
+            if ((did & kWeaponFired) &&
+                (inHand_ == kWeaponGlock || inHand_ == kWeaponMp5 || inHand_ == kWeaponShotgun))
+            {
+                static std::uint32_t toss = 3;
+                toss = toss * 1664525u + 1013904223u;
+                fx from[3], velocity[3];
+                for (int a = 0; a < 3; ++a)
+                {
+                    from[a] = eye[a] + camera.forward[a] * 14 + camera.right[a] * 5 - camera.up[a] * 5;
+                    velocity[a] = player.state.velocity[a] + camera.right[a] * (70 + static_cast<int>((toss >> 9) % 40)) +
+                                  camera.up[a] * (90 + static_cast<int>((toss >> 15) % 40)) + camera.forward[a] * 15;
+                }
+                Piece &shell = pieceAdd(actors, kPieceShell, from, velocity, 2500);
+                shell.half = 1;
+                shell.colour = inHand_ == kWeaponShotgun ? RGB15(24, 5, 4) : RGB15(27, 21, 6);
+            }
+            // A shot kicks the view, each weapon its own way.
+            if (did & (kWeaponFired | kWeaponSecondary))
+            {
+                static std::uint32_t chance = 7;
+                chance = chance * 1664525u + 1013904223u;
+                viewKick(player.view, (did & kWeaponSecondary) ? 10 * kViewDegree : weaponKick(inHand_, chance >> 8));
+            }
+            if (did & kWeaponDrawn)
+                sound.ui(kUiSoundWeapon);
             if (player.state.inv.current != inHand_)
                 takeInHand();
             if (held.active)
             {
                 const bool crowbar = inHand_ == kWeaponCrowbar;
-                if (did & kWeaponFired)
+                if (did & kWeaponSecondary)
+                    actorPlay(actors, held, nameHash("grenade"), true);
+                else if (did & kWeaponFired)
                     actorPlay(actors, held,
                               nameHash(crowbar ? ((did & kWeaponHit) ? "attack1" : "attack1miss")
-                                               : (inHand_ == kWeaponGrenade ? "throw1" : "shoot")),
+                                               : (inHand_ == kWeaponGrenade
+                                                      ? "throw1"
+                                                      : (inHand_ == kWeaponPython ? "fire1" : "shoot"))),
                               true);
                 else if (did & kWeaponReload)
                     actorPlay(actors, held, nameHash("reload"), true);
@@ -458,20 +650,21 @@ namespace hlrt
                 actorRest(held);
         }
         {
-            const Inventory &inv = player.state.inv;
-            const bool pistol = inv.current == kWeaponGlock;
+            Inventory &inv = player.state.inv;
             const bool grenade = inv.current == kWeaponGrenade;
-            bottomScreen.setStatus(player.state.health, inv.armor, inv.current,
-                                   grenade ? inv.grenades : (pistol ? inv.clipGlock : inv.clipShotgun),
-                                   grenade ? 0 : (pistol ? inv.ammo9mm : inv.ammoBuck));
+            const std::int16_t *clip = gunClip(inv), *spare = gunSpare(inv);
+            bottomScreen.setStatus(inv.current, grenade ? inv.grenades : (clip != nullptr ? *clip : 0),
+                                   grenade ? 0 : (spare != nullptr ? *spare : 0), inv.have,
+                                   clip != nullptr && spare != nullptr && *clip < gunKind(inv.current).holds &&
+                                       *spare > 0);
+            hudDraw.setStatus((inv.have & kHaveSuit) != 0, player.state.health, inv.armor, inv.current,
+                              grenade ? inv.grenades : (clip != nullptr ? *clip : 0),
+                              grenade ? 0 : (spare != nullptr ? *spare : 0),
+                              inv.current == kWeaponMp5 ? inv.ammoAr : -1);
         }
         // With the eyes under, the picture dims: what there is of "under
         // water" until there is fog.
         const bool under = player.state.waterLevel == 3 && !player.noclip;
-        if (under != dimmed_)
-        {
-            dimmed_ = under;
-            setBrightness(1, under ? -7 : 0);
-        }
+        screenFade.setDim(under);
     }
 } // namespace hlrt

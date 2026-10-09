@@ -37,7 +37,14 @@
 namespace hldata
 {
     inline constexpr char kModelMagic[4] = {'H', 'L', 'M', 'D'};
-    inline constexpr std::uint16_t kModelVersion = 1;
+    inline constexpr std::uint16_t kModelVersion = 4;
+    /// A model comes at up to this many levels of detail: 0 the finest the
+    /// file has, each after it of fewer triangles. A level's error is how
+    /// far it is from the model as the game has it, in sixteenths of a
+    /// unit (the distance all but three in a hundred of the model's own
+    /// vertices are within); kModelNoLevel where the file has no such level.
+    inline constexpr int kModelLevels = 4;
+    inline constexpr std::uint8_t kModelNoLevel = 0xFF;
 
     /// Bones a batch may use: the matrix stack has 31 slots, and the world's
     /// own drawing needs the bottom one.
@@ -76,12 +83,14 @@ namespace hldata
         /// How much coarser than 1/128 unit its vertices are: 0 for nearly
         /// everything, more for a model too large to fit 16 bits otherwise.
         std::uint8_t vertexShift;
-        std::uint8_t pad[3];
+        std::uint8_t controllerCount;
+        std::uint8_t hitboxCount;
+        std::uint8_t attachmentCount;
         std::int16_t mins[3]; ///< its box at rest, whole units, model space
         std::int16_t maxs[3];
         std::uint16_t radius; ///< of a ball round its origin that holds it in any pose
-        std::uint16_t polygons; ///< the most any choice of body draws
-        std::uint32_t reserved;
+        std::uint16_t polygons; ///< the most any choice of body draws (at level 0)
+        std::uint8_t levelError[kModelLevels];
     };
 
     /// One body part: how an entity's "body" number picks a sub-model of it,
@@ -101,7 +110,13 @@ namespace hldata
         std::uint8_t bodyPart;
         std::uint8_t subModel;
         std::uint8_t boneCount;
-        std::uint8_t pad[3];
+        /// Which of the model's skins it is for: 0 for every one of them
+        /// (nearly always), n for the n-th alone (1 is the usual skin).
+        /// Where a second skin puts another picture on some part of the
+        /// model, that part is here once for each.
+        std::uint8_t skin;
+        std::uint8_t level; ///< which level of detail it is of
+        std::uint8_t pad;
         /// The bones it uses. The stream's "use slot N" is N-th of these.
         std::uint8_t bones[kModelBatchBones + 2];
     };
@@ -155,6 +170,68 @@ namespace hldata
         std::uint32_t target; ///< nameHash of a name to fire
     };
 
+    /// A bone controller: something about a bone that the game sets, on top
+    /// of what the clip being played has -- which way a turret's gun points,
+    /// how far a barnacle's tongue is let out. `index` is the number the game
+    /// sets it by (0..3).
+    ///
+    /// A turn is about an axis: of the bone's parent (`kControlTurn`, made
+    /// after the clip's own turning) or of the bone itself (`kControlTwist`,
+    /// made before it). The game adds to one of the bone's three angles; the
+    /// cooker works out which axis that comes to, for each clip (a clip may
+    /// hold the bone by quite different angles from another: ModelControlAxis,
+    /// one for each clip and controller, clip by clip). A slide is along an
+    /// axis of the parent.
+    struct ModelController
+    {
+        std::uint8_t bone;
+        std::uint8_t kind;  ///< kControl*
+        std::uint8_t index;
+        std::uint8_t flags; ///< kControlLoops
+        /// The ends of its travel: for a turn, 65536 to the whole circle; for
+        /// a slide, units in Q12. What it is set to is kept between them (a
+        /// turn that goes all the way round is wrapped, not stopped).
+        std::int32_t start;
+        std::int32_t end;
+    };
+    struct ModelControlAxis
+    {
+        std::int16_t v[3]; ///< Q14, unit
+        std::int16_t pad;
+    };
+    inline constexpr std::uint8_t kControlSlide = 0;
+    inline constexpr std::uint8_t kControlTurn = 1;
+    inline constexpr std::uint8_t kControlTwist = 2;
+    inline constexpr std::uint8_t kControlLoops = 1;
+    inline constexpr int kModelControls = 4; ///< how many the game sets by number
+
+    /// A box round part of a bone, in the bone's own space, that a shot is
+    /// tried against; `group` is the part of the body it stands for.
+    struct ModelHitbox
+    {
+        std::uint8_t bone;
+        std::uint8_t group; ///< kHit*
+        std::int16_t mins[3]; ///< sixteenths of a unit
+        std::int16_t maxs[3];
+        std::int16_t pad;
+    };
+    inline constexpr std::uint8_t kHitBody = 0;
+    inline constexpr std::uint8_t kHitHead = 1;
+    inline constexpr std::uint8_t kHitArmour = 10; ///< a turret's plating
+    inline constexpr int kHitboxShift = 4;
+
+    /// A place on a bone that something is fixed to or comes out of (a
+    /// muzzle, a turret's eye): by number, as the game knows them.
+    struct ModelAttachment
+    {
+        std::uint8_t bone;
+        std::uint8_t pad;
+        std::int16_t at[3]; ///< in the bone's space, sixteenths of a unit
+    };
+    static_assert(sizeof(ModelAttachment) == 8);
+    static_assert(sizeof(ModelController) == 12);
+    static_assert(sizeof(ModelControlAxis) == 8);
+    static_assert(sizeof(ModelHitbox) == 16);
     static_assert(sizeof(ModelHeader) == 64);
     static_assert(sizeof(ModelBatch) == 48);
     static_assert(sizeof(ModelClip) == 40);
@@ -184,6 +261,10 @@ namespace hldata
         const ModelTrack *tracks = nullptr;
         const ModelKey *keys = nullptr;
         const ModelEvent *events = nullptr;
+        const ModelController *controllers = nullptr;
+        const ModelControlAxis *controlAxes = nullptr; ///< [clip * controllerCount + controller]
+        const ModelHitbox *hitboxes = nullptr;
+        const ModelAttachment *attachments = nullptr;
 
         /// False for anything that is not a whole, consistent model of this
         /// version.
@@ -215,8 +296,32 @@ namespace hldata
             const auto *t = reinterpret_cast<const ModelTrack *>(take(h->trackCount * sizeof(ModelTrack)));
             const auto *k = reinterpret_cast<const ModelKey *>(take(h->keyCount * sizeof(ModelKey)));
             const auto *e = reinterpret_cast<const ModelEvent *>(take(h->eventCount * sizeof(ModelEvent)));
+            const auto *cs = reinterpret_cast<const ModelController *>(
+                take(h->controllerCount * sizeof(ModelController)));
+            const auto *ca = reinterpret_cast<const ModelControlAxis *>(take(
+                static_cast<std::uint64_t>(h->controllerCount) * h->clipCount * sizeof(ModelControlAxis)));
+            const auto *hb = reinterpret_cast<const ModelHitbox *>(
+                take(h->hitboxCount * sizeof(ModelHitbox)));
+            const auto *att = reinterpret_cast<const ModelAttachment *>(
+                take(h->attachmentCount * sizeof(ModelAttachment)));
             if (at != size)
                 return false;
+            for (int i = 0; i < h->attachmentCount; ++i)
+            {
+                if (att[i].bone >= h->boneCount)
+                    return false;
+            }
+            for (int i = 0; i < h->controllerCount; ++i)
+            {
+                if (cs[i].bone >= h->boneCount || cs[i].index >= kModelControls ||
+                    cs[i].kind > kControlTwist)
+                    return false;
+            }
+            for (int i = 0; i < h->hitboxCount; ++i)
+            {
+                if (hb[i].bone >= h->boneCount)
+                    return false;
+            }
 
             for (int i = 0; i < h->boneCount; ++i)
             {
@@ -232,7 +337,8 @@ namespace hldata
             {
                 if (static_cast<std::uint64_t>(b[i].gxOfs) + b[i].gxWords > h->gxWordCount ||
                     b[i].boneCount > kModelBatchBones || b[i].bodyPart >= h->bodyPartCount ||
-                    b[i].subModel >= bp[b[i].bodyPart].count)
+                    b[i].subModel >= bp[b[i].bodyPart].count || b[i].level >= kModelLevels ||
+                    h->levelError[b[i].level] == kModelNoLevel)
                     return false;
                 for (int n = 0; n < b[i].boneCount; ++n)
                 {
@@ -264,6 +370,10 @@ namespace hldata
             tracks = t;
             keys = k;
             events = e;
+            controllers = cs;
+            controlAxes = ca;
+            hitboxes = hb;
+            attachments = att;
             return true;
         }
 
@@ -278,11 +388,21 @@ namespace hldata
             return -1;
         }
 
-        /// Whether `batch` is part of the model for this "body" number.
-        bool batchInBody(const ModelBatch &batch, int body) const
+        /// Whether `batch` is part of the model for this "body" number, in
+        /// this skin (0: the usual one).
+        bool batchInBody(const ModelBatch &batch, int body, int skin = 0, int level = 0) const
         {
             const ModelBodyPart &part = bodyParts[batch.bodyPart];
-            return (body < 0 ? 0 : body) / part.base % part.count == batch.subModel;
+            return batch.level == level && (body < 0 ? 0 : body) / part.base % part.count == batch.subModel &&
+                   (batch.skin == 0 || batch.skin == skin + 1);
+        }
+        /// How many levels of detail the file has (at least one).
+        int levelCount() const
+        {
+            int count = 1;
+            while (count < kModelLevels && header->levelError[count] != kModelNoLevel)
+                ++count;
+            return count;
         }
     };
 

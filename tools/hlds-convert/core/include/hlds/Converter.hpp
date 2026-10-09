@@ -59,12 +59,36 @@ namespace hlds
         int models = 0;      ///< models cooked for the map's actors
         int actors = 0;
         int modelKb = 0;     ///< their files, skins apart
+        int modelKbDsi = 0;  ///< ... as a DSi loads them (with the game's own meshes on top)
+        /// Their triangles, one of each, added up: at the finest level a DS
+        /// has, at the coarsest, and as the game has them (a DSi's finest).
+        int modelTriangles = 0;
+        int modelTrianglesFar = 0;
+        int modelTrianglesFull = 0;
         int modelTexelKb = 0; ///< their skins, in texels
         int sounds = 0;       ///< sounds the map plays
         int soundKb = 0;      ///< what they take in memory on the console
         int soundsHalved = 0; ///< of them, cooked at half the rate to fit
+        int soundKbDsi = 0;   ///< what they take on a DSi, which has the better copies
+        int soundsTwinned = 0; ///< how many have a better copy for a DSi
         int soundsMissing = 0; ///< named by the map, not in the game folder
+        int sprites = 0;       ///< sprites the map draws
+        int spriteTexelKb = 0; ///< what their atlases take of texture memory
+        int spritesMissing = 0;
         int musicTracks = 0;  ///< tracks of music the map starts
+    };
+
+    /// What was cooked for the card as a whole (UiCook.hpp).
+    struct CommonResult
+    {
+        int fonts = 0;     ///< of the three
+        bool hud = false;  ///< the head-up display's pictures
+        bool loading = false;
+        bool icons = false; ///< the weapons' pictures for the touch screen
+        bool title = false; ///< the game's title
+        bool decals = false; ///< the marks shots and blood leave
+        int sounds = 0;    ///< the menu's
+        std::vector<std::string> warnings;
     };
 
     class Converter
@@ -84,6 +108,13 @@ namespace hlds
         /// The game's maps, lower-case, without extension, sorted.
         std::vector<std::string> listMaps() const;
 
+        /// Cook what belongs to the card, not to a map: the fonts, the
+        /// head-up display, the loading picture, the menu's sounds. Whatever
+        /// the game folder has not got is said and gone without.
+        CommonResult cookCommon();
+        /// What the last cookMaps made of that.
+        const CommonResult &common() const { return common_; }
+
         /// Cook one map and its textures. Does not touch the manifest.
         MapResult cookMap(const std::string &name);
 
@@ -100,5 +131,6 @@ namespace hlds
         bool findMap(const std::string &name, std::filesystem::path &out) const;
 
         ConvertOptions options_;
+        CommonResult common_;
     };
 } // namespace hlds

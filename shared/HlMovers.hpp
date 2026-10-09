@@ -74,6 +74,9 @@ namespace hldata
     {
         Hull standing;
         Hull crouched;
+        /// Where something 64 units across has room (the world alone: see
+        /// walkStep). With no nodes -- a world not given one -- everywhere.
+        Hull large;
         const MoverHull *movers = nullptr;
         int moverCount = 0;
         const LadderVolume *ladders = nullptr;

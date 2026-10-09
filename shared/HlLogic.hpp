@@ -30,6 +30,7 @@
 #include "HlActors.hpp"
 #include "HlPlayerMove.hpp"
 #include "HlSound.hpp"
+#include "HlSprite.hpp"
 #include "HlWalk.hpp"
 
 namespace hldata
@@ -43,7 +44,19 @@ namespace hldata
         /// How it is turned about `pos`: pitch, yaw, roll, in turns (65536
         /// to the circle). Only doors on hinges and fans are ever not 0.
         std::uint16_t angles[3];
+        /// How solid it is drawn, if something (an env_render) has said
+        /// otherwise than its record: 1..31, or kBrushUnseen; 0: as made.
+        std::uint8_t look;
+        /// Which face its '+' textures show: 0 their own, 1 the other (the
+        /// game's "frame": a button pressed in, a light fixture switched
+        /// off, a charger with nothing left). Worked out each tick from what
+        /// the thing is doing.
+        std::uint8_t frame;
+        /// How far a conveyor's belt has slid: texels (Q12), round and
+        /// round every 1024.
+        fx scroll;
     };
+    inline constexpr std::uint8_t kBrushUnseen = 32;
 
     enum class MoveState : std::uint8_t
     {
@@ -168,9 +181,23 @@ namespace hldata
         /// then nothing is heard.
         const LogicSound *sounds = nullptr;
         SoundQueue *heard = nullptr;
+        /// What soldiers call out (Section::Speech), if the map has it.
+        const std::uint16_t *speech = nullptr;
         /// Set when the map starts a track of music: its number. The caller
         /// plays it, and sets this back to -1.
         int musicRequest = -1;
+        /// What the map has asked to be written on the screen since the
+        /// caller last looked (indices into the level's Messages): the
+        /// caller shows them and sets the count back to 0.
+        std::uint16_t shown[4] = {};
+        int shownCount = 0;
+        /// What has broken since the caller last looked (record indices):
+        /// the caller throws its pieces and sets the count back to 0. And
+        /// the way the blow that last struck something was going (Q12),
+        /// for which way they are thrown.
+        std::uint16_t broke[4] = {};
+        int brokeCount = 0;
+        fx struckFrom[3] = {0, 0, 0};
 
         /// One byte per path corner, the caller's: what has changed about a
         /// track node since the map started (kNodeOff, kNodeSpent). May be
@@ -188,6 +215,20 @@ namespace hldata
 
         LogicEvent events[kMaxLogicEvents];
         int eventsDropped = 0; ///< fires lost because the queue was full
+
+        // What is seen and felt (HlEffects.hpp). The view's shake: how long
+        // it has left, of how long, and how far it throws the eye at its
+        // worst. The screen's fade: how dark it is now, of 16 (the caller
+        // sets the screen's brightness by it).
+        std::int32_t shakeMs = 0, shakeWholeMs = 0;
+        fx shakeAmplitude = 0;
+        bool fading = false, fadeFrom = false;
+        std::int32_t fadeMs = 0, fadeWholeMs = 0, fadeHoldMs = 0;
+        std::uint8_t fadeDark = 0, fadeLevel = 0;
+        std::uint32_t effectSeed = 4711;
+        /// The level's Sprites, for how many frames each has; may be null.
+        const SpriteRef *sprites = nullptr;
+        int spriteCount = 0;
 
         /// Set when the map asks for the game to be saved: the caller does
         /// it, and clears this.
@@ -377,6 +418,9 @@ namespace hldata
                          int depth = 0);
 
     /// Use every live entity called `name`.
+    /// (HlEffects.hpp: the env_ entities that are only seen and felt.)
+    inline void effectUse(LogicWorld &w, PlayerState &player, int index, int useType);
+
     inline void logicFire(LogicWorld &w, PlayerState &player, std::uint16_t name, int caller,
                           int useType, int depth)
     {
@@ -387,6 +431,14 @@ namespace hldata
             if (w.records[i].name == name && !w.states[i].dead)
                 logicUse(w, player, i, caller, useType, depth + 1);
         }
+        // A turret by that name is switched: it finds out when it next
+        // thinks (HlMonsters.hpp).
+        for (int i = 0; w.actors != nullptr && i < w.actors->count; ++i)
+        {
+            ActorState &actor = w.actors->states[i];
+            if (actor.active && actor.name == name && isTurret(actor.kind))
+                actor.switched = static_cast<std::uint8_t>(1 + useType);
+        }
     }
 
     /// Remove every entity called `name`: it stops working, and if it is a
@@ -395,6 +447,18 @@ namespace hldata
     {
         if (name == 0)
             return;
+        // (Someone, as well as something: the people and monsters a map
+        // has done with are taken away like this.)
+        for (int i = 0; w.actors != nullptr && i < w.actors->count; ++i)
+        {
+            ActorState &actor = w.actors->states[i];
+            if (!actor.active || actor.name != name)
+                continue;
+            if (actor.script >= 0 && actor.script < w.recordCount)
+                w.states[actor.script].dead = true;
+            actor.active = false;
+            actorPlaceBox(*w.actors, i);
+        }
         for (int i = 0; i < w.recordCount; ++i)
         {
             if (w.records[i].name != name)
@@ -772,6 +836,11 @@ namespace hldata
     inline void logicHurt(PlayerState &player, std::int32_t amount)
     {
         player.health -= amount;
+        if (amount > 0)
+        {
+            player.hurt += amount;
+            player.hurtKnown = false;
+        }
         if (player.health > 100)
             player.health = 100;
     }
@@ -788,6 +857,8 @@ namespace hldata
                 return;
             state.dead = true;
             state.timer = -1;
+            if (w.brokeCount < 4)
+                w.broke[w.brokeCount++] = static_cast<std::uint16_t>(index);
             recordSound(w, index, false); // what it is made of, breaking
             if (record.brush != kNoBrush)
             {
@@ -2014,9 +2085,29 @@ namespace hldata
                 logicUseTargets(w, player, index, kUseToggle, depth);
             break;
 
+        case LogicKind::Sprite:
+        case LogicKind::Beam:
+        case LogicKind::Explosion:
+        case LogicKind::Shake:
+        case LogicKind::Spark:
+        case LogicKind::Shooter:
+        case LogicKind::Render:
+        case LogicKind::Fade:
+            effectUse(w, player, index, useType);
+            break;
+
         case LogicKind::Music:
             w.musicRequest = static_cast<int>(record.extra[0]);
             state.dead = true; // a track is started once
+            break;
+
+        case LogicKind::Message:
+            // (More at once than there is room for: the last stands.)
+            if (w.shownCount == 4)
+                --w.shownCount;
+            w.shown[w.shownCount++] = static_cast<std::uint16_t>(record.extra[0]);
+            if (record.flags & kLogicFireOnce)
+                state.dead = true;
             break;
 
         case LogicKind::Maker:
@@ -2051,8 +2142,19 @@ namespace hldata
             }
             break;
 
+        case LogicKind::Static:
+            // Something that is only there -- and, if it wears a '+'
+            // texture, shows its other face while this is set: the light
+            // fixtures a switch turns off and on.
+            state.bits ^= 1;
+            break;
+
+        case LogicKind::Conveyor:
+            state.bits ^= 1; // the other way
+            break;
+
         default:
-            // Static, and the triggers: a trigger volume cannot be "used", only
+            // The triggers: a trigger volume cannot be "used", only
             // entered.
             break;
         }
@@ -2068,6 +2170,9 @@ namespace hldata
         w.eventsDropped = 0;
 
         w.viewTurn = 0;
+        w.shakeMs = 0;
+        w.fading = false;
+        w.fadeLevel = 0;
         w.musicRequest = -1;
         for (int c = 0; c < w.cornerCount && w.cornerState != nullptr; ++c)
             w.cornerState[c] = (w.corners[c].flags & kCornerDisabled) ? kNodeOff : 0;
@@ -2075,6 +2180,9 @@ namespace hldata
         for (int b = 0; b < w.brushCount; ++b)
         {
             w.brushStates[b].active = (w.brushes[b].flags & kBrushStartsOff) == 0;
+            w.brushStates[b].look = 0;
+            w.brushStates[b].frame = 0;
+            w.brushStates[b].scroll = 0;
             logicPlaceBrush(w, b, w.brushes[b].origin);
         }
         int ladderSlot = 0;
@@ -2084,7 +2192,10 @@ namespace hldata
             LogicState &state = w.states[i];
             state = LogicState();
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Maker) ||
-                record.kind == static_cast<std::uint8_t>(LogicKind::Ambient))
+                record.kind == static_cast<std::uint8_t>(LogicKind::Ambient) ||
+                record.kind == static_cast<std::uint8_t>(LogicKind::Sprite) ||
+                record.kind == static_cast<std::uint8_t>(LogicKind::Beam) ||
+                record.kind == static_cast<std::uint8_t>(LogicKind::Spark))
                 state.running = (record.flags & kLogicStartOpen) != 0;
 
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Ladder) && w.ladders != nullptr)
@@ -2482,6 +2593,54 @@ namespace hldata
                     logicUse(w, player, i, -1, kUseToggle);
             }
         }
+
+        // 4. What each brush shows of its textures, and the conveyors.
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            const LogicState &state = w.states[i];
+            if (record.brush == kNoBrush || record.brush >= w.brushCount)
+                continue;
+            BrushState &brush = w.brushStates[record.brush];
+            switch (static_cast<LogicKind>(record.kind))
+            {
+            case LogicKind::Button:
+                brush.frame = state.move != MoveState::AtBottom;
+                break;
+            case LogicKind::Static:
+                brush.frame = state.bits & 1;
+                break;
+            case LogicKind::HealthCharger:
+            case LogicKind::SuitCharger:
+                brush.frame = state.bits >= record.extra[0]; // nothing left in it
+                break;
+            case LogicKind::Conveyor:
+            {
+                if (state.dead || !brush.active)
+                    break;
+                const int way = (state.bits & 1) ? -1 : 1;
+                brush.scroll = (brush.scroll + static_cast<fx>((static_cast<std::int64_t>(record.speed) * way * ms) / 1000)) &
+                               (fxFromInt(1024) - 1);
+                // Whoever stands on it goes with it, as far as the world
+                // lets them.
+                if (!(record.extra[0] & 1) && player.onGround && player.groundMover == static_cast<int>(record.brush) &&
+                    w.world != nullptr)
+                {
+                    fx to[3];
+                    for (int a = 0; a < 3; ++a)
+                        to[a] = player.origin[a] + static_cast<fx>((static_cast<std::int64_t>(record.move[a]) * way * ms) / 1000);
+                    if (positionFree(*w.world, player.ducked, to))
+                    {
+                        for (int a = 0; a < 3; ++a)
+                            player.origin[a] = to[a];
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        }
     }
 
     /// What USE would work on: the nearest usable thing within reach that the
@@ -2540,3 +2699,7 @@ namespace hldata
         return best;
     }
 } // namespace hldata
+
+// (The env_ entities that are only seen and felt are used from here and are
+// in HlEffects.hpp, which comes with the monsters: an explosion hurts.)
+#include "HlMonsters.hpp"

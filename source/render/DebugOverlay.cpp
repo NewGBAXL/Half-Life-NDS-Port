@@ -4,12 +4,16 @@
 
 #include "DebugLog.hpp"
 #include "Global.hpp"
+#include "Settings.hpp"
+#include "data/ModelCache.hpp"
 #include "data/TextureCache.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
 #include "audio/DspAudio.hpp"
 #include "audio/Sound.hpp"
+#include "render/BottomScreen.hpp"
+#include "render/ModelDraw.hpp"
 #include "render/WorldDraw.hpp"
 
 namespace hlrt
@@ -27,7 +31,7 @@ namespace hlrt
 
     void DebugOverlay::frame()
     {
-        if (--countdown_ > 0)
+        if (!settings.debugReadout || --countdown_ > 0)
             return;
         countdown_ = kInterval;
 
@@ -46,15 +50,24 @@ namespace hlrt
             // CUT marks a frame where the walk ran out of budget and dropped
             // the far end of the view.
             // pN: the pressure the view is under, when it is (WorldDraw).
-            std::snprintf(line, sizeof(line), "leaf %4d surf %4d br %2d %s%.0d %s", stats.leaf,
+        {
+            // (... and the level of detail each model drawn is at, nearest
+            // first: 0 the finest its file has.)
+            char levels[12];
+            modelDraw.levelsText(levels, sizeof(levels));
+            std::snprintf(line, sizeof(line), "leaf %4d surf %3d br %2d %s%.0d %s L%s", stats.leaf,
                           stats.surfaces, stats.brushes, worldDraw.pressure() ? "p" : "",
-                          worldDraw.pressure(), stats.budgetHit ? "CUT" : "");
+                          worldDraw.pressure(), stats.budgetHit ? "CUT" : "", levels);
+        }
             break;
         case 2:
             // "chosen/used": what the level's own counts said, then what the
             // geometry engine reports after clipping.
-            std::snprintf(line, sizeof(line), "poly %4d/%4d vert %4d/%4d", stats.polygons,
-                          stats.hwPolygons, stats.vertices, stats.hwVertices);
+            // ... and "m": the textures and skins of this map that did not
+            // load (none, unless video memory ran out).
+            std::snprintf(line, sizeof(line), "poly %4d/%4d vert %4d/%4d m%d", stats.polygons,
+                          stats.hwPolygons, stats.vertices, stats.hwVertices,
+                          textureCache.missing() + modelCache.missing() + modelCache.bare());
             break;
         case 3:
             std::snprintf(line, sizeof(line), "pos %5d %5d %5d %s",
@@ -76,9 +89,13 @@ namespace hlrt
                               static_cast<unsigned long>(dspAudio.dry()), dspAudio.faults(),
                               static_cast<unsigned long>(dspAudio.block()), dspAudio.heard());
             else
-                std::snprintf(line, sizeof(line), "heap %5uK tex %3d miss %d",
+                // (... and how many voices each layer has: the player's,
+                // the world's, the voice, the loops, the menu.)
+                std::snprintf(line, sizeof(line), "heap %5uK snd %d %d %d %d %d",
                               static_cast<unsigned>(global.heapHeadroom() / 1024),
-                              textureCache.count(), textureCache.missing());
+                              sound.voicesOf(hldata::SoundLayer::Player), sound.voicesOf(hldata::SoundLayer::World),
+                              sound.voicesOf(hldata::SoundLayer::Voice), sound.voicesOf(hldata::SoundLayer::Ambience),
+                              sound.voicesOf(hldata::SoundLayer::Ui));
             break;
         case 5:
             // The hardware's own account (GpuStats): the least lead the
@@ -112,7 +129,7 @@ namespace hlrt
             line[0] = '\0';
             break;
         }
-        std::printf("\x1b[%d;0H%-32.32s", row_, line);
+        bottomScreen.readout(row_, line);
         row_ = (row_ + 1) % kRows;
     }
 } // namespace hlrt

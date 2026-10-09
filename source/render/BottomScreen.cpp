@@ -1,11 +1,13 @@
+#include "global_header.hpp"
+
 #include "render/BottomScreen.hpp"
 
-#include <cstdio>
-
-#include <nds.h>
-
+#include "HlPlayerMove.hpp"
 #include "Settings.hpp"
-#include "game/Input.hpp"
+#include "Global.hpp"
+#include "HlTouchLayout.hpp"
+#include "HlUi.hpp"
+#include "ui/TouchCanvas.hpp"
 
 namespace hlrt
 {
@@ -13,179 +15,337 @@ namespace hlrt
 
     namespace
     {
-        PrintConsole pad;
+        using namespace hldata;
 
-        /// A box of text cells with a label in the middle.
-        void drawButton(int column, int row, int columns, int rows, const char *label, int labelLen)
+        // The weapons' pictures (ui/weapons.hic), if the card has them.
+        std::uint32_t iconWords[(sizeof(IconsHeader) + kWeaponIcons * kIconMaxHeight * iconRowWords(kIconMaxWidth) * 4) / 4];
+        IconsView icons;
+
+        // What a control is drawn in: at rest a dim amber line on the
+        // screen's own dark, held (or in hand) the full amber on a lit
+        // plate.
+        void plate(const TouchRect &r, bool lit, bool faint = false)
         {
-            for (int y = 0; y < rows; ++y)
-            {
-                std::printf("\x1b[%d;%dH", row + y, column);
-                for (int x = 0; x < columns; ++x)
-                {
-                    const bool edge = y == 0 || y == rows - 1 || x == 0 || x == columns - 1;
-                    std::putchar(edge ? '#' : ' ');
-                }
-            }
-            std::printf("\x1b[%d;%dH%s", row + rows / 2, column + (columns - labelLen) / 2, label);
+            touchCanvas.canvas().plate(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4, lit ? kUiPanelDown : kUiBack,
+                                       lit ? kUiOrange + 2 : (faint ? kUiPanel : kUiOrange));
         }
 
-        /// Clear the rows this screen owns. Not the whole console: rows 0..7
-        /// are where the debug readout lands when NEA has to put it here.
-        void clearOwnRows()
+        void label(const TouchRect &r, const char *text, bool lit)
         {
-            for (int row = 8; row < 24; ++row)
-                std::printf("\x1b[%d;0H%32s", row, "");
+            Canvas &canvas = touchCanvas.canvas();
+            const FontView &font = touchCanvas.font(kFontSmall);
+            plate(r, lit);
+            drawTextCentred(canvas, font, r.x + r.w / 2, r.y + (r.h - font.height()) / 2, text,
+                            inkFor(font, lit ? kUiWhite : kUiOrange));
+        }
+
+        /// A chevron, its point up or down, five lines thick.
+        void chevron(int cx, int cy, bool up, int colour)
+        {
+            Canvas &canvas = touchCanvas.canvas();
+            for (int t = 0; t < 5; ++t)
+            {
+                const int tip = up ? cy - 7 + t : cy + 7 - t, base = up ? cy + 3 + t : cy - 3 - t;
+                canvas.line(cx - 11, base, cx, tip, colour);
+                canvas.line(cx + 11, base, cx, tip, colour);
+            }
+        }
+
+        /// A ring, `thick` pixels of it inwards from `radius`.
+        void ring(int cx, int cy, int radius, int thick, int colour)
+        {
+            Canvas &canvas = touchCanvas.canvas();
+            const int outer = radius * radius, inner = (radius - thick) * (radius - thick);
+            for (int y = -radius; y <= radius; ++y)
+            {
+                for (int x = -radius; x <= radius; ++x)
+                {
+                    const int d = x * x + y * y;
+                    if (d <= outer && d > inner)
+                        canvas.pixel(cx + x, cy + y, colour);
+                }
+            }
         }
     } // namespace
 
     void BottomScreen::create()
     {
-        if (created_)
+        touchCanvas.create();
+    }
+
+    void BottomScreen::reset()
+    {
+        touchCanvas.reset();
+        shown_ = Shown::Nothing;
+    }
+
+    void BottomScreen::release()
+    {
+        shown_ = Shown::Nothing;
+    }
+
+    void BottomScreen::loadIcons()
+    {
+        if (iconsTried_)
             return;
-        created_ = true;
+        iconsTried_ = true;
+        if (!global.hasFat)
+            return;
+        std::FILE *file = std::fopen(global.dataPath(kWeaponIconsFile).c_str(), "rb");
+        if (file == nullptr)
+            return;
+        const std::size_t size = std::fread(iconWords, 1, sizeof(iconWords), file);
+        std::fclose(file);
+        icons.open(reinterpret_cast<const std::uint8_t *>(iconWords), size);
+    }
 
-        // In two-pass mode NEA's debug console is already on this screen
-        // (background 3, the same bank, map base 4), so the layers that are
-        // switched on are kept, not wiped: videoSetModeSub() assigns the whole
-        // register.
-        const std::uint32_t layers = REG_DISPCNT_SUB & 0x1F00;
-        videoSetModeSub(MODE_0_2D);
-        REG_DISPCNT_SUB |= layers;
-        vramSetBankH(VRAM_H_SUB_BG);
+    void BottomScreen::drawBar()
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const TouchLayout at = touchLayout(mirrored_);
+        label(at.menu, "MENU", held_ == kTouchMenu);
+        label(at.use, "USE", held_ == kTouchUse);
+        // RELOAD is faint while there is nothing to reload: no gun in
+        // hand, a full one, or nothing carried for it.
+        if (canReload_ || held_ == kTouchReload)
+        {
+            label(at.reload, "RELOAD", held_ == kTouchReload);
+        }
+        else
+        {
+            const FontView &font = touchCanvas.font(kFontSmall);
+            plate(at.reload, false, true);
+            drawTextCentred(canvas, font, at.reload.x + at.reload.w / 2, at.reload.y + (at.reload.h - font.height()) / 2,
+                            "RELOAD", inkFor(font, kUiGrey));
+        }
+    }
 
-        // Not the default console: that one is NEA's, and every debug printf
-        // in the port goes to it. This one is selected only while this screen
-        // is drawn.
-        //
-        // The previous console is taken BEFORE consoleInit, not after:
-        // consoleInit selects the console it sets up, so asking afterwards
-        // returns the pad itself and "restoring" it leaves every later printf
-        // on the touch screen.
-        PrintConsole *previous = consoleSelect(&pad);
-        consoleInit(&pad, 0, BgType_Text4bpp, BgSize_T_256x256, 7, 0, false, true);
-        BG_PALETTE_SUB[0] = RGB15(2, 2, 3);
-        consoleSelect(previous);
+    void BottomScreen::drawPad()
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const TouchRect r = touchLayout(mirrored_).pad;
+        canvas.plate(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 6, kUiBack, kUiOrange);
+        // The mark of the place in its middle, as faint as a line can be:
+        // it is where the stylus rests, not something to read.
+        const int cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+        ring(cx, cy, 30, 4, kUiPanel);
+        for (int t = 0; t < 5; ++t)
+        {
+            canvas.line(cx - 7 + t, cy - 17, cx + 9 + t, cy + 17, kUiPanel);
+            canvas.line(cx - 1 + t, cy - 3, cx - 13 + t, cy + 17, kUiPanel);
+        }
+        canvas.fill(cx - 12, cy - 17, 10, 3, kUiPanel);
+        // ... and a tick at the middle of each side.
+        canvas.fill(cx - 8, r.y + 1, 16, 2, kUiOrange);
+        canvas.fill(cx - 8, r.y + r.h - 3, 16, 2, kUiOrange);
+        canvas.fill(r.x + 1, cy - 8, 2, 16, kUiOrange);
+        canvas.fill(r.x + r.w - 3, cy - 8, 2, 16, kUiOrange);
+    }
 
-        showPad();
+    void BottomScreen::drawColumn()
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const TouchLayout at = touchLayout(mirrored_);
+        const FontView &font = touchCanvas.font(kFontSmall);
+        const struct
+        {
+            const TouchRect &r;
+            const char *name;
+            bool up, lit;
+        } buttons[] = {{at.jump, "JUMP", true, held_ == kTouchJump}, {at.duck, "DUCK", false, held_ == kTouchDuck}};
+        for (const auto &b : buttons)
+        {
+            plate(b.r, b.lit);
+            const int cx = b.r.x + b.r.w / 2;
+            chevron(cx, b.r.y + (b.up ? 15 : b.r.h - 15), b.up, b.lit ? kUiWhite + 2 : kUiOrange + 1);
+            drawTextCentred(canvas, font, cx, b.up ? b.r.y + b.r.h - font.height() - 3 : b.r.y + 3, b.name,
+                            inkFor(font, b.lit ? kUiWhite : kUiOrange));
+        }
+        // Between them the lamp: a bulb with its rays, lit while it is
+        // alight, and under it what is left in it. Faint with no suit to
+        // have one.
+        {
+            const TouchRect &r = at.lamp;
+            const bool lit = lampOn_ || held_ == kTouchLamp;
+            plate(r, lit, !lampSuit_);
+            const int colour = !lampSuit_ ? kUiGrey : (lit ? kUiWhite + 2 : kUiOrange + 1);
+            const int cx = r.x + 13, cy = r.y + 12;
+            ring(cx, cy, 5, lampOn_ ? 5 : 2, colour);
+            for (int k = 0; k < 3; ++k)
+            {
+                // (Three rays, out to the side the gauge's numbers are.)
+                const int dy = (k - 1) * 5;
+                canvas.line(cx + 8, cy + dy, cx + 13, cy + dy + (k - 1) * 2, lampOn_ ? colour : (lampSuit_ ? kUiOrange : kUiGrey));
+            }
+            if (lampSuit_)
+            {
+                char text[8];
+                std::snprintf(text, sizeof(text), "%d", lampBar_ < 0 ? 0 : lampBar_ * 100 / (r.w - 10));
+                drawText(canvas, font, r.x + r.w - 5 - textWidth(font, text), r.y + 12 - font.height() / 2, text,
+                         inkFor(font, lit ? kUiWhite : kUiOrange));
+                // The gauge.
+                const int wide = r.w - 10, left = r.x + 5, top = r.y + r.h - 9;
+                canvas.fill(left, top, wide, 4, lit ? kUiBack : kUiTrack);
+                canvas.fill(left, top, lampBar_ < 0 ? 0 : lampBar_, 4, lampBar_ * 5 < wide ? kUiRed : kUiOrange + 2);
+            }
+        }
+    }
+
+    void BottomScreen::setLamp(bool suit, bool on, int percent)
+    {
+        const int bar = suit ? percent * (touchLayout(false).lamp.w - 10) / 100 : -1;
+        if (suit == lampSuit_ && on == lampOn_ && bar == lampBar_)
+            return;
+        lampSuit_ = suit;
+        lampOn_ = on;
+        lampBar_ = bar;
+        if (shown_ == Shown::Pad)
+            drawColumn();
+    }
+
+    void BottomScreen::drawSlots()
+    {
+        // (What a slot says with no picture to show.)
+        static const char *const kNames[kTouchSlots] = {"BAR", "9MM", "SHOT", "GREN", "MP5", ".357"};
+        Canvas &canvas = touchCanvas.canvas();
+        const TouchLayout at = touchLayout(mirrored_);
+        const FontView &font = touchCanvas.font(kFontSmall);
+        loadIcons();
+        for (int n = 0; n < kTouchSlots; ++n)
+        {
+            const TouchRect &r = at.slot[n];
+            const int weapon = n + 1;
+            const bool carried = (have_ & (1u << weapon)) != 0, inHand = carried && weapon == weapon_;
+            plate(r, inHand, !carried);
+            if (!carried)
+                continue;
+            const int cx = r.x + r.w / 2;
+            const int top = r.y + (inHand && weapon != kWeaponCrowbar ? 3 : (r.h - icons.height()) / 2);
+            if (n < icons.count())
+            {
+                // The game's picture: dim while it waits, bright in hand.
+                const int inks[4] = {0, inHand ? kUiOrange + 1 : kUiOrange, inHand ? kUiOrange + 2 : kUiOrange + 1,
+                                     inHand ? kUiWhite + 2 : kUiOrange + 1};
+                const int left = cx - icons.width() / 2;
+                for (int y = 0; y < icons.height(); ++y)
+                {
+                    for (int x = 0; x < icons.width(); ++x)
+                    {
+                        if (const int level = icons.level(n, x, y))
+                            canvas.pixel(left + x, top + y, inks[level]);
+                    }
+                }
+            }
+            else
+            {
+                drawTextCentred(canvas, font, cx, r.y + (inHand && weapon != kWeaponCrowbar ? 3 : (r.h - font.height()) / 2),
+                                kNames[n], inkFor(font, inHand ? kUiWhite : kUiOrange));
+            }
+            if (!inHand || weapon == kWeaponCrowbar)
+                continue;
+            // Under it, what is in it and what is carried for it -- or as
+            // much of that as the slot is wide. (Grenades are a count of
+            // themselves.)
+            char text[16];
+            std::snprintf(text, sizeof(text), "%d/%d", clip_, spare_);
+            if (weapon == kWeaponGrenade || textWidth(font, text) > r.w - 6)
+                std::snprintf(text, sizeof(text), "%d", clip_);
+            drawTextCentred(canvas, font, cx, r.y + r.h - font.height() - 1, text, inkFor(font, kUiWhite));
+        }
     }
 
     void BottomScreen::showPad()
     {
-        PrintConsole *previous = consoleSelect(&pad);
-        clearOwnRows();
-        std::printf("\x1b[10;3HDRAG  look around");
-        std::printf("\x1b[11;3HTAP TWICE  jump");
-        std::printf("\x1b[12;3HD-pad / ABXY  move");
-        std::printf("\x1b[13;3HL  fire / swing");
-        std::printf("\x1b[14;3HSTART  menu");
-
-        // Text cells are 8 pixels, so the buttons' pixel rectangles become
-        // cell rectangles by dividing by 8.
-        const int columns = Input::kButtonWidth / 8;
-        const int top = Input::kButtonTop / 8;
-        const int rows = 24 - top;
-        drawButton(Input::kUseLeft / 8, top, columns, rows, "USE", 3);
-        drawButton(32 - columns, top, columns, rows, "DUCK", 4);
-        drawButton(Input::kWeaponLeft / 8, Input::kWeaponTop / 8, columns,
-                   (Input::kWeaponBottom - Input::kWeaponTop) / 8, "WEAPON", 6);
-        drawStatus();
-        consoleSelect(previous);
-        padShown_ = true;
+        create();
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        shown_ = Shown::Pad;
+        mirrored_ = settings.leftHanded;
+        drawBar();
+        drawPad();
+        drawColumn();
+        drawSlots();
     }
 
-    void BottomScreen::drawStatus()
+    void BottomScreen::setStatus(int weapon, int clip, int spare, unsigned have, bool canReload)
     {
-        static const char *const kNames[] = {"", "CROWBAR", "PISTOL", "SHOTGUN", "GRENADES"};
-        std::printf("\x1b[8;2HHEALTH %3d    ARMOUR %3d", health_ < 0 ? 0 : health_, armor_);
-        if (weapon_ <= 0 || weapon_ > 4)
-            std::printf("\x1b[9;2H%-28s", "");
-        else if (weapon_ == 1)
-            std::printf("\x1b[9;2H%-28s", kNames[1]);
-        else if (weapon_ == 4)
-            std::printf("\x1b[9;2H%-8s %3d                ", kNames[4], clip_);
-        else
-            std::printf("\x1b[9;2H%-8s %3d / %-3d          ", kNames[weapon_], clip_, spare_);
-    }
-
-    void BottomScreen::setStatus(int health, int armor, int weapon, int clip, int spare)
-    {
-        if (health == health_ && armor == armor_ && weapon == weapon_ && clip == clip_ &&
-            spare == spare_)
-            return;
-        health_ = health;
-        armor_ = armor;
+        const bool bar = canReload != canReload_;
+        const bool slots = weapon != weapon_ || clip != clip_ || spare != spare_ || have != have_;
+        canReload_ = canReload;
         weapon_ = weapon;
         clip_ = clip;
         spare_ = spare;
-        if (!padShown_)
+        have_ = have;
+        if (shown_ != Shown::Pad)
             return;
-        PrintConsole *previous = consoleSelect(&pad);
-        drawStatus();
-        consoleSelect(previous);
+        if (bar)
+            drawBar();
+        if (slots)
+            drawSlots();
+    }
+
+    void BottomScreen::setPressed(int held)
+    {
+        if (held == held_)
+            return;
+        const int was = held_;
+        held_ = held;
+        if (shown_ != Shown::Pad)
+            return;
+        // (A slot shows what is in hand, not what is touched.)
+        auto onBar = [](int on) { return on == kTouchMenu || on == kTouchUse || on == kTouchReload; };
+        if (onBar(was) || onBar(held))
+            drawBar();
+        auto onColumn = [](int on) { return on == kTouchJump || on == kTouchDuck || on == kTouchLamp; };
+        if (onColumn(was) || onColumn(held))
+            drawColumn();
     }
 
     void BottomScreen::showMessage(const char *line1, const char *line2)
     {
-        padShown_ = false;
-        PrintConsole *previous = consoleSelect(&pad);
-        clearOwnRows();
-        std::printf("\x1b[12;2H%.28s", line1);
-        std::printf("\x1b[14;2H%.28s", line2);
-        consoleSelect(previous);
+        create();
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        shown_ = Shown::Message;
+        const FontView &title = touchCanvas.font(kFontTitle), &font = touchCanvas.font(kFontMedium);
+        drawTextCentred(canvas, title, 128, 84, line1, inkFor(title, kUiOrange));
+        // (As much of the second line as the screen is wide.)
+        char cut[64];
+        std::snprintf(cut, sizeof(cut), "%.*s", textFit(font, line2, 248), line2);
+        drawTextCentred(canvas, font, 128, 112, cut, inkFor(font, kUiWhite));
     }
 
-    void BottomScreen::showCommand(const char *typed, const char *note)
+    void BottomScreen::showFatal(const char *line1, const char *line2, const char *line3)
     {
-        // The top of the screen's own rows: the keyboard has the rest.
-        padShown_ = false;
-        PrintConsole *previous = consoleSelect(&pad);
-        clearOwnRows();
-        std::printf("\x1b[8;1H%.30s", note);
-        std::printf("\x1b[10;1H> %.26s_", typed);
-        consoleSelect(previous);
+        create();
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        shown_ = Shown::Nothing;
+        const FontView &title = touchCanvas.font(kFontTitle), &font = touchCanvas.font(kFontSmall);
+        drawTextCentred(canvas, title, 128, 20, "Half-Life DS", inkFor(title, kUiOrange));
+        int y = 64;
+        for (const char *line : {line1, line2, line3})
+        {
+            // Each on as many rows as it takes.
+            while (line != nullptr && *line != '\0' && y < 180)
+            {
+                const int fits = textFit(font, line, 244);
+                drawText(canvas, font, 6, y, line, inkFor(font, kUiWhite), fits);
+                line += fits;
+                while (*line == ' ')
+                    ++line;
+                y += font.height();
+            }
+            y += 6;
+        }
     }
 
-    void BottomScreen::showMenu(hldata::RenderMode mode, bool dspAvailable, bool dspOn)
+    void BottomScreen::readout(int row, const char *text)
     {
-        padShown_ = false;
-        dspShown_ = dspAvailable;
-        PrintConsole *previous = consoleSelect(&pad);
-        clearOwnRows();
-        const char *name = Settings::name(mode);
-        int length = 0;
-        while (name[length] != '\0')
-            ++length;
-        std::printf("\x1b[%d;2HRENDERING  (touch to change)", kModeRow - 1);
-        drawButton(2, kModeRow, 28, kItemRows, name, length);
-        // (Only where there is a DSP to switch.)
-        if (dspAvailable)
-            drawButton(2, kDspRow, 28, kItemRows, dspOn ? "DSi SOUND  on" : "DSi SOUND  off",
-                       dspOn ? 13 : 14);
-        drawButton(2, kSaveRow, 28, kItemRows, "SAVE", 4);
-        drawButton(2, kNewRow, 28, kItemRows, "NEW GAME", 8);
-        drawButton(2, kResumeRow, 28, kItemRows, "RESUME", 6);
-        drawButton(2, kConsoleRow, 28, kItemRows, "COMMAND", 7);
-        consoleSelect(previous);
-    }
-
-    BottomScreen::MenuItem BottomScreen::menuItemAt(int x, int y) const
-    {
-        if (x < 16 || x >= 240)
-            return MenuItem::None;
-        const int row = y / 8;
-        if (row >= kModeRow && row < kModeRow + kItemRows)
-            return MenuItem::RenderMode;
-        if (dspShown_ && row >= kDspRow && row < kDspRow + kItemRows)
-            return MenuItem::Dsp;
-        if (row >= kSaveRow && row < kSaveRow + kItemRows)
-            return MenuItem::Save;
-        if (row >= kNewRow && row < kNewRow + kItemRows)
-            return MenuItem::NewGame;
-        if (row >= kResumeRow && row < kResumeRow + kItemRows)
-            return MenuItem::Resume;
-        if (row >= kConsoleRow && row < kConsoleRow + kItemRows)
-            return MenuItem::Console;
-        return MenuItem::None;
+        if (!settings.debugReadout || shown_ == Shown::Nothing || row < 0 || row > 8)
+            return;
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.fill(0, row * 8, 256, 8, kUiBack);
+        drawText(canvas, touchCanvas.plain(), 0, row * 8, text, inkPlain(kUiWhite + 2), 32);
     }
 } // namespace hlrt

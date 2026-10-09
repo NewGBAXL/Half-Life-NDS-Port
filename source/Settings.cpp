@@ -22,6 +22,12 @@ void Settings::load()
     {
         renderMode = static_cast<hldata::RenderMode>(data.renderMode);
         dspAudio = data.dspAudio != 0;
+        for (int i = 0; i < 4; ++i)
+            volume[i] = data.volume[i];
+        debugReadout = data.debugReadout != 0;
+        leftHanded = data.leftHanded != 0;
+        viewBob = data.viewBob != 0;
+        graphics = data.graphics;
     }
 }
 
@@ -32,6 +38,12 @@ bool Settings::save() const
     hldata::SettingsData data;
     data.renderMode = static_cast<std::uint8_t>(renderMode);
     data.dspAudio = dspAudio ? 1 : 0;
+    for (int i = 0; i < 4; ++i)
+        data.volume[i] = volume[i];
+    data.debugReadout = debugReadout ? 1 : 0;
+    data.leftHanded = leftHanded ? 1 : 0;
+    data.viewBob = viewBob ? 1 : 0;
+    data.graphics = graphics;
     const std::vector<std::uint8_t> bytes = hldata::writeSettings(data);
 
     std::FILE *file = std::fopen(global.dataPath("settings.dat").c_str(), "wb");
@@ -57,10 +69,10 @@ const char *Settings::name(hldata::RenderMode mode)
 {
     switch (mode)
     {
-    case hldata::RenderMode::TwoPass:    return "Two-pass   (30 fps)";
+    case hldata::RenderMode::TwoPass:    return "Two-pass (30 fps)";
     case hldata::RenderMode::TwoPassDma: return "Two-pass DMA (30 fps)";
     case hldata::RenderMode::SinglePass: return "Single-pass (60 fps)";
-    case hldata::RenderMode::Auto:       return "Auto       (per map)";
+    case hldata::RenderMode::Auto:       return "Auto (per map)";
     default:                             return "";
     }
 }

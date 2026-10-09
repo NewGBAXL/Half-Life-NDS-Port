@@ -600,14 +600,14 @@ class GenericArmBinary(GenericCpuBinary):
             if in_path.endswith('.arm.cpp'):
                 self.print(
                     f'build {obj_out_path}: cxx_arm {in_path} || {out_path_dir} {assets_h_flag}\n'
-                    f'  cxxflags = -marm -mlong-calls {cxxflags}\n'
+                    f'  cxxflags = {cxxflags} -marm -mlong-calls\n'
                     f'  dep = {dep_out_path}\n'
                     '\n'
                 )
             elif in_path.endswith('.arm.c'):
                 self.print(
                     f'build {obj_out_path}: cc_arm {in_path} || {out_path_dir} {assets_h_flag}\n'
-                    f'  cflags = -marm -mlong-calls {cflags}\n'
+                    f'  cflags = {cflags} -marm -mlong-calls\n'
                     f'  dep = {dep_out_path}\n'
                     '\n'
                 )

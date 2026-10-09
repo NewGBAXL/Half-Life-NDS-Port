@@ -90,6 +90,8 @@ namespace
         tex.height = 16;
         tex.sourceWidth = 32;
         tex.sourceHeight = 32;
+        tex.frames = 1;
+        tex.other = kNoTexture;
         level.textures = {tex};
 
         EntityRecord start{};

@@ -165,6 +165,16 @@ namespace hldstest
             book = parseSentences(text);
         }
         cookOptions.sentences = modelsFrom != nullptr ? &book : nullptr;
+        // ... and what it writes on the screen.
+        static TitlesBook titles;
+        if (modelsFrom != nullptr && titles.titles.empty())
+        {
+            std::ifstream file(std::string(modelsFrom) + "/titles.txt", std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(file)),
+                                   std::istreambuf_iterator<char>());
+            titles = parseTitles(text);
+        }
+        cookOptions.titles = modelsFrom != nullptr ? &titles : nullptr;
         g.ok = cookLevel(g.bsp, cookOptions, TexturePlan(), level, report, error) &&
                writeLevel(level, g.bytes, error) &&
                g.view.open(g.bytes.data(), static_cast<std::uint32_t>(g.bytes.size())) ==
@@ -177,6 +187,7 @@ namespace hldstest
         const LevelView &v = g.view;
         g.move.standing = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipStanding};
         g.move.crouched = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipCrouched};
+        g.move.large = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipLarge};
         g.movers.resize(v.brushCount);
         g.brushStates.resize(v.brushCount);
         g.states.resize(v.logicCount);
@@ -225,6 +236,7 @@ namespace hldstest
         g.actors.count = static_cast<int>(g.actorStates.size());
         g.actors.models = g.modelViews.data();
         g.actors.modelCount = static_cast<int>(g.modelViews.size());
+        gibModelsFind(g.actors, v.modelRefs, static_cast<int>(v.modelRefCount));
         g.actors.boxes = g.actorBoxes.data();
         g.move.boxes = g.actorBoxes.data();
         g.move.boxCount = static_cast<int>(g.actorBoxes.size());
@@ -233,6 +245,9 @@ namespace hldstest
         g.actors.nodeCount = static_cast<int>(v.pathNodeCount);
         g.logic.actors = &g.actors;
         g.logic.nameHashes = v.nameHashes;
+        g.logic.sprites = v.sprites;
+        g.logic.speech = v.speechCount != 0 ? v.speech : nullptr;
+        g.logic.spriteCount = static_cast<int>(v.spriteCount);
         g.logic.nameCount = static_cast<int>(v.nameCount);
         logicInit(g.logic);
         actorsInit(g.actors, v.actors, static_cast<int>(v.actorCount), v.nameHashes, g.move);

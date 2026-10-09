@@ -1,5 +1,8 @@
 #include "render/Camera.hpp"
 
+#include "HlFog.hpp"
+#include "Settings.hpp"
+
 namespace hlrt
 {
     Camera camera;
@@ -47,10 +50,13 @@ namespace hlrt
     void Camera::update()
     {
         // libnds angles are 32768 to the circle; ours are 65536.
-        const std::int32_t sy = sinLerp(static_cast<s16>(yaw >> 1));
-        const std::int32_t cy = cosLerp(static_cast<s16>(yaw >> 1));
-        const std::int32_t sp = sinLerp(static_cast<s16>(pitch >> 1));
-        const std::int32_t cp = cosLerp(static_cast<s16>(pitch >> 1));
+        const std::uint16_t turned = static_cast<std::uint16_t>(yaw + kickYaw);
+        int tilted = pitch + kickPitch;
+        tilted = tilted > kMaxPitch ? kMaxPitch : (tilted < -kMaxPitch ? -kMaxPitch : tilted);
+        const std::int32_t sy = sinLerp(static_cast<s16>(turned >> 1));
+        const std::int32_t cy = cosLerp(static_cast<s16>(turned >> 1));
+        const std::int32_t sp = sinLerp(static_cast<s16>(tilted >> 1));
+        const std::int32_t cp = cosLerp(static_cast<s16>(tilted >> 1));
 
         forward[0] = mulQ12(cp, cy);
         forward[1] = mulQ12(cp, sy);
@@ -61,6 +67,18 @@ namespace hlrt
         up[0] = -mulQ12(sp, cy);
         up[1] = -mulQ12(sp, sy);
         up[2] = cp;
+        if (roll != 0)
+        {
+            // Leaning: right and up turned about the way the view looks.
+            const std::int32_t sr = sinLerp(static_cast<s16>(roll >> 1));
+            const std::int32_t cr = cosLerp(static_cast<s16>(roll >> 1));
+            for (int i = 0; i < 3; ++i)
+            {
+                const std::int32_t r = right[i], u = up[i];
+                right[i] = mulQ12(r, cr) - mulQ12(u, sr);
+                up[i] = mulQ12(u, cr) + mulQ12(r, sr);
+            }
+        }
 
         // The hardware multiplies a ROW vector by the matrix, so row i is where
         // Half-Life axis i ends up: (right, up, -forward) components, times the
@@ -107,7 +125,9 @@ namespace hlrt
         }
         for (int p = 0; p < 4; ++p)
             planes[p].dist = dotPos(planes[p].normal, pos);
-        planes[4].dist = dotPos(planes[4].normal, pos) - (kFarUnits << 12);
+        // (How far the world is drawn is the player's to say: no farther
+        // than kFarUnits.)
+        planes[4].dist = dotPos(planes[4].normal, pos) - (hldata::drawDistanceUnits(settings.graphics.drawDistance) << 12);
     }
 
     void Camera::apply() const

@@ -17,6 +17,7 @@
 
 #include "HlLevelReader.hpp"
 #include "HlLogic.hpp"
+#include "HlMonsters.hpp"
 #include "HlTransition.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/Cooker.hpp"

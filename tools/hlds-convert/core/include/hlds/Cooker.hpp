@@ -20,6 +20,7 @@
 #include "hlds/LevelWriter.hpp"
 #include "hlds/LightBake.hpp"
 #include "hlds/TextureBudget.hpp"
+#include "hlds/TitlesFile.hpp"
 
 namespace hlds
 {
@@ -40,6 +41,8 @@ namespace hlds
         std::string viewModel;
         /// The game's sentences.txt, parsed; null if it was not read.
         const SentenceBook *sentences = nullptr;
+        /// The game's titles.txt, parsed; null if it was not read.
+        const TitlesBook *titles = nullptr;
     };
 
     struct CookReport

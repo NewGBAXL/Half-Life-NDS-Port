@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "HlLevelReader.hpp"
+#include "hlds/TextureFamily.hpp"
 #include "hlds/AtomicWrite.hpp"
 #include "hlds/BspFile.hpp"
 #include "hlds/Converter.hpp"
@@ -47,6 +48,9 @@ namespace
                      "      --geometry <mode>  guarded (default): merge faces and drop mid-edge\n"
                      "                         vertices where the picture provably does not\n"
                      "                         change. lossless: keep every vertex of the map\n"
+                     "      --plain-tiles      do not vary the game's '-' textures face by\n"
+                     "                         face: fewer textures and polygons, and\n"
+                     "                         floors that repeat\n"
                      "      --start <map>      the map a new game starts in (c0a0)\n"
                      "  hlds-convert verify <level.hlm> [--brushes]\n"
                      "      Open a cooked level with the DS's own reader, decode every\n"
@@ -173,11 +177,23 @@ namespace
                     r.unsupportedEntities, r.unsupportedClasses, r.texturesUsed,
                     r.texturesEncoded, r.texelKb, r.alphaTexelKb);
         if (r.models != 0)
+        {
             std::printf("  %d actors of %d models: %d KB, skins %dK texels\n", r.actors, r.models,
                         r.modelKb, r.modelTexelKb);
+            // (One of each model, added up: how much a level of detail saves.)
+            std::printf("    levels of detail: %d triangles near, %d far (the game's own: %d; a DSi has those too, in %d KB)\n",
+                        r.modelTriangles, r.modelTrianglesFar, r.modelTrianglesFull, r.modelKbDsi);
+        }
+        if (r.sprites != 0 || r.spritesMissing != 0)
+            std::printf("  %d sprites: %dK texels (%d not found)\n", r.sprites, r.spriteTexelKb, r.spritesMissing);
         if (r.sounds != 0 || r.soundsMissing != 0)
+        {
             std::printf("  %d sounds: %d KB (%d at half rate, %d not found); %d music tracks\n",
                         r.sounds, r.soundKb, r.soundsHalved, r.soundsMissing, r.musicTracks);
+            // (What a DSi is given over a DS.)
+            if (r.soundsTwinned != 0)
+                std::printf("    on a DSi: %d KB, %d of them at a better rate\n", r.soundKbDsi, r.soundsTwinned);
+        }
     }
 
     /// cook-map and cook-all: the same run, over one map or over all of them.
@@ -202,6 +218,8 @@ namespace
                     return usage();
                 options.guardedMerges = mode == "guarded";
             }
+            else if (args[i] == "--plain-tiles")
+                hlds::setRandomTiling(false);
             else if (args[i] == "--start" && i + 1 < args.size())
                 options.startMap = args[++i];
             else if (options.gameDir.empty())
@@ -236,6 +254,16 @@ namespace
             printResult, nullptr, error);
         if (!error.empty())
             std::fprintf(stderr, "error: %s\n", error.c_str());
+        // What was made for the card as a whole.
+        const CommonResult &common = converter.common();
+        std::printf("for the card: %d of 3 fonts, %s, %s, %s, %s, %s, %d menu sounds\n", common.fonts,
+                    common.hud ? "the head-up display" : "no head-up display",
+                    common.icons ? "the weapons' pictures" : "no weapons' pictures",
+                    common.title ? "the game's title" : "no title",
+                    common.decals ? "the marks" : "no marks",
+                    common.loading ? "the loading picture" : "no loading picture", common.sounds);
+        for (const std::string &warning : common.warnings)
+            std::printf("  warning: %s\n", warning.c_str());
         if (all)
             std::printf("%zu maps, %d failed\n", names.size(), failed);
         return failed == 0 ? 0 : 1;

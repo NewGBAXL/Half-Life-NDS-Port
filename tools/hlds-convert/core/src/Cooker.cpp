@@ -3,6 +3,8 @@
 #include "hlds/PathNodes.hpp"
 #include "hlds/Cooker.hpp"
 
+#include "hlds/TextureFamily.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -185,19 +187,15 @@ namespace hlds
 
         // --- Textures: only the ones a drawn face names, in the form it
         // wears them. A '{' texture can be in the table twice.
-        std::map<std::pair<int, bool>, int> textureRemap;
+        std::map<std::tuple<int, bool, bool>, int> textureRemap;
         auto sizeOf = [&](int bspTexture, bool a3i5)
         {
             const std::vector<TextureSize> &sizes = a3i5 ? plan.alphaSizes : plan.sizes;
             const BspTexture &src = bsp.textures[bspTexture];
             return sizes.empty() ? defaultTextureSize(src.width, src.height) : sizes[bspTexture];
         };
-        auto useTexture = [&](int bspTexture, bool a3i5)
+        auto addTexture = [&](int bspTexture, bool a3i5)
         {
-            const auto key = std::make_pair(bspTexture, a3i5);
-            const auto found = textureRemap.find(key);
-            if (found != textureRemap.end())
-                return static_cast<std::uint16_t>(found->second);
             const BspTexture &src = bsp.textures[bspTexture];
             const TextureSize size = sizeOf(bspTexture, a3i5);
             TextureRef ref{};
@@ -213,9 +211,42 @@ namespace hlds
             // The game's own rule for what is drawn as liquid: the name.
             if (!src.name.empty() && (src.name[0] == '!' || src.name.rfind("water", 0) == 0))
                 ref.flags |= kTextureLiquid;
-            textureRemap[key] = static_cast<int>(level.textures.size());
+            ref.frames = 1;
+            ref.other = kNoTexture;
             level.textures.push_back(ref);
             return static_cast<std::uint16_t>(level.textures.size() - 1);
+        };
+        // A texture that is one picture of several goes in with the rest of
+        // its cycle straight after it, and its other face after those: what
+        // a surface names is the first, and the console shows whichever is
+        // due (TextureCache).
+        // (A "scroll" texture on a conveyor slides with its belt; the same
+        // texture on anything else stays still, as in the game, where the
+        // speed is the entity's. So it may be in the table twice.)
+        auto useTexture = [&](int bspTexture, bool a3i5, bool belt)
+        {
+            const TextureFamily family = textureFamily(bsp, bspTexture);
+            belt = belt && bsp.textures[bspTexture].name.rfind("scroll", 0) == 0;
+            const auto key = std::make_tuple(family.frames[0], a3i5, belt);
+            const auto found = textureRemap.find(key);
+            if (found != textureRemap.end())
+                return static_cast<std::uint16_t>(found->second);
+            const std::uint16_t first = addTexture(family.frames[0], a3i5);
+            textureRemap[key] = first;
+            if (belt)
+                level.textures[first].flags |= kTextureScroll;
+            for (std::size_t n = 1; n < family.frames.size(); ++n)
+                addTexture(family.frames[n], a3i5);
+            level.textures[first].frames = static_cast<std::uint8_t>(family.frames.size());
+            if (!family.other.empty())
+            {
+                const std::uint16_t other = addTexture(family.other[0], a3i5);
+                for (std::size_t n = 1; n < family.other.size(); ++n)
+                    addTexture(family.other[n], a3i5);
+                level.textures[first].other = other;
+                level.textures[first].otherFrames = static_cast<std::uint8_t>(family.other.size());
+            }
+            return first;
         };
 
         // --- Surfaces. Each model's drawn faces become mesh faces, are merged
@@ -260,13 +291,15 @@ namespace hlds
             const bool fullBright = brush != nullptr && brush->fullBright();
 
             std::vector<MeshFace> meshFaces;
-            std::map<std::tuple<int, int, int>, int> keys; // (plane, side, mapping) -> key
+            std::map<std::tuple<int, int, int, int>, int> keys; // (plane, side, mapping, texture) -> key
             std::vector<int> keyPlane, keySide, keyTexture;
             std::vector<char> keyAlpha;
             for (int f = src.firstFace; f < src.firstFace + src.faceCount; ++f)
             {
                 const BspFace &face = bsp.faces[f];
-                const int bspTexture = bsp.texInfos[face.texInfo].miptex;
+                // (What it wears: one of a '-' texture's variants, by where
+                // the face is.)
+                const int bspTexture = wornTexture(bsp, face);
                 const BspTexture &tex = bsp.textures[bspTexture];
                 const bool holes = brush != nullptr && brush->cutsHoles() && !tex.name.empty() &&
                                    tex.name[0] == '{';
@@ -284,7 +317,7 @@ namespace hlds
                 mesh.sources = {f};
                 const auto keyId = std::make_tuple(static_cast<int>(face.plane),
                                                    face.side != 0 ? 1 : 0,
-                                                   mappingOf[face.texInfo]);
+                                                   mappingOf[face.texInfo], bspTexture);
                 auto found = keys.find(keyId);
                 if (found == keys.end())
                 {
@@ -358,7 +391,9 @@ namespace hlds
                 const int bspTexture = keyTexture[key];
                 const bool a3i5 = keyAlpha[key] != 0;
                 const BspTexture &tex = bsp.textures[bspTexture];
-                const std::uint16_t texture = flatColour ? kNoTexture : useTexture(bspTexture, a3i5);
+                const std::uint16_t texture =
+                    flatColour ? kNoTexture
+                               : useTexture(bspTexture, a3i5, brush != nullptr && brush->className == "func_conveyor");
 
                 std::vector<const MeshFace *> members;
                 for (int index : group)
@@ -536,8 +571,8 @@ namespace hlds
         }
         level.vis = bsp.visibility;
 
-        // --- Clip hulls 1 (standing) and 3 (crouched). Hull 2 is for large
-        // monsters and is not carried until something needs it.
+        // --- Clip hulls 1 (standing) and 3 (crouched); and of the world,
+        // hull 2, which says where something large (a bullsquid) has room.
         std::vector<int> clipRemap(bsp.clipNodes.size(), kNone);
         for (std::size_t m = 0; m < bsp.models.size(); ++m)
         {
@@ -545,6 +580,9 @@ namespace hlds
                 bsp, bsp.clipHullRoot(static_cast<int>(m), 1), planes, clipRemap, level.clipNodes);
             level.models[m].clipCrouched = compactClipHull(
                 bsp, bsp.clipHullRoot(static_cast<int>(m), 3), planes, clipRemap, level.clipNodes);
+            level.models[m].clipLarge =
+                m == 0 ? compactClipHull(bsp, bsp.clipHullRoot(0, 2), planes, clipRemap, level.clipNodes)
+                       : kContentsEmpty;
         }
         report.droppedClipNodes =
             static_cast<int>(bsp.clipNodes.size() - level.clipNodes.size());
@@ -599,7 +637,7 @@ namespace hlds
         // one drives.
         {
             LogicCook logic;
-            cookLogic(bsp, entities, brushRecordOfEntity, options.models, logic, options.sentences);
+            cookLogic(bsp, entities, brushRecordOfEntity, options.models, logic, options.sentences, options.titles);
             if (logic.records.size() > 0x7FFF || logic.aux.size() > 0xFFFF)
             {
                 error = "the map has more logic entities than the cooked format holds";
@@ -659,12 +697,19 @@ namespace hlds
                 }
                 level.sounds.push_back(ref);
             }
+            // The sprites: placeholders, until whoever cooks them (the
+            // converter) says how each came out.
+            level.sprites.assign(logic.sprites.size(), SpriteRef{});
+            level.spritePaths = std::move(logic.sprites);
+            level.spriteLights = std::move(logic.spriteLights);
             level.soundPaths = std::move(logic.sounds);
             level.soundLoops = std::move(logic.soundLoops);
             level.logicSounds = std::move(logic.logicSounds);
             level.sentences = std::move(logic.sentences);
             level.sentenceWords = std::move(logic.sentenceWords);
             level.rooms = std::move(logic.rooms);
+            level.speech = std::move(logic.speech);
+            level.messages = std::move(logic.messages);
 
             // --- Where each brush can be seen from: the world leaves its box
             // touches, found by pushing the box down the world's tree. For a
@@ -798,6 +843,8 @@ namespace hlds
                 ref.width = ref.height = kSkySize;
                 ref.sourceWidth = ref.sourceHeight = 256;
                 ref.flags = kTextureSky;
+                ref.frames = 1;
+                ref.other = kNoTexture;
                 level.textures.push_back(ref);
             }
         }

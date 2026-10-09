@@ -24,7 +24,7 @@ for line in open(source, encoding='utf-8'):
         elif key == 'FolderSync': line = 'FolderSync = true\n'
         elif key == 'ReadOnly': line = 'ReadOnly = false\n'
         elif key == 'ImagePath': line = 'ImagePath = "%s/build/emu/cfg_%s/%s.bin"\n' % (root, mode, section.replace('.', '_').lower())
-        elif key == 'ImageSize': line = 'ImageSize = 0\n'
+        elif key == 'ImageSize': line = 'ImageSize = 3\n'  # 1 GB: the whole campaign is a quarter of that
         elif key == 'Enable': line = 'Enable = true\n'
     if key == 'ConsoleType':
         line = 'ConsoleType = %d\n' % (1 if mode == 'dsi' else 0)

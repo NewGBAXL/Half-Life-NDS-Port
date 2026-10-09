@@ -19,6 +19,7 @@
 
 #include "HlActors.hpp"
 #include "HlPlayerMove.hpp"
+#include "HlUi.hpp"
 
 namespace hldata
 {
@@ -31,9 +32,12 @@ namespace hldata
 
         /// A line through the world's own tree: false, with `hit` how far
         /// along it got (Q30), if it runs into something solid.
+        /// `wall`, if it is asked for, is then what it ran into: the plane
+        /// the line last crossed, twice its number, plus one if it was
+        /// crossed from behind (-1: none, it began in the solid).
         inline bool lineThrough(const MoveWorld &world, std::int32_t num, std::int32_t f1,
                                 std::int32_t f2, const fx *from, const fx *to, std::int32_t &hit,
-                                int depth)
+                                int depth, int crossed = -1, int *wall = nullptr)
         {
             fx p1[3] = {from[0], from[1], from[2]};
             while (true)
@@ -44,6 +48,8 @@ namespace hldata
                     if (contents == kContentsSolid || contents == kContentsSky)
                     {
                         hit = f1;
+                        if (wall != nullptr)
+                            *wall = crossed;
                         return false;
                     }
                     return true;
@@ -51,6 +57,8 @@ namespace hldata
                 if (depth > 96)
                 {
                     hit = f1;
+                    if (wall != nullptr)
+                        *wall = crossed;
                     return false;
                 }
                 const Node &node = world.nodes[num];
@@ -78,8 +86,9 @@ namespace hldata
                     f1 + static_cast<std::int32_t>((static_cast<std::int64_t>(f2 - f1) * part) >>
                                                    kFractionShift);
                 const int side = t1 < 0 ? 1 : 0;
-                if (!lineThrough(world, node.children[side], f1, fm, p1, mid, hit, depth + 1))
+                if (!lineThrough(world, node.children[side], f1, fm, p1, mid, hit, depth + 1, crossed, wall))
                     return false;
+                crossed = static_cast<int>(node.plane) * 2 + side;
                 num = node.children[side ^ 1];
                 f1 = fm;
                 for (int i = 0; i < 3; ++i)
@@ -130,6 +139,218 @@ namespace hldata
         return shot;
     }
 
+    /// The same, and which way what stopped it faces: `normal` (Q12, towards
+    /// where the line came from) and `at`, the point on it. False if nothing
+    /// stopped it, or nothing that says which way it faces.
+    /// (A brush is met as its clip hull, a hand's breadth out from what is
+    /// drawn: `at` is brought back onto the face, for one that is square to
+    /// the axes -- as doors are.)
+    inline bool traceShotWall(const MoveWorld &world, const fx *start, const fx *end, fx *at, fx *normal)
+    {
+        std::int32_t fraction = kFractionOne;
+        int wall = -1;
+        bool found = false;
+        if (world.nodes != nullptr &&
+            !detail::lineThrough(world, world.headNode, 0, kFractionOne, start, end, fraction, 0, -1, &wall) &&
+            wall >= 0)
+        {
+            const Plane &plane = world.standing.planes[wall >> 1];
+            for (int i = 0; i < 3; ++i)
+                normal[i] = (wall & 1) ? -(plane.normal[i] >> 18) : (plane.normal[i] >> 18);
+            found = true;
+        }
+        fx back = 0;
+        for (int m = 0; m < world.moverCount; ++m)
+        {
+            const MoverHull &mover = world.movers[m];
+            if (!mover.solid || !detail::nearMover(mover, true, start, end))
+                continue;
+            fx a[3], b[3];
+            detail::toMoverSpace(mover, start, a);
+            detail::toMoverSpace(mover, end, b);
+            const Trace t = traceHull(mover.crouched, a, b);
+            if (t.startSolid || t.allSolid || !t.hit || t.fraction >= fraction)
+                continue;
+            fraction = t.fraction;
+            back = 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                normal[i] = t.normal[i] >> 18;
+                const fx n = normal[i] < 0 ? -normal[i] : normal[i];
+                back += (i == 2 ? 18 : 16) * n;
+            }
+            found = true;
+        }
+        if (!found || fraction >= kFractionOne)
+            return false;
+        for (int i = 0; i < 3; ++i)
+        {
+            at[i] = start[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - start[i]) * fraction) >>
+                                                kFractionShift);
+            at[i] -= static_cast<fx>((static_cast<std::int64_t>(normal[i]) * back) >> 12);
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------ marks
+
+    inline constexpr std::uint16_t kMarkShot = 3 | 3 << 5 | 3 << 10;    ///< a hole: nearly black
+    inline constexpr std::uint16_t kMarkBlood = 17 | 1 << 5 | 1 << 10;
+    inline constexpr std::uint16_t kMarkAlien = 21 | 22 << 5 | 3 << 10;
+    inline constexpr std::uint16_t kMarkSoot = 2 | 2 << 5 | 2 << 10;
+    inline constexpr std::uint16_t kMarkCrack = 26 | 28 << 5 | 29 << 10; ///< glass, cracked: pale
+
+    /// Specks off the wall at `at`, which faces `normal`: `count` of them,
+    /// thrown off it and falling, in `colour`.
+    inline void specksAdd(ActorWorld &a, const fx *at, const fx *normal, int count, std::uint16_t colour, int speed = 90)
+    {
+        for (int n = 0; n < count; ++n)
+        {
+            fx from[3], velocity[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                a.seed = a.seed * 1664525u + 1013904223u;
+                const int stray = static_cast<int>((a.seed >> 10) % static_cast<std::uint32_t>(speed + 1)) - speed / 2;
+                from[k] = at[k] + normal[k]; // (a unit clear of the wall)
+                velocity[k] = normal[k] * (speed / 2) + fxFromInt(stray);
+            }
+            velocity[2] += fxFromInt(speed / 3);
+            Piece &speck = pieceAdd(a, kPieceSpeck, from, velocity, 260 + static_cast<int>((a.seed >> 9) % 180));
+            speck.half = 1;
+            speck.colour = colour;
+        }
+    }
+
+    /// A shot (or, with `blow`, a swing) has landed on the world at the end
+    /// of the line from `start` towards `end`: its hole and its dust. False
+    /// if the line lands on nothing that takes a mark.
+    inline bool markShot(ActorWorld &a, const MoveWorld &world, const fx *start, const fx *end, bool blow)
+    {
+        fx at[3], normal[3];
+        if (!traceShotWall(world, start, end, at, normal))
+            return false;
+        if (blow)
+        {
+            decalAdd(a, kDecalDent, at, normal, 8, kMarkShot);
+            specksAdd(a, at, normal, 2, static_cast<std::uint16_t>(13 | 13 << 5 | 13 << 10), 60);
+        }
+        else
+        {
+            a.seed = a.seed * 1664525u + 1013904223u;
+            decalAdd(a, static_cast<std::uint8_t>(kDecalShot + ((a.seed >> 9) % kDecalShots)), at, normal, 7, kMarkShot);
+            specksAdd(a, at, normal, 3, static_cast<std::uint16_t>(15 | 15 << 5 | 14 << 10));
+        }
+        return true;
+    }
+
+    /// Blood, from a wound at `from` made by something travelling `along`
+    /// (Q12, unit): if there is a wall or a floor within a body's length
+    /// behind it, a stain there. `much`: a killing blow, or a shotgun's.
+    inline bool markBlood(ActorWorld &a, const MoveWorld &world, const fx *from, const fx *along, bool alien, bool much)
+    {
+        a.seed = a.seed * 1664525u + 1013904223u;
+        const int reach = 72 + static_cast<int>((a.seed >> 9) % 56);
+        // (On along the shot, and a little down: blood falls.)
+        const fx to[3] = {from[0] + along[0] * reach, from[1] + along[1] * reach,
+                          from[2] + along[2] * reach - fxFromInt(reach / 3)};
+        fx at[3], normal[3];
+        if (!traceShotWall(world, from, to, at, normal))
+            return false;
+        const std::uint8_t picture = alien ? ((a.seed >> 14) & 1 ? kDecalAlien : kDecalAlien2)
+                                           : static_cast<std::uint8_t>(kDecalBlood + ((a.seed >> 14) % kDecalBloods));
+        decalAdd(a, picture, at, normal, (much ? 22 : 14) + static_cast<int>((a.seed >> 18) % 6), alien ? kMarkAlien : kMarkBlood);
+        return true;
+    }
+
+    /// ... and under something at `at` that has died, or come apart, or
+    /// landed in pieces: a stain on the floor, if there is floor within
+    /// `drop` units.
+    inline bool markFloor(ActorWorld &a, const MoveWorld &world, const fx *at, int drop, std::uint8_t picture, int half,
+                          std::uint16_t colour)
+    {
+        const fx from[3] = {at[0], at[1], at[2] + fxFromInt(4)};
+        const fx to[3] = {at[0], at[1], at[2] - fxFromInt(drop)};
+        fx on[3], normal[3];
+        if (!traceShotWall(world, from, to, on, normal) || normal[2] < kFxOne / 2)
+            return false;
+        decalAdd(a, picture, on, normal, half, colour);
+        return true;
+    }
+
+    /// A blast at `at`: its scorch on the floor under it (or the nearest
+    /// wall straight down), and what it throws up.
+    inline void markBlast(ActorWorld &a, const MoveWorld &world, const fx *at, int size)
+    {
+        const fx from[3] = {at[0], at[1], at[2] + fxFromInt(8)};
+        const fx to[3] = {at[0], at[1], at[2] - fxFromInt(72)};
+        fx on[3], normal[3];
+        if (!traceShotWall(world, from, to, on, normal))
+            return;
+        decalAdd(a, kDecalScorch, on, normal, size < 32 ? 32 : (size > 56 ? 56 : size), kMarkSoot);
+        specksAdd(a, on, normal, 5, static_cast<std::uint16_t>(6 | 5 << 5 | 4 << 10), 220);
+    }
+
+    /// The small things in flight, for `ms` more milliseconds: they fall,
+    /// turn, land (bouncing once, then lying) and are gone when their time
+    /// is up. Returns how many casings rang on the floor this time.
+    inline int piecesTick(ActorWorld &a, const MoveWorld &world, int ms)
+    {
+        int rang = 0;
+        for (Piece &piece : a.pieces)
+        {
+            if (piece.kind == 0)
+                continue;
+            piece.leftMs -= ms;
+            if (piece.leftMs <= 0)
+            {
+                piece.kind = 0;
+                continue;
+            }
+            if (piece.bounces >= 2)
+                continue; // it lies where it fell
+            piece.spin = static_cast<std::uint16_t>(piece.spin + piece.spinRate * ms);
+            piece.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(fxFromInt(800)) * piece.weight * ms) / 256000);
+            // (What drifts does not fall faster than a leaf.)
+            if (piece.weight < 256 && piece.velocity[2] < -fxFromInt(120))
+                piece.velocity[2] = -fxFromInt(120);
+            fx to[3];
+            for (int i = 0; i < 3; ++i)
+                to[i] = piece.pos[i] + static_cast<fx>((static_cast<std::int64_t>(piece.velocity[i]) * ms) / 1000);
+            // (Specks are too many and too brief to be worth a line each.)
+            if (piece.kind == kPieceSpeck)
+            {
+                for (int i = 0; i < 3; ++i)
+                    piece.pos[i] = to[i];
+                continue;
+            }
+            const Shot shot = traceShot(world, piece.pos, to);
+            if (shot.fraction >= kFractionOne)
+            {
+                for (int i = 0; i < 3; ++i)
+                    piece.pos[i] = to[i];
+                continue;
+            }
+            // Landed on something: up off it again once, at a third of the
+            // speed, then it lies. (Which way the thing faces is not asked:
+            // what a shard lands on is nearly always a floor.)
+            ++piece.bounces;
+            if (piece.kind == kPieceShell && piece.bounces == 1)
+                ++rang;
+            const fx speed = piece.velocity[2] < 0 ? -piece.velocity[2] : piece.velocity[2];
+            if (piece.bounces >= 2 || speed < fxFromInt(60))
+            {
+                piece.bounces = 2;
+                piece.velocity[0] = piece.velocity[1] = piece.velocity[2] = 0;
+                continue;
+            }
+            piece.velocity[0] /= 3;
+            piece.velocity[1] /= 3;
+            piece.velocity[2] = speed / 3;
+            piece.spinRate = static_cast<std::int16_t>(piece.spinRate / 2);
+        }
+        return rang;
+    }
+
     inline bool lineClear(const MoveWorld &world, const fx *start, const fx *end)
     {
         return traceShot(world, start, end).fraction >= kFractionOne;
@@ -173,12 +394,21 @@ namespace hldata
         }
     } // namespace detail
 
+    inline constexpr int kWalkStanding = 0;
+    inline constexpr int kWalkCrouched = 1;
+    inline constexpr int kWalkLarge = 2;
+
     /// One step of a walk: `feet` moved by (dx, dy) if something that size
     /// can make it -- lifted a stair's height, nothing in the way; then let
     /// down, floor within two stairs' height. `feet` is changed only if so.
-    inline bool walkStep(const MoveWorld &world, const ActorWorld *a, int index, bool small,
+    ///
+    /// `hull` is the size: kWalkStanding, kWalkCrouched, or kWalkLarge --
+    /// which goes as a standing person does, but only to where something 64
+    /// units across has room in the world (the game's large hull).
+    inline bool walkStep(const MoveWorld &world, const ActorWorld *a, int index, int hull,
                          fx *feet, fx dx, fx dy)
     {
+        const bool small = hull == kWalkCrouched;
         const fx lift = small ? kCrouchedFeet : kStandingFeet;
         const fx start[3] = {feet[0], feet[1], feet[2] + lift};
         const fx up[3] = {start[0], start[1], start[2] + kStepSize};
@@ -193,6 +423,16 @@ namespace hldata
         const Trace drop = detail::walkerTrace(world, a, index, small, along, down);
         if (drop.startSolid || drop.fraction >= kFractionOne)
             return false; // nothing to stand on: it does not walk off edges
+        if (hull == kWalkLarge && world.large.nodes != nullptr)
+        {
+            // Room for its width there? (If it has none where it is, it is
+            // let move all the same: out of it.)
+            const fx there[3] = {drop.endPos[0], drop.endPos[1], drop.endPos[2] - lift + fxFromInt(33)};
+            const fx here[3] = {feet[0], feet[1], feet[2] + fxFromInt(33)};
+            if (hullPointContents(world.large, world.large.root, there) == kContentsSolid &&
+                hullPointContents(world.large, world.large.root, here) != kContentsSolid)
+                return false;
+        }
         feet[0] = drop.endPos[0];
         feet[1] = drop.endPos[1];
         feet[2] = drop.endPos[2] - lift;
@@ -201,7 +441,7 @@ namespace hldata
 
     /// Whether something that size can walk from `from` to `to` (feet, both)
     /// in a straight line, in at most `steps` steps of 16 units.
-    inline bool walkClear(const MoveWorld &world, const ActorWorld *a, int index, bool small,
+    inline bool walkClear(const MoveWorld &world, const ActorWorld *a, int index, int small,
                           const fx *from, const fx *to, int steps)
     {
         fx at[3] = {from[0], from[1], from[2]};
@@ -297,7 +537,7 @@ namespace hldata
 
         /// Work out where the walker at `index` should be making for on its
         /// way to `dest` (feet): `dest` itself, or a path node.
-        inline void walkPlan(ActorWorld &a, const MoveWorld &world, int index, bool small,
+        inline void walkPlan(ActorWorld &a, const MoveWorld &world, int index, int small,
                              const fx *dest, int reach)
         {
             ActorState &actor = a.states[index];
@@ -352,7 +592,7 @@ namespace hldata
     /// straight walk is looked for from further off, since it need be found
     /// only once -- the plan is made again only on reaching a node or on
     /// being held up.
-    inline int walkTick(ActorWorld &a, const MoveWorld &world, int index, bool small, const fx *dest,
+    inline int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
                         fx speed, int ms, const PlayerState *player, fx half, fx height,
                         bool still = false)
     {

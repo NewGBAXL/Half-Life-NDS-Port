@@ -1,0 +1,484 @@
+#include "global_header.hpp"
+
+#include "ui/Menu.hpp"
+
+#include "Settings.hpp"
+#include "audio/DspAudio.hpp"
+#include "audio/Sound.hpp"
+#include "render/BottomScreen.hpp"
+#include "ui/TouchCanvas.hpp"
+
+namespace hlrt
+{
+    Menu menu;
+
+    namespace
+    {
+        using namespace hldata;
+
+        enum class Kind
+        {
+            Button,
+            Value,  ///< shows a setting; a press changes it
+            Slider,
+        };
+        enum Id
+        {
+            kResume,
+            kSave,
+            kNewGame,
+            kOptions,
+            kCommand,
+            kRender,
+            kDsp,
+            kMusic,
+            kEffects,
+            kVoices,
+            kAmbience,
+            kReadout,
+            kHand,
+            kBob,
+            kBack,
+            kGraphics,
+            kFog,
+            kFogStrength,
+            kFogDistance,
+            kFogColour,
+            kModelDetail,
+            kWorldDetail,
+            kModelLimit,
+            kDrawDistance,
+        };
+        struct Row
+        {
+            Kind kind;
+            Id id;
+            const char *label;
+        };
+        const Row kMain[] = {{Kind::Button, kResume, "RESUME"},   {Kind::Button, kSave, "SAVE"},
+                             {Kind::Button, kNewGame, "NEW GAME"}, {Kind::Button, kOptions, "OPTIONS"},
+                             {Kind::Button, kCommand, "COMMAND"}};
+        const Row kOptionRows[] = {{Kind::Button, kGraphics, "GRAPHICS"}, {Kind::Value, kDsp, "DSi sound"},
+                                   {Kind::Slider, kMusic, "Music"},     {Kind::Slider, kEffects, "Effects"},
+                                   {Kind::Slider, kVoices, "Voices"},   {Kind::Slider, kAmbience, "Ambience"},
+                                   {Kind::Value, kHand, "Buttons"},     {Kind::Value, kBob, "View bob"},
+                                   {Kind::Value, kReadout, "Debug readout"},
+                                   {Kind::Button, kBack, "BACK"}};
+
+        // How the picture is drawn: the rendering mode, the fog, and how
+        // much detail is given up for speed (shared/HlFog.hpp).
+        const Row kGraphicsRows[] = {{Kind::Value, kRender, ""},
+                                     {Kind::Value, kFog, "Fog"},
+                                     {Kind::Slider, kFogStrength, "Fog strength"},
+                                     {Kind::Slider, kFogDistance, "Fog distance"},
+                                     {Kind::Value, kFogColour, "Fog colour"},
+                                     {Kind::Value, kModelDetail, "Model detail"},
+                                     {Kind::Value, kWorldDetail, "World detail"},
+                                     {Kind::Value, kModelLimit, "Models at once"},
+                                     {Kind::Value, kDrawDistance, "Draw distance"},
+                                     {Kind::Button, kBack, "BACK"}};
+
+        // Where the rows are: the first page's are big and few, the
+        // others' as many as the screen holds.
+        struct Layout
+        {
+            int x, top, width, height, pitch;
+        };
+        constexpr Layout kMainLayout = {28, 40, 200, 24, 29};
+        constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
+        constexpr int kTrackLeft = 100, kTrackWidth = 132;
+
+        /// What a slider slides (0..10, all of them).
+        std::uint8_t &slid(Id id)
+        {
+            switch (id)
+            {
+            case kFogStrength: return settings.graphics.fogStrength;
+            case kFogDistance: return settings.graphics.fogDistance;
+            case kMusic:       return settings.volume[kVolumeMusic];
+            case kEffects:     return settings.volume[kVolumeEffects];
+            case kVoices:      return settings.volume[kVolumeVoices];
+            default:           return settings.volume[kVolumeAmbience];
+            }
+        }
+        const Row *rowsOf(int page, int &count)
+        {
+            if (page == 0)
+            {
+                count = static_cast<int>(sizeof(kMain) / sizeof(kMain[0]));
+                return kMain;
+            }
+            if (page == 1)
+            {
+                count = static_cast<int>(sizeof(kOptionRows) / sizeof(kOptionRows[0]));
+                return kOptionRows;
+            }
+            count = static_cast<int>(sizeof(kGraphicsRows) / sizeof(kGraphicsRows[0]));
+            return kGraphicsRows;
+        }
+    } // namespace
+
+    int Menu::rowCount() const
+    {
+        int count = 0;
+        rowsOf(static_cast<int>(page_), count);
+        return count;
+    }
+
+    void Menu::open()
+    {
+        bottomScreen.release();
+        page_ = Page::Main;
+        active_ = -1;
+        // (The touch that opened it, if there was one, is not a press.)
+        touching_ = (keysHeld() & KEY_TOUCH) != 0;
+        draw();
+    }
+
+    void Menu::draw()
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        canvas.clear();
+        if (page_ == Page::Main)
+        {
+            const FontView &title = touchCanvas.font(kFontTitle);
+            drawTextCentred(canvas, title, 128, 10, "PAUSED", inkFor(title, kUiOrange));
+        }
+        for (int row = 0; row < rowCount(); ++row)
+            drawRow(row, false);
+    }
+
+    void Menu::drawRow(int row, bool down)
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const bool main = page_ == Page::Main;
+        int count = 0;
+        const Row &item = rowsOf(static_cast<int>(page_), count)[row];
+        const Layout &at = main ? kMainLayout : kOptionLayout;
+        const int y = at.top + row * at.pitch;
+        const FontView &font = touchCanvas.font(main ? kFontMedium : kFontSmall);
+        const int textY = y + (at.height - font.height()) / 2;
+        // (A DS has no DSP to switch: the row is there, and says so.)
+        const bool dead = item.id == kDsp && !DspAudio::available();
+        if (item.kind == Kind::Slider)
+        {
+            canvas.fill(at.x, y, at.width, at.height, kUiBack);
+            drawText(canvas, font, at.x + 4, textY, item.label, inkFor(font, kUiWhite));
+            const int level = slid(item.id);
+            const int knob = kTrackLeft + (kTrackWidth * level) / kVolumeMost;
+            canvas.fill(kTrackLeft, y + at.height / 2 - 3, kTrackWidth, 6, kUiTrack);
+            canvas.frame(kTrackLeft - 1, y + at.height / 2 - 4, kTrackWidth + 2, 8, kUiEdge);
+            canvas.fill(kTrackLeft, y + at.height / 2 - 3, knob - kTrackLeft, 6, kUiOrange + (down ? 2 : 1));
+            canvas.fill(knob - 3, y + 2, 7, at.height - 4, down ? kUiWhite + 2 : kUiWhite + 1);
+            canvas.frame(knob - 3, y + 2, 7, at.height - 4, kUiShadow);
+            return;
+        }
+        char text[48];
+        switch (item.id)
+        {
+        case kRender:
+            std::snprintf(text, sizeof(text), "%s", Settings::name(settings.renderMode));
+            break;
+        case kDsp:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label,
+                          dead ? "not on a DS" : (sound.extended() ? "on" : "off"));
+            break;
+        case kReadout:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.debugReadout ? "on" : "off");
+            break;
+        case kBob:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.viewBob ? "on" : "off");
+            break;
+        case kFog:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kFogTypeName[settings.graphics.fog]);
+            break;
+        case kFogColour:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kFogColourName[settings.graphics.fogColour]);
+            break;
+        case kModelDetail:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDetailName[settings.graphics.modelDetail]);
+            break;
+        case kWorldDetail:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDetailName[settings.graphics.worldDetail]);
+            break;
+        case kModelLimit:
+            if (settings.graphics.modelLimit == 0)
+                std::snprintf(text, sizeof(text), "%s: auto", item.label);
+            else
+                std::snprintf(text, sizeof(text), "%s: %d", item.label, settings.graphics.modelLimit);
+            break;
+        case kDrawDistance:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kDrawDistanceName[settings.graphics.drawDistance]);
+            break;
+        case kHand:
+            // (Which side of the touch screen its column of buttons is.)
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.leftHanded ? "left" : "right");
+            break;
+        default:
+            std::snprintf(text, sizeof(text), "%s", item.label);
+            break;
+        }
+        canvas.button(at.x, y, at.width, at.height, down && !dead);
+        drawTextCentred(canvas, font, at.x + at.width / 2, textY, text,
+                        inkFor(font, dead ? kUiGrey : (down ? kUiWhite : kUiOrange)));
+    }
+
+    int Menu::rowAt(int x, int y) const
+    {
+        const Layout &at = page_ == Page::Main ? kMainLayout : kOptionLayout;
+        if (x < at.x || x >= at.x + at.width || y < at.top)
+            return -1;
+        const int row = (y - at.top) / at.pitch;
+        return row < rowCount() && (y - at.top) % at.pitch < at.height ? row : -1;
+    }
+
+    /// The slider of `row` put where the stylus is. True if that moved it.
+    bool Menu::slide(int row, int x)
+    {
+        int count = 0;
+        const Row &item = rowsOf(static_cast<int>(page_), count)[row];
+        int level = ((x - kTrackLeft) * kVolumeMost + kTrackWidth / 2) / kTrackWidth;
+        level = x < kTrackLeft ? 0 : (level > kVolumeMost ? kVolumeMost : level);
+        std::uint8_t &value = slid(item.id);
+        if (value == level)
+            return false;
+        value = static_cast<std::uint8_t>(level);
+        sound.applyVolumes();
+        sound.ui(kUiSoundTick);
+        return true;
+    }
+
+    Menu::Action Menu::fire(int row)
+    {
+        int count = 0;
+        const Row &item = rowsOf(static_cast<int>(page_), count)[row];
+        sound.ui(kUiSoundPress);
+        switch (item.id)
+        {
+        case kResume:  return Action::Resume;
+        case kSave:    return Action::Save;
+        case kNewGame: return Action::NewGame;
+        case kCommand: return Action::Command;
+        case kOptions:
+            page_ = Page::Options;
+            draw();
+            break;
+        case kBack:
+            // (From the graphics, back to the options they are among.)
+            page_ = page_ == Page::Graphics ? Page::Options : Page::Main;
+            settings.save();
+            draw();
+            break;
+        case kGraphics:
+            page_ = Page::Graphics;
+            draw();
+            break;
+        case kFog:
+            settings.graphics.fog = static_cast<std::uint8_t>((settings.graphics.fog + 1) % kFogTypes);
+            drawRow(row, false);
+            break;
+        case kFogColour:
+            settings.graphics.fogColour = static_cast<std::uint8_t>((settings.graphics.fogColour + 1) % kFogColours);
+            drawRow(row, false);
+            break;
+        case kModelDetail:
+            settings.graphics.modelDetail = static_cast<std::uint8_t>((settings.graphics.modelDetail + 1) % kDetailLevels);
+            drawRow(row, false);
+            break;
+        case kWorldDetail:
+            settings.graphics.worldDetail = static_cast<std::uint8_t>((settings.graphics.worldDetail + 1) % kDetailLevels);
+            drawRow(row, false);
+            break;
+        case kModelLimit:
+            // auto, 4, 6, 8, 10, 12, and round again.
+            settings.graphics.modelLimit = settings.graphics.modelLimit == 0
+                                               ? 4
+                                               : (settings.graphics.modelLimit >= 12 ? 0 : settings.graphics.modelLimit + 2);
+            drawRow(row, false);
+            break;
+        case kDrawDistance:
+            settings.graphics.drawDistance = static_cast<std::uint8_t>((settings.graphics.drawDistance + 1) % kDrawDistances);
+            drawRow(row, false);
+            break;
+        case kRender:
+            // (It takes effect on the way out of the menu.)
+            settings.renderMode = Settings::next(settings.renderMode);
+            drawRow(row, false);
+            break;
+        case kDsp:
+            if (DspAudio::available())
+            {
+                // At once: the music goes on from where it was, by the
+                // other way of playing it.
+                settings.dspAudio = sound.setDsp(!sound.extended());
+                settings.save();
+            }
+            drawRow(row, false);
+            break;
+        case kReadout:
+            settings.debugReadout = !settings.debugReadout;
+            drawRow(row, false);
+            break;
+        case kBob:
+            settings.viewBob = !settings.viewBob;
+            drawRow(row, false);
+            break;
+        case kHand:
+            settings.leftHanded = !settings.leftHanded;
+            drawRow(row, false);
+            break;
+        default:
+            break;
+        }
+        return Action::None;
+    }
+
+    Menu::Action Menu::frame()
+    {
+        const bool down = (keysHeld() & KEY_TOUCH) != 0;
+        if (down)
+        {
+            touchPosition touch;
+            touchRead(&touch);
+            lastX_ = touch.px;
+            lastY_ = touch.py;
+        }
+        int rowTotal = 0;
+        const Row *rows = rowsOf(static_cast<int>(page_), rowTotal);
+        const bool sliding = active_ >= 0 && active_ < rowTotal && rows[active_].kind == Kind::Slider;
+        Action action = Action::None;
+        if (down && !touching_)
+        {
+            active_ = rowAt(lastX_, lastY_);
+            if (active_ >= 0)
+            {
+                if (rows[active_].kind == Kind::Slider)
+                    slide(active_, lastX_);
+                drawRow(active_, true);
+            }
+        }
+        else if (down && sliding)
+        {
+            if (slide(active_, lastX_))
+                drawRow(active_, true);
+        }
+        else if (!down && touching_ && active_ >= 0)
+        {
+            // Lifted: a button acts if it was lifted from where it was
+            // pressed.
+            const int row = active_;
+            active_ = -1;
+            if (sliding)
+                drawRow(row, false);
+            else if (rowAt(lastX_, lastY_) == row)
+                action = fire(row);
+            else
+                drawRow(row, false);
+        }
+        touching_ = down;
+        return action;
+    }
+
+    bool Menu::typeLine(std::string &typed)
+    {
+        static const char *const kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl_", "zxcvbnm  <"};
+        constexpr int kKey = 24, kLeft = 8, kTop = 58, kBottom = kTop + 4 * kKey + 4;
+        bottomScreen.release();
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &font = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall);
+        typed.clear();
+        auto prompt = [&]()
+        {
+            canvas.fill(0, 30, 256, 22, kUiBack);
+            canvas.frame(6, 30, 244, 22, kUiEdge);
+            char line[40];
+            std::snprintf(line, sizeof(line), "> %s_", typed.c_str());
+            drawText(canvas, font, 12, 30 + (22 - font.height()) / 2, line, inkFor(font, kUiWhite));
+        };
+        auto key = [&](int row, int col, bool down)
+        {
+            const char text[2] = {kKeys[row][col], '\0'};
+            if (text[0] == ' ')
+                return;
+            canvas.button(kLeft + col * kKey, kTop + row * kKey, kKey - 1, kKey - 1, down);
+            drawTextCentred(canvas, font, kLeft + col * kKey + kKey / 2, kTop + row * kKey + (kKey - font.height()) / 2,
+                            text, inkFor(font, down ? kUiWhite : kUiOrange));
+        };
+        auto wide = [&](int n, bool down)
+        {
+            static const char *const kNames[3] = {"SPACE", "ENTER", "CANCEL"};
+            canvas.button(kLeft + n * 80, kBottom, 79, 26, down);
+            drawTextCentred(canvas, font, kLeft + n * 80 + 40, kBottom + (26 - font.height()) / 2, kNames[n],
+                            inkFor(font, down ? kUiWhite : kUiOrange));
+        };
+        canvas.clear();
+        drawText(canvas, small, 8, 2, "COMMAND", inkFor(small, kUiOrange));
+        drawText(canvas, small, 8, 15, "map <name>    give    heal    noclip", inkFor(small, kUiGrey));
+        prompt();
+        for (int row = 0; row < 4; ++row)
+        {
+            for (int col = 0; col < 10; ++col)
+                key(row, col, false);
+        }
+        for (int n = 0; n < 3; ++n)
+            wide(n, false);
+
+        // The touch that asked for this is still down, and may be on a key
+        // now: not until it has lifted is anything typed.
+        bool touching = true;
+        int heldRow = -1, heldCol = -1;
+        while (true)
+        {
+            swiWaitForVBlank();
+            sound.frame();
+            scanKeys();
+            if (keysDown() & KEY_B)
+                return false;
+            if (keysDown() & (KEY_START | KEY_A))
+                return true;
+            const bool down = (keysHeld() & KEY_TOUCH) != 0;
+            if (down && !touching)
+            {
+                touchPosition touch;
+                touchRead(&touch);
+                const int col = (touch.px - kLeft) / kKey, row = (touch.py - kTop) / kKey;
+                if (touch.py >= kBottom && touch.py < kBottom + 26 && touch.px >= kLeft)
+                {
+                    const int n = (touch.px - kLeft) / 80;
+                    sound.ui(kUiSoundPress);
+                    if (n == 1)
+                        return true;
+                    if (n == 2)
+                        return false;
+                    if (n == 0 && typed.size() < 24)
+                        typed.push_back(' ');
+                    prompt();
+                }
+                else if (touch.px >= kLeft && touch.py >= kTop && col < 10 && row < 4 && kKeys[row][col] != ' ')
+                {
+                    const char c = kKeys[row][col];
+                    sound.ui(kUiSoundTick);
+                    if (c == '<')
+                    {
+                        if (!typed.empty())
+                            typed.pop_back();
+                    }
+                    else if (typed.size() < 24)
+                    {
+                        typed.push_back(c);
+                    }
+                    heldRow = row;
+                    heldCol = col;
+                    key(row, col, true);
+                    prompt();
+                }
+            }
+            else if (!down && heldRow >= 0)
+            {
+                key(heldRow, heldCol, false);
+                heldRow = heldCol = -1;
+            }
+            touching = down;
+        }
+    }
+} // namespace hlrt

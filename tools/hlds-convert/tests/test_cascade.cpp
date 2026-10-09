@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include "TestGame.hpp"
 
@@ -230,6 +231,71 @@ namespace
                     fxToInt((g.movers[cartBrush].mins[1] + g.movers[cartBrush].maxs[1]) / 2));
         check(started, "pushed into the beam, the cart starts the cascade");
     }
+
+    /// What is glimpsed in the cascade -- four slaves, two bullsquids -- is
+    /// there to be seen, not fought: the map keeps them as prisoners, and
+    /// takes the slaves away by name when their moment is over.
+    void testPrisoners(const char *dir)
+    {
+        auto game = std::make_unique<Game>();
+        std::string error;
+        if (!game->bsp.load(std::string(dir) + "/maps/c1a0e.bsp", error))
+            return;
+        finish(*game, nullptr, dir);
+        if (!game->ok)
+            return;
+        Game &g = *game;
+        std::vector<int> slaves;
+        int prisoners = 0;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            const ActorState &actor = g.actors.states[i];
+            if (!actor.active)
+                continue;
+            prisoners += (actor.flags & kActorPrisoner) != 0;
+            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Slave))
+                slaves.push_back(i);
+        }
+        check(slaves.size() == 4 && prisoners == 6, "the cascade's four slaves and two bullsquids are prisoners");
+        if (slaves.empty())
+            return;
+        // Stood right in front of one, in plain view, for ten seconds: not
+        // gone for, not hurt. Nor when it is shot at.
+        const ActorState &one = g.actors.states[slaves[0]];
+        fx sine, cosine;
+        fxSinCos(one.yaw, sine, cosine);
+        g.player.origin[0] = one.pos[0] + cosine * 80;
+        g.player.origin[1] = one.pos[1] + sine * 80;
+        g.player.origin[2] = one.pos[2] + kStandingFeet;
+        bool roused = false;
+        for (int frame = 0; frame < 300; ++frame)
+        {
+            if (frame == 150)
+                monsterHurt(g.logic, slaves[0], 1, true, kHitBody);
+            logicTick(g.logic, g.player, 33);
+            monstersTick(g.logic, g.player, 33);
+            g.drain();
+            for (int i : slaves)
+                roused = roused || g.actors.states[i].ai == kAiChase || g.actors.states[i].ai == kAiAttack;
+        }
+        check(!roused && g.player.health == 100 && g.times(CommonSound::SlaveZap) == 0,
+              "a prisoner goes for nobody, in plain view or shot at");
+        // The relay that ends their moment takes all four away.
+        const int relay = recordNamed(g, "kill_slave_stuff", LogicKind::TriggerRelay);
+        check(relay >= 0, "the relay that takes the slaves away is there");
+        if (relay < 0)
+            return;
+        logicUse(g.logic, g.player, relay, -1, kUseToggle, 0);
+        for (int frame = 0; frame < 10; ++frame)
+        {
+            logicTick(g.logic, g.player, 33);
+            monstersTick(g.logic, g.player, 33);
+        }
+        int left = 0;
+        for (int i : slaves)
+            left += g.actors.states[i].active;
+        check(left == 0, "and they are gone when it fires");
+    }
 } // namespace
 
 int main()
@@ -240,6 +306,7 @@ int main()
         testCascade(dir);
         testMachine(dir);
         testCart(dir);
+        testPrisoners(dir);
     }
     else
         std::printf("test_cascade: HLDS_VALVE_DIR not set, the map was not played\n");

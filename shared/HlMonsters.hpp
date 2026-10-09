@@ -66,6 +66,15 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Houndeye);
     }
 
+    inline bool isGrunt(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Grunt);
+    }
+    inline bool isMine(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Tripmine);
+    }
+
     /// What each kind of monster is, in numbers. The game's, at "normal".
     struct MonsterKind
     {
@@ -90,13 +99,17 @@ namespace hldata
                                               "idle1", "idle1", "flinch_sm", "death"};
         static const MonsterKind kSlave = {30, false, fxFromInt(16), fxFromInt(64), fxFromInt(90),
                                            "idle1", "walk1", "flinch2", "diesimple"};
-        // (The game moves a bullsquid as its large hull, which is not
-        // cooked: it goes as a person does, and fits through what it should
-        // not.)
+        // (It goes only where something 64 units across has room:
+        // monsterHull.)
         static const MonsterKind kBullsquid = {40, false, fxFromInt(20), fxFromInt(48), fxFromInt(110),
                                                "idle", "run", "flinchs", "die1"};
         static const MonsterKind kHoundeye = {20, true, fxFromInt(16), fxFromInt(36), fxFromInt(160),
                                               "idle1", "run", "flinch_small", "die"};
+        // (A soldier: HlGrunt.hpp has the rest of him.)
+        static const MonsterKind kGrunt = {50, false, fxFromInt(16), fxFromInt(72), fxFromInt(170),
+                                           "idle1", "run", "smflinch", "diesimple"};
+        if (kind == static_cast<std::uint8_t>(ActorKind::Grunt))
+            return kGrunt;
         if (kind == static_cast<std::uint8_t>(ActorKind::Slave))
             return kSlave;
         if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid))
@@ -157,6 +170,14 @@ namespace hldata
     }
 
     inline constexpr fx kSightRange = fxFromInt(1024);
+    /// The size a kind walks about as (HlWalk.hpp kWalk*).
+    inline int monsterHull(std::uint8_t kind)
+    {
+        if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid))
+            return kWalkLarge;
+        return monsterKind(kind).small ? kWalkCrouched : kWalkStanding;
+    }
+
     inline constexpr fx kLeapRange = fxFromInt(256);
     inline constexpr fx kZombieReach = fxFromInt(70);
 
@@ -164,8 +185,16 @@ namespace hldata
 
     /// A monster's blow. Armour takes four fifths of it, and half of what it
     /// takes comes off the armour.
-    inline void playerHurt(PlayerState &player, int damage)
+    /// `from`: where it came from, if it came from somewhere.
+    inline void playerHurt(PlayerState &player, int damage, const fx *from = nullptr)
     {
+        if (damage > 0)
+        {
+            player.hurt += damage;
+            player.hurtKnown = from != nullptr;
+            for (int i = 0; from != nullptr && i < 3; ++i)
+                player.hurtFrom[i] = from[i];
+        }
         int taken = (damage * 4) / 5;
         int cost = taken / 2;
         if (cost > player.inv.armor)
@@ -272,52 +301,23 @@ namespace hldata
 
     // ------------------------------------------------ things seen, things thrown
 
-    /// Something to be seen for `ms` milliseconds (kEffect*). When all the
-    /// places are taken the oldest gives way.
-    inline void effectAdd(ActorWorld &a, std::uint8_t kind, const fx *from, const fx *to, int size, int ms)
+    inline void effectsTick(LogicWorld &w, PlayerState &player, int ms);
+    inline bool gibBurst(LogicWorld &w, int index);
+    inline bool lineEntersBox(const fx *from, const fx *to, const fx *mins, const fx *maxs, std::int64_t &enter);
+    inline void shakeStart(LogicWorld &w, fx amplitude, int ms);
+    inline void explodeAt(LogicWorld &w, PlayerState &player, const fx *at, int size, bool fireball, bool sound,
+                          bool hurts);
+    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group = kHitBody);
+    inline void turretHurt(LogicWorld &w, int index, int damage, bool bullet, int group);
+    inline void gruntHurt(LogicWorld &w, int index, int damage, bool bullet, int group);
+    inline void mineHurt(LogicWorld &w, int index);
+    namespace detail
     {
-        Effect *slot = &a.effects[0];
-        for (Effect &effect : a.effects)
-        {
-            if (effect.kind == 0)
-            {
-                slot = &effect;
-                break;
-            }
-            if (effect.leftMs < slot->leftMs)
-                slot = &effect;
-        }
-        slot->kind = kind;
-        for (int i = 0; i < 3; ++i)
-        {
-            slot->a[i] = from[i];
-            slot->b[i] = to != nullptr ? to[i] : from[i];
-        }
-        slot->size = static_cast<std::int16_t>(size);
-        slot->leftMs = slot->wholeMs = static_cast<std::int16_t>(ms);
+        inline void gruntTick(LogicWorld &w, PlayerState &player, int index, int ms);
+        inline void mineTick(LogicWorld &w, PlayerState &player, int index, int ms);
     }
-
-    /// Something set flying. False if there is no room for another.
-    inline bool projectileAdd(ActorWorld &a, std::uint8_t kind, const fx *pos, const fx *velocity, int ms)
-    {
-        for (Projectile &shot : a.shots)
-        {
-            if (shot.active)
-                continue;
-            shot.active = true;
-            shot.kind = kind;
-            for (int i = 0; i < 3; ++i)
-            {
-                shot.pos[i] = pos[i];
-                shot.velocity[i] = velocity[i];
-            }
-            shot.leftMs = ms;
-            return true;
-        }
-        return false;
-    }
-
-    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet);
+    inline bool fights(std::uint8_t kind);
+    inline void targetBox(const ActorState &actor, fx *mins, fx *maxs);
 
     /// A blast at `origin`: hurts the player and every monster within
     /// `radius` units that it can reach in a straight line, less with
@@ -348,10 +348,19 @@ namespace hldata
         for (int i = 0; i < a.count; ++i)
         {
             const ActorState &actor = a.states[i];
-            if (i == except || !actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
+            if (i == except || !actor.active || !fights(actor.kind))
                 continue;
-            const fx middle[3] = {actor.pos[0], actor.pos[1],
-                                  actor.pos[2] + monsterKind(actor.kind).height / 2};
+            fx mins[3], maxs[3];
+            targetBox(actor, mins, maxs);
+            const fx middle[3] = {actor.pos[0], actor.pos[1], (mins[2] + maxs[2]) / 2};
+            if (actor.ai >= kAiDying)
+            {
+                // Something lying dead, caught in it: it comes apart (the
+                // game's rule: a blast of more than what is left of it).
+                if ((isMonster(actor.kind) || isGrunt(actor.kind)) && share(middle) >= 40)
+                    gibBurst(w, i);
+                continue;
+            }
             const int hurt = share(middle);
             if (hurt > 0)
                 monsterHurt(w, i, hurt, false);
@@ -371,18 +380,98 @@ namespace hldata
         }
     }
 
-    /// Hurt the monster at `index`. `bullet`: by a bullet, which a zombie
-    /// hardly feels (three tenths, as in the game).
-    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet)
+    /// The monster at `index` comes apart: its body is gone, and the game's
+    /// pieces fly -- an alien's four; a person's skull and four of the five
+    /// others -- from inside its box, faster the further past dead it was
+    /// taken. False (and nothing done) if the map has not got the pieces.
+    inline bool gibBurst(LogicWorld &w, int index)
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
+        const bool human = actor.kind == static_cast<std::uint8_t>(ActorKind::Grunt);
+        const int model = human ? a.humanGibs : a.alienGibs;
+        const int pieces = gibPieces(a, model);
+        if (pieces == 0)
+            return false;
+        fx mins[3], maxs[3];
+        targetBox(actor, mins, maxs);
+        // (The game's: seven tenths as fast for something only just far
+        // enough gone, twice for something well past, four times beyond.)
+        const int scale = actor.health > -50 ? 7 : (actor.health > -200 ? 20 : 40);
+        const int count = human ? 5 : 4;
+        for (int n = 0; n < count; ++n)
+        {
+            // A person's first piece is the skull, from where the head was.
+            const int body = human ? (n == 0 ? 0 : 1 + static_cast<int>(detail::chance(a) % 5)) % pieces
+                                   : static_cast<int>(detail::chance(a) % static_cast<std::uint32_t>(pieces));
+            fx at[3], velocity[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                const fx span = maxs[k] - mins[k];
+                at[k] = mins[k] + static_cast<fx>((static_cast<std::int64_t>(span) * (detail::chance(a) & 255)) >> 8);
+                velocity[k] = fxFromInt(static_cast<int>(detail::chance(a) % 201) - 100) * scale / 10;
+            }
+            if (human && n == 0)
+                at[2] = maxs[2];
+            velocity[2] = fxFromInt(200 + static_cast<int>(detail::chance(a) % 101)) * scale / 10;
+            for (int k = 0; k < 3; ++k)
+                velocity[k] = velocity[k] > fxFromInt(1500) ? fxFromInt(1500)
+                                                           : (velocity[k] < -fxFromInt(1500) ? -fxFromInt(1500) : velocity[k]);
+            Gib &gib = gibAdd(a, model, body, at, velocity, 12000 + static_cast<int>(detail::chance(a) % 4000));
+            gib.yaw = static_cast<std::uint16_t>(detail::chance(a));
+            gib.spin = static_cast<std::int16_t>(40 + detail::chance(a) % 60);
+            effectAdd(a, kEffectBlood, at, nullptr, human ? 0 : 1, 300);
+        }
+        if (w.heard != nullptr)
+            w.heard->add(CommonSound::BodySplat, actor.pos, 127, kRadiusLarge);
+        if (actor.script >= 0 && actor.script < w.recordCount)
+        {
+            w.states[actor.script].dead = true;
+            actor.script = -1;
+            actor.scriptPhase = kActorFree;
+        }
+        actor.ai = kAiDead;
+        actor.active = false;
+        actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
+        actorPlaceBox(a, index);
+        return true;
+    }
+
+    /// Hurt the monster at `index`. `bullet`: by a bullet, which a zombie
+    /// hardly feels (three tenths, as in the game).
+    /// `group`: the part of it that was hit (kHit*).
+    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group)
+    {
+        ActorWorld &a = *w.actors;
+        ActorState &actor = a.states[index];
+        if (actor.active && isTurret(actor.kind))
+        {
+            turretHurt(w, index, damage, bullet, group);
+            return;
+        }
+        if (actor.active && isGrunt(actor.kind))
+        {
+            gruntHurt(w, index, damage, bullet, group);
+            return;
+        }
+        if (actor.active && isMine(actor.kind))
+        {
+            mineHurt(w, index);
+            return;
+        }
         if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
             return;
+        // A hit to the head counts three times over (before whatever else
+        // the kind makes of it).
+        if (group == kHitHead)
+            damage *= 3;
         if (bullet && actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))
             damage = (damage * 3 + 9) / 10;
         actor.health = static_cast<std::int16_t>(actor.health - damage);
         const MonsterKind &kind = monsterKind(actor.kind);
+        // Taken far past dead (the game's thirty under): it comes apart.
+        if (actor.health < -30 && gibBurst(w, index))
+            return;
         if (actor.health <= 0)
         {
             // A script that had it has lost it.
@@ -402,7 +491,7 @@ namespace hldata
             return;
         }
         detail::monsterVoice(w, actor, 1);
-        if (actor.script >= 0)
+        if (actor.script >= 0 || (actor.flags & kActorPrisoner))
             return;
         const bool wasIdle = actor.ai == kAiIdle;
         detail::monsterWake(a, actor);
@@ -485,7 +574,7 @@ namespace hldata
             {
                 actor.struck = 1;
                 monsterSound(w, actor, CommonSound::HeadcrabBite);
-                playerHurt(player, kHeadcrabBite);
+                playerHurt(player, kHeadcrabBite, actor.pos);
                 a.got |= kGotHurt;
                 actor.velocity[0] = actor.velocity[1] = 0;
             }
@@ -570,7 +659,7 @@ namespace hldata
                 actor.thinkMs = 1000;
                 monsterClip(a, actor, "chewcycle", false);
                 monsterSound(w, actor, CommonSound::BarnacleChew);
-                playerHurt(player, kBarnacleBite);
+                playerHurt(player, kBarnacleBite, actor.pos);
                 a.got |= kGotHurt;
             }
         }
@@ -614,7 +703,7 @@ namespace hldata
             const bool reach = flat < kZombieReach && dz < fxFromInt(64) && dz > -fxFromInt(64);
             auto hurt = [&](int damage)
             {
-                playerHurt(player, damage);
+                playerHurt(player, damage, actor.pos);
                 a.got |= kGotHurt;
             };
             switch (actor.attack)
@@ -629,6 +718,11 @@ namespace hldata
                 for (int i = 0; i < 3; ++i)
                     end[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(theirs[i] - eye[i]) *
                                                        shot.fraction) >> kFractionShift);
+                // (Where it lands on someone is their chest, not the eye they
+                // see it with: a bolt drawn into the eye itself is a smear
+                // across the whole picture.)
+                if (shot.fraction >= kFractionOne)
+                    end[2] -= fxFromInt(20);
                 effectAdd(a, kEffectBolt, eye, end, 0, 200);
                 if (shot.fraction >= kFractionOne && player.health > 0)
                     hurt(kSlaveZap);
@@ -734,8 +828,9 @@ namespace hldata
                 if (actor.thinkMs > 0)
                     break;
                 actor.thinkMs = 300;
+                // (A prisoner goes for nobody.)
                 if (player.health <= 0 || flat > kSightRange || dz > fxFromInt(512) ||
-                    dz < -fxFromInt(512))
+                    dz < -fxFromInt(512) || (actor.flags & kActorPrisoner))
                     break;
                 // In front of it, or near enough to be heard.
                 fx sine, cosine;
@@ -807,7 +902,7 @@ namespace hldata
                     }
                 }
                 const fx speed = actor.speed > 0 ? actor.speed : kind.speed;
-                if (walkTick(a, world, index, kind.small, target, speed, ms, &player, kind.half,
+                if (walkTick(a, world, index, monsterHull(actor.kind), target, speed, ms, &player, kind.half,
                              kind.height) == kWalkNoWay)
                 {
                     // Nowhere to go: it waits, facing them.
@@ -858,7 +953,7 @@ namespace hldata
                     monsterSound(w, actor, lands ? CommonSound::ClawStrike : CommonSound::ClawMiss);
                     if (lands)
                     {
-                        playerHurt(player, both ? kZombieBothSlash : kZombieSlash);
+                        playerHurt(player, both ? kZombieBothSlash : kZombieSlash, actor.pos);
                         a.got |= kGotHurt;
                     }
                 }
@@ -930,6 +1025,29 @@ namespace hldata
                 return add(inv.ammoBuck, 12, 125);
             case ItemKind::GlockClip:
                 return add(inv.ammo9mm, 17, 250);
+            case ItemKind::Mp5:
+                // (Twenty-five rounds with it, as the game gives.)
+                if (weapon(kWeaponMp5))
+                {
+                    inv.clipMp5 = 25;
+                    return true;
+                }
+                return add(inv.ammo9mm, 25, 250);
+            case ItemKind::Python:
+                if (weapon(kWeaponPython))
+                {
+                    inv.clipPython = 6;
+                    return true;
+                }
+                return add(inv.ammo357, 6, 36);
+            case ItemKind::Mp5Clip:
+                return add(inv.ammo9mm, 50, 250);
+            case ItemKind::AmmoBox:
+                return add(inv.ammo9mm, 200, 250);
+            case ItemKind::ArGrenades:
+                return add(inv.ammoAr, 2, 10);
+            case ItemKind::Ammo357:
+                return add(inv.ammo357, 6, 36);
             case ItemKind::Buckshot:
                 return add(inv.ammoBuck, 12, 125);
             case ItemKind::HealthKit:
@@ -1071,12 +1189,110 @@ namespace hldata
                 if (effect.leftMs <= 0)
                     effect.kind = 0;
             }
+            // The pieces of what has come apart: they fall, bounce (losing
+            // nearly half their speed each time), turn while they fly, lie
+            // where they stop, and are gone when their time is up.
+            for (Gib &gib : a.gibs)
+            {
+                if (!gib.active)
+                    continue;
+                if ((gib.leftMs -= ms) <= 0)
+                {
+                    gib.active = false;
+                    continue;
+                }
+                if (gib.resting)
+                    continue;
+                gib.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity) * ms) / 1000);
+                fx to[3];
+                for (int i = 0; i < 3; ++i)
+                    to[i] = gib.pos[i] + static_cast<fx>((static_cast<std::int64_t>(gib.velocity[i]) * ms) / 1000);
+                gib.yaw = static_cast<std::uint16_t>(gib.yaw + gib.spin * ms);
+                gib.pitch = static_cast<std::uint16_t>(gib.pitch + (gib.spin / 2) * ms);
+                const Trace t = traceAll(*w.world, true, gib.pos, to);
+                if (t.startSolid)
+                {
+                    // Thrown from inside something (a monster hard against a
+                    // wall): moved towards the open a little at a time, and
+                    // given up if it never gets there.
+                    gib.pos[2] += fxFromInt(4);
+                    if (gib.leftMs > 600)
+                        gib.leftMs -= 2000;
+                    continue;
+                }
+                if (t.fraction < kFractionOne)
+                {
+                    std::int64_t into = 0;
+                    for (int i = 0; i < 3; ++i)
+                        into += static_cast<std::int64_t>(gib.velocity[i]) * t.normal[i];
+                    into >>= kNormalShift;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const fx off = static_cast<fx>((into * t.normal[i] * 2) >> kNormalShift);
+                        gib.velocity[i] = ((gib.velocity[i] - off) * 11) / 20;
+                        to[i] = t.endPos[i];
+                    }
+                    gib.spin = static_cast<std::int16_t>(gib.spin / 2);
+                    // On something flat enough to lie on, and slow: it lies.
+                    if (t.normal[2] > kNormalOne / 10 * 7 && fxLength(gib.velocity) < fxFromInt(60))
+                    {
+                        gib.resting = true;
+                        gib.pitch = 0;
+                        // (Where a piece of someone lands, it leaves some.)
+                        const bool alien = static_cast<int>(gib.model) == a.alienGibs;
+                        if (static_cast<int>(gib.model) == a.humanGibs || alien)
+                            markFloor(a, *w.world, gib.pos, 24, alien ? kDecalAlien2 : kDecalBlood, 13,
+                                      alien ? kMarkAlien : kMarkBlood);
+                    }
+                }
+                for (int i = 0; i < 3; ++i)
+                    gib.pos[i] = to[i];
+            }
             for (Projectile &shot : a.shots)
             {
                 if (!shot.active)
                     continue;
                 shot.leftMs -= ms;
-                const bool grenade = shot.kind == kShotGrenade;
+                const bool gib = shot.kind == kShotGib;
+                if (shot.kind == kShotContact)
+                {
+                    // A launcher's grenade: an arc at half gravity, and off
+                    // at the first thing it meets -- the world, or anything
+                    // that fights, or (a soldier's) the player.
+                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity / 2) * ms) / 1000);
+                    fx to[3];
+                    for (int i = 0; i < 3; ++i)
+                        to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
+                    const Shot line = traceShot(*w.world, shot.pos, to);
+                    std::int64_t reach = line.fraction;
+                    bool met = line.fraction < kFractionOne || shot.leftMs <= 0;
+                    for (int i = 0; i < a.count; ++i)
+                    {
+                        const ActorState &actor = a.states[i];
+                        if (!actor.active || !fights(actor.kind) || actor.ai >= kAiDying)
+                            continue;
+                        fx mins[3], maxs[3];
+                        targetBox(actor, mins, maxs);
+                        std::int64_t enter;
+                        if (lineEntersBox(shot.pos, to, mins, maxs, enter) && enter < reach && shot.leftMs < 9900)
+                        {
+                            reach = enter;
+                            met = true;
+                        }
+                    }
+                    if (shot.sprite == 1 && player.health > 0 && playerTouchesBox(player, to, to, fxFromInt(8)))
+                        met = true;
+                    for (int i = 0; i < 3; ++i)
+                        shot.pos[i] += static_cast<fx>((static_cast<std::int64_t>(to[i] - shot.pos[i]) * reach) >>
+                                                       kFractionShift);
+                    if (met)
+                    {
+                        shot.active = false;
+                        explodeAt(w, player, shot.pos, kGrenadeBlast, true, true, true);
+                    }
+                    continue;
+                }
+                const bool grenade = shot.kind == kShotGrenade || gib;
                 if (grenade)
                     shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity / 2) * ms) / 1000);
                 fx to[3];
@@ -1100,7 +1316,7 @@ namespace hldata
                             shot.velocity[i] = ((shot.velocity[i] - off) * 2) / 3;
                             to[i] = t.endPos[i];
                         }
-                        if (w.heard != nullptr && fxLength(shot.velocity) > fxFromInt(60))
+                        if (!gib && w.heard != nullptr && fxLength(shot.velocity) > fxFromInt(60))
                             w.heard->add(CommonSound::GrenadeBounce, shot.pos, 100, kRadiusMedium);
                     }
                     for (int i = 0; i < 3; ++i)
@@ -1108,10 +1324,19 @@ namespace hldata
                     if (shot.leftMs <= 0)
                     {
                         shot.active = false;
-                        effectAdd(a, kEffectBurst, shot.pos, nullptr, 96, 350);
+                        if (gib)
+                            continue; // (what was thrown out is simply gone)
+                        effectAdd(a, kEffectBurst, shot.pos, nullptr, 96, 450);
+                        markBlast(a, *w.world, shot.pos, 48);
                         if (w.heard != nullptr)
                             w.heard->add(CommonSound::Explode, shot.pos, 127, 2000);
                         radiusDamage(w, player, shot.pos, kGrenadeBlast, kGrenadeRadius, -1);
+                        // (Felt, near to.)
+                        const fx d[3] = {player.origin[0] - shot.pos[0], player.origin[1] - shot.pos[1],
+                                         player.origin[2] - shot.pos[2]};
+                        const int far = fxToInt(fxLength(d));
+                        if (far < 500)
+                            shakeStart(w, fxFromInt(5) * (500 - far) / 500, 450);
                     }
                     continue;
                 }
@@ -1130,7 +1355,7 @@ namespace hldata
                                    playerTouchesBox(player, end, end, fxFromInt(4)));
                 if (hits)
                 {
-                    playerHurt(player, kSquidSpit);
+                    playerHurt(player, kSquidSpit, shot.pos);
                     a.got |= kGotHurt;
                 }
                 if (hits || line.fraction < kFractionOne || shot.leftMs <= 0)
@@ -1147,6 +1372,733 @@ namespace hldata
         }
     } // namespace detail
 
+
+    // ------------------------------------------------------------- turrets
+    //
+    // The guns that mind a place: the game's turret.cpp, think for think
+    // (ten times a second). Folded away until one sees someone (if it is the
+    // kind that looks) or is switched on by name; then out, sweeping round
+    // and pinging; on whoever it sees, turning to them and firing a round a
+    // think while they are within thirty degrees of where it points; folded
+    // away again when it has seen nobody for a while. Angles are 65536 to
+    // the circle.
+
+    inline constexpr std::uint8_t kTurretOff = kAiIdle;
+    inline constexpr std::uint8_t kTurretDeploy = 1;
+    inline constexpr std::uint8_t kTurretSearch = 2;
+    inline constexpr std::uint8_t kTurretActive = 3;
+    inline constexpr std::uint8_t kTurretRetire = 4;
+
+    /// What each kind of turret is, in numbers: the game's, at "normal".
+    struct TurretKind
+    {
+        int health;
+        int half;     ///< of its box, across
+        int offHigh;  ///< ... and up and down from where it is fixed, folded away
+        int onHigh;   ///< ... and out
+        int eye;      ///< how far its gun is from where it is fixed
+        int minPitch; ///< how far down it can point, in degrees (a negative number)
+        int maxSpinMs; ///< how long its barrels turn with nobody to fire at (0: for good)
+        int maxWaitMs; ///< how long it looks for someone before it folds away (0: for good)
+        int damage;   ///< of a round
+        CommonSound fire;
+        bool spinsUp; ///< its barrels have to get going before it fires
+        bool tough;   ///< armoured; shrugs off a tenth while folded away; goes wild when nearly done for
+    };
+
+    inline const TurretKind &turretKind(std::uint8_t kind)
+    {
+        static const TurretKind kMini = {40, 16, 16, 32, 13, -15, 0, 15000, 5, CommonSound::SentryFire, false, true};
+        static const TurretKind kSentry = {40, 16, 64, 64, 48, -60, 0, 0, 4, CommonSound::SentryFire, false, false};
+        static const TurretKind kBig = {50, 32, 16, 32, 13, -15, 5000, 15000, 10, CommonSound::TurretFire, true, true};
+        if (kind == static_cast<std::uint8_t>(ActorKind::Sentry))
+            return kSentry;
+        return kind == static_cast<std::uint8_t>(ActorKind::Turret) ? kBig : kMini;
+    }
+
+    inline constexpr int kTurretRange = 1200;
+    inline constexpr int kTurretTurnRate = 30; ///< degrees a second, to begin with
+    inline constexpr std::int32_t kDegree = 65536 / 360;
+
+    /// The box a shot at a turret is tried against (and a sentry's touch).
+    inline void turretBox(const ActorState &actor, fx *mins, fx *maxs)
+    {
+        const TurretKind &kind = turretKind(actor.kind);
+        const fx high = fxFromInt(actor.ai == kTurretOff ? kind.offHigh : kind.onHigh);
+        for (int i = 0; i < 2; ++i)
+        {
+            mins[i] = actor.pos[i] - fxFromInt(kind.half);
+            maxs[i] = actor.pos[i] + fxFromInt(kind.half);
+        }
+        mins[2] = actor.pos[2] - high;
+        maxs[2] = actor.pos[2] + high;
+    }
+
+    /// Where a line from `from` to `to` enters the box, as a fraction of the
+    /// way (Q30); false if it does not.
+    inline bool lineEntersBox(const fx *from, const fx *to, const fx *mins, const fx *maxs,
+                              std::int64_t &enter)
+    {
+        std::int64_t leave = kFractionOne;
+        enter = 0;
+        for (int k = 0; k < 3; ++k)
+        {
+            const fx d = to[k] - from[k];
+            if (d == 0)
+            {
+                if (from[k] < mins[k] || from[k] > maxs[k])
+                    return false;
+                continue;
+            }
+            std::int64_t t0 = (static_cast<std::int64_t>(mins[k] - from[k]) << kFractionShift) / d;
+            std::int64_t t1 = (static_cast<std::int64_t>(maxs[k] - from[k]) << kFractionShift) / d;
+            if (t0 > t1)
+            {
+                const std::int64_t swap = t0;
+                t0 = t1;
+                t1 = swap;
+            }
+            enter = t0 > enter ? t0 : enter;
+            leave = t1 < leave ? t1 : leave;
+            if (enter > leave)
+                return false;
+        }
+        return true;
+    }
+
+    namespace detail
+    {
+        inline void turretEye(const ActorState &actor, fx *eye)
+        {
+            const fx up = fxFromInt(turretKind(actor.kind).eye);
+            eye[0] = actor.pos[0];
+            eye[1] = actor.pos[1];
+            eye[2] = actor.pos[2] + ((actor.flags & kActorCeiling) ? -up : up);
+        }
+
+        /// The way the gun points (Q12, unit).
+        inline void turretForward(const ActorState &actor, fx *forward)
+        {
+            fx sinYaw, cosYaw, sinPitch, cosPitch;
+            fxSinCos(static_cast<std::uint16_t>(actor.aimYaw), sinYaw, cosYaw);
+            fxSinCos(static_cast<std::uint16_t>(actor.aimPitch), sinPitch, cosPitch);
+            forward[0] = fxMul(cosPitch, cosYaw);
+            forward[1] = fxMul(cosPitch, sinYaw);
+            forward[2] = sinPitch;
+        }
+
+        inline bool turretSees(const LogicWorld &w, const PlayerState &player, const fx *eye)
+        {
+            if (player.health <= 0)
+                return false;
+            const fx d[3] = {player.origin[0] - eye[0], player.origin[1] - eye[1], player.origin[2] - eye[2]};
+            if (fxLength(d) > fxFromInt(kTurretRange))
+                return false;
+            const fx head[3] = {player.origin[0], player.origin[1], player.origin[2] + player.viewHeight};
+            return lineClear(*w.world, eye, player.origin) || lineClear(*w.world, eye, head);
+        }
+
+        /// One think's turning towards where it is wanted. The game's rule:
+        /// up and down at the rate it has; round by the shorter way, the
+        /// rate building while there is far to go (to ten times what it
+        /// began at) and easing off close to. False when it is there.
+        inline bool turretTurn(ActorState &actor)
+        {
+            bool moved = false;
+            if (actor.aimPitch != actor.wantPitch)
+            {
+                const std::int32_t step = actor.turnRate * kDegree / 10;
+                const std::int32_t left = actor.wantPitch - actor.aimPitch;
+                actor.aimPitch += left > 0 ? (left < step ? left : step) : (-left < step ? left : -step);
+                moved = true;
+            }
+            const std::int32_t left = static_cast<std::int16_t>(static_cast<std::uint32_t>(actor.wantYaw - actor.aimYaw));
+            if (left != 0)
+            {
+                const std::int32_t far = left < 0 ? -left : left;
+                if (far > 30 * kDegree)
+                {
+                    if (actor.turnRate < kTurretTurnRate * 10)
+                        actor.turnRate += kTurretTurnRate;
+                }
+                else if (actor.turnRate > 45)
+                {
+                    actor.turnRate -= kTurretTurnRate;
+                }
+                else
+                {
+                    actor.turnRate += kTurretTurnRate;
+                }
+                const std::int32_t step = actor.turnRate * kDegree / 10;
+                // (There, or as good as: a degree and a half.)
+                if (step >= far || far < kTurretTurnRate * kDegree / 20)
+                    actor.aimYaw = actor.wantYaw;
+                else
+                    actor.aimYaw += left > 0 ? step : -step;
+                actor.aimYaw &= 0xFFFF;
+                actor.wantYaw &= 0xFFFF;
+                moved = true;
+            }
+            if (!moved)
+                actor.turnRate = kTurretTurnRate;
+            return moved;
+        }
+
+        /// Its barrels: got going (the big one takes two seconds and more
+        /// over it; the others are ready at once) ...
+        inline void turretSpinUp(LogicWorld &w, ActorState &actor, const TurretKind &kind)
+        {
+            if (actor.struck)
+                return;
+            if (!kind.spinsUp)
+            {
+                actor.struck = 1;
+                return;
+            }
+            if (actor.speed == 0)
+            {
+                monsterSound(w, actor, CommonSound::TurretSpinUp);
+                actor.speed = kFxOne / 10;
+                actor.thinkMs -= 900; // (it waits a second over the first of it)
+                return;
+            }
+            actor.speed += kFxOne * 3 / 40;
+            if (actor.speed >= kFxOne)
+            {
+                actor.speed = kFxOne;
+                actor.struck = 1;
+            }
+        }
+        /// ... and let run down (five seconds, for the big one).
+        inline void turretSpinDown(LogicWorld &w, ActorState &actor, const TurretKind &kind)
+        {
+            if (!actor.struck && actor.speed == 0)
+                return;
+            if (!kind.spinsUp)
+            {
+                actor.struck = 0;
+                return;
+            }
+            if (actor.speed >= kFxOne)
+                monsterSound(w, actor, CommonSound::TurretSpinDown);
+            actor.speed -= kFxOne / 50;
+            if (actor.speed <= 0)
+            {
+                actor.speed = 0;
+                actor.struck = 0;
+            }
+        }
+
+        /// A round, along the way the gun points: it hurts the player if
+        /// that line meets them before it meets anything else.
+        inline void turretShoot(LogicWorld &w, PlayerState &player, ActorState &actor, const TurretKind &kind,
+                                const fx *eye, const fx *forward)
+        {
+            ActorWorld &a = *w.actors;
+            monsterSound(w, actor, kind.fire);
+            const fx end[3] = {eye[0] + forward[0] * kTurretRange * 2, eye[1] + forward[1] * kTurretRange * 2,
+                               eye[2] + forward[2] * kTurretRange * 2};
+            const Shot shot = traceShot(*w.world, eye, end);
+            std::int64_t reach = shot.fraction;
+            const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+            const fx mins[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16),
+                                player.origin[2] - tall};
+            const fx maxs[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16),
+                                player.origin[2] + tall};
+            std::int64_t enter;
+            if (player.health > 0 && lineEntersBox(eye, end, mins, maxs, enter) && enter < reach)
+            {
+                reach = enter;
+                playerHurt(player, kind.damage, eye);
+                a.got |= kGotHurt;
+            }
+            fx at[3];
+            for (int i = 0; i < 3; ++i)
+                at[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * reach) >> kFractionShift);
+            effectAdd(a, kEffectTracer, eye, at, 0, 60);
+            effectAdd(a, kEffectMuzzle, eye, nullptr, 0, 50);
+            // (What misses marks the wall behind.)
+            if (reach == shot.fraction && shot.fraction < kFractionOne)
+                markShot(a, *w.world, eye, end, false);
+        }
+
+        inline void turretDeploy(LogicWorld &w, PlayerState &player, ActorState &actor, bool alarmed)
+        {
+            ActorWorld &a = *w.actors;
+            actor.ai = kTurretDeploy;
+            monsterClip(a, actor, "deploy", true);
+            if (alarmed)
+                monsterSound(w, actor, CommonSound::TurretAlert);
+            monsterSound(w, actor, CommonSound::TurretDeploy);
+            // What it sets off as it comes out (a tripped sentry wakes the
+            // others of its name this way).
+            if (actor.fires != 0)
+                logicFire(w, player, actor.fires, -1, kUseOn, 0);
+        }
+
+        inline void turretThink(LogicWorld &w, PlayerState &player, int index)
+        {
+            ActorWorld &a = *w.actors;
+            ActorState &actor = a.states[index];
+            const TurretKind &kind = turretKind(actor.kind);
+            const bool ceiling = (actor.flags & kActorCeiling) != 0;
+            fx eye[3];
+            turretEye(actor, eye);
+            // The big turret's eye (ActorState::reach, 0..255): lit at each
+            // ping, it goes out again over the next second.
+            actor.reach = actor.reach > 30 ? actor.reach - 30 : 0;
+
+            // Switched by name: on if it is off, off if it is on (unless it
+            // was told which, and is that already).
+            if (actor.switched != 0)
+            {
+                const int how = actor.switched - 1;
+                actor.switched = 0;
+                const bool on = actor.ai != kTurretOff;
+                if (how == kUseToggle || how == kUseSet || (how == kUseOn) != on)
+                {
+                    if (on && actor.ai != kTurretRetire)
+                    {
+                        actor.hasGoal = false; // told to stop: it does not come out by itself again
+                        actor.ai = kTurretRetire;
+                    }
+                    else if (!on)
+                    {
+                        actor.hasGoal = (actor.flags & kActorAuto) != 0;
+                        turretDeploy(w, player, actor, false);
+                        return;
+                    }
+                }
+            }
+
+            switch (actor.ai)
+            {
+            case kTurretOff:
+            {
+                // One that looks out for itself comes out at the sight of
+                // someone; a sentry at a touch.
+                fx mins[3], maxs[3];
+                turretBox(actor, mins, maxs);
+                const bool touched = actor.kind == static_cast<std::uint8_t>(ActorKind::Sentry) &&
+                                     player.health > 0 && playerTouchesBox(player, mins, maxs, fxFromInt(2));
+                if (touched || (actor.hasGoal && turretSees(w, player, eye)))
+                    turretDeploy(w, player, actor, true);
+                break;
+            }
+            case kTurretDeploy:
+                if (!actor.finished)
+                    break;
+                actor.aimYaw = actor.wantYaw = actor.yaw;
+                actor.aimPitch = actor.wantPitch = 0;
+                actor.turnRate = kTurretTurnRate;
+                actor.stuckMs = kind.maxWaitMs;
+                actor.goal[0] = kind.maxSpinMs;
+                actor.moveMs = 0;
+                actor.cooldownMs = 0;
+                actor.ai = kTurretSearch;
+                monsterClip(a, actor, "spin", false);
+                break;
+            case kTurretSearch:
+                monsterClip(a, actor, "spin", false);
+                actor.cooldownMs -= 100;
+                if (actor.cooldownMs <= 0)
+                {
+                    actor.cooldownMs = 1000;
+                    monsterSound(w, actor, CommonSound::TurretPing);
+                    actor.reach = 255; // (the big one's eye lights with it)
+                }
+                if (turretSees(w, player, eye))
+                {
+                    actor.moveMs = 0;
+                    actor.goal[0] = kind.maxSpinMs;
+                    actor.ai = kTurretActive;
+                    break;
+                }
+                if (kind.maxWaitMs != 0 && (actor.stuckMs -= 100) <= 0)
+                {
+                    actor.ai = kTurretRetire;
+                    break;
+                }
+                if (kind.maxSpinMs != 0 && (actor.goal[0] -= 100) <= 0)
+                    turretSpinDown(w, actor, kind);
+                // Round and round, looking.
+                actor.wantYaw = (actor.wantYaw + actor.turnRate * kDegree / 10) & 0xFFFF;
+                turretTurn(actor);
+                break;
+            case kTurretActive:
+            {
+                const bool visible = turretSees(w, player, eye);
+                if (!visible)
+                {
+                    // Half a second more of it, then back to looking.
+                    if (actor.moveMs == 0)
+                    {
+                        actor.moveMs = 500;
+                    }
+                    else if ((actor.moveMs -= 100) <= 0)
+                    {
+                        actor.moveMs = 0;
+                        actor.stuckMs = kind.maxWaitMs;
+                        actor.ai = kTurretSearch;
+                        break;
+                    }
+                }
+                else
+                {
+                    actor.moveMs = 0;
+                }
+                fx forward[3];
+                turretForward(actor, forward);
+                fx to[3] = {player.origin[0] - eye[0], player.origin[1] - eye[1], player.origin[2] - eye[2]};
+                const fx far = fxLength(to);
+                // Within thirty degrees of where it points.
+                const bool onTarget =
+                    far > 0 && fxMul(to[0], forward[0]) + fxMul(to[1], forward[1]) + fxMul(to[2], forward[2]) >
+                                   fxMul(far, fxFromDouble(0.866));
+                if (actor.struck && (onTarget || actor.attack))
+                {
+                    monsterClip(a, actor, "fire", false);
+                    turretShoot(w, player, actor, kind, eye, forward);
+                }
+                else
+                {
+                    monsterClip(a, actor, "spin", false);
+                }
+                if (actor.attack)
+                {
+                    // Nearly done for, and wild: now and then it swings off
+                    // somewhere, and it does not last.
+                    if (chance(a) % 10 == 0)
+                    {
+                        actor.wantYaw = static_cast<std::int32_t>(chance(a) & 0xFFFF);
+                        actor.wantPitch = static_cast<std::int32_t>(chance(a) % 90) * kDegree * (ceiling ? -1 : 1);
+                        actor.health = static_cast<std::int16_t>(actor.health - 10);
+                        if (actor.health <= 0)
+                        {
+                            actor.ai = kAiDying;
+                            actor.switched = 0xFF;
+                        }
+                        break;
+                    }
+                }
+                else if (visible)
+                {
+                    const fx flat[3] = {to[0], to[1], 0};
+                    actor.wantYaw = fxAtan2Turns(to[1], to[0]);
+                    std::int32_t pitch = static_cast<std::int16_t>(fxAtan2Turns(to[2], fxLength(flat)));
+                    // As far up and down as it is built to point (upside
+                    // down, the other way up).
+                    const std::int32_t low = (ceiling ? -90 : kind.minPitch) * kDegree;
+                    const std::int32_t high = (ceiling ? -kind.minPitch : 90) * kDegree;
+                    actor.wantPitch = pitch < low ? low : (pitch > high ? high : pitch);
+                }
+                turretSpinUp(w, actor, kind);
+                turretTurn(actor);
+                break;
+            }
+            case kTurretRetire:
+            {
+                // Gun back to where it started; barrels stopped; then away.
+                actor.wantPitch = 0;
+                actor.wantYaw = actor.yaw;
+                const ModelView *model = actorModel(a, actor);
+                const int retire = model != nullptr ? model->findClip(nameHash("retire")) : -1;
+                if (turretTurn(actor))
+                {
+                    monsterClip(a, actor, "spin", false);
+                }
+                else if (actor.struck || actor.speed != 0)
+                {
+                    turretSpinDown(w, actor, kind);
+                }
+                else if (retire >= 0 && actor.clip != retire)
+                {
+                    // (The game plays it backwards: turretTick runs it.)
+                    actor.clip = static_cast<std::int16_t>(retire);
+                    actor.frame = (model->clips[retire].frameCount - 1u) << 8;
+                    actor.frozen = true;
+                    actor.once = true;
+                    actor.finished = false;
+                    monsterSound(w, actor, CommonSound::TurretDeploy);
+                    if (actor.fires != 0)
+                        logicFire(w, player, actor.fires, -1, kUseOff, 0);
+                }
+                else if (retire < 0 || actor.frame == 0)
+                {
+                    actor.ai = kTurretOff;
+                    actor.attack = 0;
+                    monsterClip(a, actor, "idle_off", false);
+                }
+                break;
+            }
+            default:
+                break;
+            }
+        }
+
+        inline void turretTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            ActorState &actor = a.states[index];
+            const TurretKind &kind = turretKind(actor.kind);
+            if (actor.health == 0 && actor.ai == kTurretOff && actor.switched != 0xFF)
+            {
+                // Its first tick. (Health in tenths: see turretHurt.)
+                actor.health = static_cast<std::int16_t>(kind.health * 10);
+                actor.hasGoal = (actor.flags & kActorAuto) != 0;
+                actor.aimYaw = actor.wantYaw = actor.yaw;
+                actor.turnRate = kTurretTurnRate;
+                actor.thinkMs = -200 - (index * 37) % 100;
+            }
+            if (actor.ai == kAiDead)
+                return;
+            if (actor.ai == kAiDying)
+            {
+                if (actor.switched == 0xFF)
+                {
+                    // Destroyed, a moment ago: the gun droops (a sentry's
+                    // falls straight), and what it was to set off goes off.
+                    actor.switched = 0;
+                    actor.reach = 255; // (its eye, a last time)
+                    monsterSound(w, actor, CommonSound::TurretDie);
+                    monsterClip(a, actor, "die", true);
+                    actor.struck = 0;
+                    actor.speed = 0;
+                    if (actor.kind == static_cast<std::uint8_t>(ActorKind::Sentry))
+                    {
+                        actor.aimYaw = actor.wantYaw = actor.yaw;
+                        actor.aimPitch = actor.wantPitch = 0;
+                        actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
+                    }
+                    else
+                    {
+                        actor.wantPitch = ((actor.flags & kActorCeiling) ? -90 : -15) * kDegree;
+                    }
+                    if (actor.fires != 0)
+                        logicFire(w, player, actor.fires, -1, kUseOn, 0);
+                    return;
+                }
+                if ((actor.thinkMs += ms) >= 100)
+                {
+                    actor.thinkMs -= 100;
+                    actor.reach = actor.reach > 30 ? actor.reach - 30 : 0;
+                    actor.wantYaw = actor.aimYaw;
+                    if (!turretTurn(actor) && actor.finished)
+                        actor.ai = kAiDead;
+                }
+                return;
+            }
+            // Folding away is its coming out, run backwards.
+            if (actor.ai == kTurretRetire && actor.frozen)
+            {
+                const ModelView *model = actorModel(a, actor);
+                const std::uint32_t back =
+                    model != nullptr && actor.clip >= 0
+                        ? static_cast<std::uint32_t>(model->clips[actor.clip].fps) * static_cast<std::uint32_t>(ms) / 1000u
+                        : actor.frame;
+                actor.frame = actor.frame > back ? actor.frame - back : 0;
+            }
+            actor.thinkMs += ms;
+            // (Not more than two thinks a tick, however long the tick.)
+            for (int n = 0; n < 2 && actor.thinkMs >= 100 && actor.ai < kAiDying; ++n)
+            {
+                actor.thinkMs -= 100;
+                turretThink(w, player, index);
+            }
+            if (actor.thinkMs > 200)
+                actor.thinkMs = 200;
+        }
+    } // namespace detail
+
+    /// Hurt the turret at `index`, with `damage` to a hit box of `group`.
+    /// The game's rules: its plating turns a bullet (a tenth gets through);
+    /// folded away it feels a tenth of anything (not a sentry, which is
+    /// woken by it instead); nearly done for, and out, it goes wild. Its
+    /// health is kept in tenths, for the tenths.
+    inline void turretHurt(LogicWorld &w, int index, int damage, bool bullet, int group)
+    {
+        ActorState &actor = w.actors->states[index];
+        if (!actor.active || actor.ai >= kAiDying)
+            return;
+        const TurretKind &kind = turretKind(actor.kind);
+        int tenths = damage * 10;
+        if (bullet && group == kHitArmour && kind.tough)
+            tenths /= 10;
+        if (kind.tough && actor.ai == kTurretOff)
+            tenths /= 10;
+        if (tenths <= 0)
+            return;
+        actor.health = static_cast<std::int16_t>(actor.health - tenths);
+        if (actor.health <= 0)
+        {
+            actor.health = 0;
+            actor.ai = kAiDying;
+            actor.switched = 0xFF; // (turretTick says so, and sets off what it is to)
+            actor.thinkMs = 0;
+            return;
+        }
+        if (!kind.tough)
+        {
+            if (actor.ai == kTurretOff)
+                actor.switched = static_cast<std::uint8_t>(1 + kUseOn);
+        }
+        else if (actor.health <= 100 && actor.ai != kTurretOff && actor.ai != kTurretDeploy)
+        {
+            actor.attack = 1;
+            actor.ai = kTurretSearch;
+        }
+    }
+
+    // ------------------------------------------------------------- tripmines
+    //
+    // The game's tripmine.cpp. A mine on a wall: a while after the map
+    // starts (two and a half seconds; one, if the map says so) its beam
+    // comes on, out along the way it points to the first thing in the way
+    // within 2048 units. Ten times a second the beam is measured again --
+    // against the world and what moves in it, the player, and anything that
+    // fights -- and if it has got any shorter or longer, or the mine is hurt
+    // by anything at all, the mine goes off a moment later: 150, to 375
+    // units.
+
+    inline constexpr std::uint8_t kMineArmed = 1; ///< ActorState::ai, between kAiIdle and kAiDying
+    inline constexpr int kMineBlast = 150;
+    inline constexpr int kMineRange = 2048;
+
+    namespace detail
+    {
+        /// How far along its beam (Q30, of kMineRange) the first thing is.
+        inline std::int32_t mineReach(const LogicWorld &w, const PlayerState &player, int index, const fx *end)
+        {
+            const ActorWorld &a = *w.actors;
+            const ActorState &mine = a.states[index];
+            std::int64_t reach = traceShot(*w.world, mine.pos, end).fraction;
+            std::int64_t enter;
+            if (player.health > 0)
+            {
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx mins[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16),
+                                    player.origin[2] - tall};
+                const fx maxs[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16),
+                                    player.origin[2] + tall};
+                if (lineEntersBox(mine.pos, end, mins, maxs, enter) && enter < reach)
+                    reach = enter;
+            }
+            for (int i = 0; i < a.count; ++i)
+            {
+                const ActorState &actor = a.states[i];
+                if (i == index || !actor.active || !fights(actor.kind) || isMine(actor.kind) || actor.ai >= kAiDying)
+                    continue;
+                fx mins[3], maxs[3];
+                targetBox(actor, mins, maxs);
+                if (lineEntersBox(mine.pos, end, mins, maxs, enter) && enter < reach)
+                    reach = enter;
+            }
+            return static_cast<std::int32_t>(reach);
+        }
+
+        inline void mineTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            ActorState &mine = a.states[index];
+            if (mine.ai == kAiDead)
+                return;
+            fx forward[3];
+            turretForward(mine, forward);
+            if (mine.ai == kAiDying)
+            {
+                // Set off: it goes a moment after.
+                if ((mine.thinkMs -= ms) > 0)
+                    return;
+                mine.ai = kAiDead;
+                mine.active = false;
+                actorPlaceBox(a, index);
+                const fx at[3] = {mine.pos[0] + forward[0] * 8, mine.pos[1] + forward[1] * 8,
+                                  mine.pos[2] + forward[2] * 8};
+                explodeAt(w, player, at, kMineBlast, true, true, true);
+                return;
+            }
+            const fx end[3] = {mine.pos[0] + forward[0] * kMineRange, mine.pos[1] + forward[1] * kMineRange,
+                               mine.pos[2] + forward[2] * kMineRange};
+            if (mine.ai != kMineArmed)
+            {
+                if (mine.health == 0)
+                {
+                    mine.health = 1;
+                    mine.thinkMs = (mine.flags & kActorQuick) ? 1000 : 2500;
+                }
+                if ((mine.thinkMs -= ms) > 0)
+                    return;
+                // Its beam comes on: as long as it is now is as long as it
+                // has to stay. (ActorState::reach: Q30 of the range, not
+                // Q12; ::goal: where it ends.)
+                mine.reach = mineReach(w, player, index, end);
+                for (int k = 0; k < 3; ++k)
+                    mine.goal[k] = mine.pos[k] + static_cast<fx>((static_cast<std::int64_t>(end[k] - mine.pos[k]) *
+                                                                   mine.reach) >> kFractionShift);
+                mine.ai = kMineArmed;
+                mine.thinkMs = 0;
+                monsterSound(w, mine, CommonSound::MineActivate);
+                return;
+            }
+            if ((mine.thinkMs += ms) < 100)
+                return;
+            mine.thinkMs = mine.thinkMs > 200 ? 0 : mine.thinkMs - 100;
+            const std::int32_t reach = mineReach(w, player, index, end);
+            const std::int32_t off = reach > mine.reach ? reach - mine.reach : mine.reach - reach;
+            // (A thousandth of the range, as the game: two units.)
+            if (off > kFractionOne / 1000)
+                mineHurt(w, index);
+        }
+    } // namespace detail
+
+    /// Anything at all sets a mine off: a tenth to three tenths of a second
+    /// later.
+    inline void mineHurt(LogicWorld &w, int index)
+    {
+        ActorWorld &a = *w.actors;
+        ActorState &mine = a.states[index];
+        if (!mine.active || mine.ai >= kAiDying)
+            return;
+        mine.ai = kAiDying;
+        mine.thinkMs = 100 + static_cast<int>(detail::chance(a) % 200);
+    }
+
+    /// What can be shot, and stays destroyed: the monsters, the turrets,
+    /// the soldiers and the mines.
+    inline bool fights(std::uint8_t kind)
+    {
+        return isMonster(kind) || isTurret(kind) || isGrunt(kind) || isMine(kind);
+    }
+
+    /// The box a shot at the actor is first tried against.
+    inline void targetBox(const ActorState &actor, fx *mins, fx *maxs)
+    {
+        if (isTurret(actor.kind))
+        {
+            turretBox(actor, mins, maxs);
+            return;
+        }
+        if (isMine(actor.kind))
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                mins[i] = actor.pos[i] - fxFromInt(8);
+                maxs[i] = actor.pos[i] + fxFromInt(8);
+            }
+            return;
+        }
+        const MonsterKind &kind = monsterKind(actor.kind);
+        // (A barnacle's body is above its "feet".)
+        const bool hangs = actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle);
+        for (int i = 0; i < 2; ++i)
+        {
+            mins[i] = actor.pos[i] - kind.half;
+            maxs[i] = actor.pos[i] + kind.half;
+        }
+        mins[2] = hangs ? actor.pos[2] - fxFromInt(8) : actor.pos[2];
+        maxs[2] = actor.pos[2] + kind.height;
+    }
+
     /// Everything in this file that happens by itself, for `ms` more
     /// milliseconds. After logicTick (which moves the actors' clips on).
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
@@ -1154,6 +2106,15 @@ namespace hldata
         if (w.actors == nullptr || w.world == nullptr)
             return;
         ActorWorld &a = *w.actors;
+        for (int k = 0; k < 3; ++k)
+            a.foe[k] = player.origin[k];
+        if (a.noiseMs > 0)
+            a.noiseMs -= ms;
+        if (a.speakMs > 0)
+            a.speakMs -= ms;
+        // The small things in flight; a casing rings as it lands.
+        if (piecesTick(a, *w.world, ms) > 0 && w.heard != nullptr)
+            w.heard->add(CommonSound::Shell, nullptr, 70, kRadiusSmall);
         for (int i = 0; i < w.recordCount; ++i)
         {
             const auto kind = static_cast<LogicKind>(w.records[i].kind);
@@ -1178,7 +2139,9 @@ namespace hldata
                     {
                         const auto item = static_cast<ItemKind>(actor.item);
                         w.heard->add(item == ItemKind::HealthKit ? CommonSound::MedKit
-                                     : (item == ItemKind::GlockClip || item == ItemKind::Buckshot)
+                                     : (item == ItemKind::GlockClip || item == ItemKind::Buckshot ||
+                                        item == ItemKind::Mp5Clip || item == ItemKind::AmmoBox ||
+                                        item == ItemKind::ArGrenades || item == ItemKind::Ammo357)
                                          ? CommonSound::AmmoPickup
                                          : CommonSound::GunPickup,
                                      nullptr);
@@ -1191,6 +2154,25 @@ namespace hldata
                 }
                 continue;
             }
+            if (isTurret(actor.kind))
+            {
+                detail::turretTick(w, player, i, ms);
+                actor.lastFrame = actor.frame;
+                actorPlaceBox(a, i);
+                continue;
+            }
+            if (isMine(actor.kind))
+            {
+                detail::mineTick(w, player, i, ms);
+                continue;
+            }
+            if (isGrunt(actor.kind))
+            {
+                detail::gruntTick(w, player, i, ms);
+                actor.lastFrame = actor.frame;
+                actorPlaceBox(a, i);
+                continue;
+            }
             if (!isMonster(actor.kind))
                 continue;
             detail::monsterTick(w, player, i, ms);
@@ -1198,16 +2180,119 @@ namespace hldata
             actorPlaceBox(a, i);
         }
         detail::projectilesTick(w, player, ms);
+        effectsTick(w, player, ms);
     }
 
     // ------------------------------------------------------------- weapons
 
+    /// What each gun is, in numbers: the game's.
+    struct GunKind
+    {
+        int holds;     ///< rounds in a clip
+        int reloadMs;  ///< (the shotgun's is by the shell: see weaponsTick)
+        int refireMs;
+        int damage;    ///< of a round, or of a pellet
+        int pellets;
+        int spread;    ///< how far a round may go off line, in 4096ths either way
+        int range;
+        CommonSound fire, reload;
+    };
+    inline const GunKind &gunKind(std::uint8_t weapon)
+    {
+        static const GunKind kGlock = {17, 1500, 300, 8, 1, 0, 4096, CommonSound::Pistol, CommonSound::Reload};
+        static const GunKind kShotgun = {8, 500, 750, 5, 6, 357, 2048, CommonSound::Shotgun,
+                                         CommonSound::ShotgunReload};
+        // (Three degrees, and one: the game's cones.)
+        static const GunKind kMp5 = {50, 1500, 100, 5, 1, 107, 4096, CommonSound::Mp5Fire, CommonSound::Reload};
+        static const GunKind kPython = {6, 2000, 750, 40, 1, 36, 4096, CommonSound::PythonFire,
+                                        CommonSound::PythonReload};
+        return weapon == kWeaponShotgun ? kShotgun
+                                        : (weapon == kWeaponMp5 ? kMp5 : (weapon == kWeaponPython ? kPython : kGlock));
+    }
+    /// The clip of the gun in hand, and what it is refilled from; null for
+    /// what is not a gun.
+    inline std::int16_t *gunClip(Inventory &inv)
+    {
+        return inv.current == kWeaponGlock ? &inv.clipGlock
+               : inv.current == kWeaponShotgun ? &inv.clipShotgun
+               : inv.current == kWeaponMp5 ? &inv.clipMp5
+               : inv.current == kWeaponPython ? &inv.clipPython : nullptr;
+    }
+    inline std::int16_t *gunSpare(Inventory &inv)
+    {
+        return inv.current == kWeaponGlock || inv.current == kWeaponMp5 ? &inv.ammo9mm
+               : inv.current == kWeaponShotgun ? &inv.ammoBuck
+               : inv.current == kWeaponPython ? &inv.ammo357 : nullptr;
+    }
+    inline constexpr std::uint32_t kWeaponSecondary = 16; ///< weaponsTick: its other fire (the launcher)
+
     struct WeaponState
     {
         std::int32_t cooldownMs = 0; ///< until it can be used again
+        std::int32_t secondMs = 0;   ///< ... and its other fire
         std::int32_t reloadMs = 0;   ///< left of a reload under way
         std::uint32_t seed = 777;    ///< where the shotgun's pellets go
     };
+
+    /// Which part of the actor a line from `from` to `to` strikes first
+    /// (kHit*): the model is posed as the actor stands, and the line tried
+    /// against each of its hit boxes, in the box's bone's own space. A line
+    /// that goes between them all, or a model that has none, is a hit to
+    /// the body: whoever fired was near enough.
+    inline int hitGroup(const ActorWorld &a, const ActorState &actor, const fx *from, const fx *to)
+    {
+        const ModelView *model = actorModel(a, actor);
+        if (model == nullptr || model->header->hitboxCount == 0 || actor.clip < 0)
+            return kHitBody;
+        static BoneMatrix bones[kModelMaxBones];
+        std::int32_t controls[kModelControls];
+        const bool controlled = actorControls(actor, controls);
+        poseModel(*model, actor.clip, actor.frame, bones, controlled ? controls : nullptr);
+        // Into the model's space: back through the way the actor is turned
+        // (a turret under a ceiling is turned over as well: ModelDraw).
+        fx sine, cosine;
+        fxSinCos(actor.yaw, sine, cosine);
+        const bool over = isTurret(actor.kind) && (actor.flags & kActorCeiling) != 0;
+        fx ends[2][3];
+        for (int e = 0; e < 2; ++e)
+        {
+            const fx *p = e == 0 ? from : to;
+            const fx d[3] = {p[0] - actor.pos[0], p[1] - actor.pos[1], p[2] - actor.pos[2]};
+            ends[e][0] = fxMul(d[0], cosine) + fxMul(d[1], sine);
+            ends[e][1] = over ? fxMul(d[0], sine) - fxMul(d[1], cosine) : fxMul(d[1], cosine) - fxMul(d[0], sine);
+            ends[e][2] = over ? -d[2] : d[2];
+        }
+        int group = kHitBody;
+        std::int64_t nearest = kFractionOne + 1;
+        for (int n = 0; n < model->header->hitboxCount; ++n)
+        {
+            const ModelHitbox &box = model->hitboxes[n];
+            const BoneMatrix &bone = bones[box.bone];
+            fx local[2][3];
+            for (int e = 0; e < 2; ++e)
+            {
+                const fx d[3] = {ends[e][0] - bone.t[0], ends[e][1] - bone.t[1], ends[e][2] - bone.t[2]};
+                for (int k = 0; k < 3; ++k)
+                    local[e][k] = static_cast<fx>((static_cast<std::int64_t>(bone.r[k]) * d[0] +
+                                                   static_cast<std::int64_t>(bone.r[3 + k]) * d[1] +
+                                                   static_cast<std::int64_t>(bone.r[6 + k]) * d[2]) >>
+                                                  kBoneRotShift);
+            }
+            fx mins[3], maxs[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                mins[k] = static_cast<fx>(box.mins[k]) << (kFxShift - kHitboxShift);
+                maxs[k] = static_cast<fx>(box.maxs[k]) << (kFxShift - kHitboxShift);
+            }
+            std::int64_t enter;
+            if (lineEntersBox(local[0], local[1], mins, maxs, enter) && enter < nearest)
+            {
+                nearest = enter;
+                group = box.group;
+            }
+        }
+        return group;
+    }
 
     /// What a shot along `dir` (Q12, unit) from `eye` lands on within
     /// `range` units, and hurts: a monster, or something that breaks. True
@@ -1224,37 +2309,12 @@ namespace hldata
         for (int i = 0; a != nullptr && i < a->count; ++i)
         {
             const ActorState &actor = a->states[i];
-            if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
+            if (!actor.active || !fights(actor.kind) || actor.ai >= kAiDying)
                 continue;
-            const MonsterKind &kind = monsterKind(actor.kind);
-            // (A barnacle's body is above its "feet".)
-            const bool hangs = actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle);
-            const fx mins[3] = {actor.pos[0] - kind.half, actor.pos[1] - kind.half,
-                                hangs ? actor.pos[2] - fxFromInt(8) : actor.pos[2]};
-            const fx maxs[3] = {actor.pos[0] + kind.half, actor.pos[1] + kind.half,
-                                actor.pos[2] + kind.height};
-            std::int64_t enter = 0, leave = kFractionOne;
-            bool miss = false;
-            for (int k = 0; k < 3 && !miss; ++k)
-            {
-                const fx d = end[k] - eye[k];
-                if (d == 0)
-                {
-                    miss = eye[k] < mins[k] || eye[k] > maxs[k];
-                    continue;
-                }
-                std::int64_t t0 = (static_cast<std::int64_t>(mins[k] - eye[k]) << kFractionShift) / d;
-                std::int64_t t1 = (static_cast<std::int64_t>(maxs[k] - eye[k]) << kFractionShift) / d;
-                if (t0 > t1)
-                {
-                    const std::int64_t swap = t0;
-                    t0 = t1;
-                    t1 = swap;
-                }
-                enter = t0 > enter ? t0 : enter;
-                leave = t1 < leave ? t1 : leave;
-                miss = enter > leave;
-            }
+            fx mins[3], maxs[3];
+            targetBox(actor, mins, maxs);
+            std::int64_t enter = 0;
+            const bool miss = !lineEntersBox(eye, end, mins, maxs, enter);
             if (!miss && enter < nearest)
             {
                 nearest = enter;
@@ -1263,7 +2323,28 @@ namespace hldata
         }
         if (struck >= 0)
         {
-            monsterHurt(w, struck, damage, bullet);
+            // Where it landed, what bleeds bleeds (the aliens yellow).
+            const std::uint8_t kind = a->states[struck].kind;
+            if (isMonster(kind) || isGrunt(kind))
+            {
+                fx at[3];
+                for (int i = 0; i < 3; ++i)
+                    at[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * nearest) >>
+                                                     kFractionShift);
+                effectAdd(*w.actors, kEffectBlood, at, nullptr, isGrunt(kind) ? 0 : 1, 250);
+                if (bullet && w.heard != nullptr)
+                    w.heard->add(CommonSound::BulletFlesh, at, 90, kRadiusSmall);
+                monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
+                // ... and on the wall or the floor behind it, if there is
+                // one near: more of it for the blow that kills.
+                const bool killed = a->states[struck].ai >= kAiDying || !a->states[struck].active;
+                markBlood(*w.actors, *w.world, at, dir, !isGrunt(kind), killed || damage >= 40);
+                if (killed)
+                    markFloor(*w.actors, *w.world, at, 96, isGrunt(kind) ? kDecalBlood : kDecalAlien, 22,
+                              isGrunt(kind) ? kMarkBlood : kMarkAlien);
+                return true;
+            }
+            monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
             return true;
         }
         if (shot.mover >= 0)
@@ -1273,10 +2354,34 @@ namespace hldata
                 if (w.records[i].brush == static_cast<std::uint16_t>(shot.mover) && !w.states[i].dead &&
                     detail::isBreakable(w.records[i]))
                 {
+                    w.struckFrom[0] = dir[0];
+                    w.struckFrom[1] = dir[1];
+                    w.struckFrom[2] = dir[2];
                     logicStrike(w, player, i, damage);
+                    // Glass that takes it and stands: cracked, where it
+                    // was hit (the mark is the brush's: it goes with it).
+                    fx at[3], normal[3];
+                    if (w.actors != nullptr && !w.states[i].dead && (w.records[i].extra[1] == 0 || w.records[i].extra[1] == 7) &&
+                        w.brushStates != nullptr && traceShotWall(*w.world, eye, end, at, normal))
+                    {
+                        for (int k = 0; k < 3; ++k)
+                            at[k] -= w.brushStates[shot.mover].pos[k];
+                        decalAdd(*w.actors, kDecalCrack, at, normal, 20, kMarkCrack, shot.mover);
+                    }
                     return true;
                 }
             }
+        }
+        // On the world, or on something that does not break: its mark, its
+        // dust, and now and then the whine of it glancing off.
+        if (w.actors != nullptr && shot.fraction < kFractionOne && markShot(*w.actors, *w.world, eye, end, !bullet) &&
+            bullet && w.heard != nullptr && detail::chance(*w.actors) % 3 == 0)
+        {
+            fx at[3];
+            for (int i = 0; i < 3; ++i)
+                at[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * shot.fraction) >> kFractionShift);
+            w.heard->add(detail::chance(*w.actors) & 1 ? CommonSound::Ricochet1 : CommonSound::Ricochet2, at, 100,
+                         kRadiusMedium);
         }
         return false;
     }
@@ -1295,31 +2400,41 @@ namespace hldata
     }
 
     /// The weapon in hand, for `ms` more milliseconds: `attack` is the
-    /// trigger held, `next` a press of "the other weapon". `forward`,
-    /// `right` and `up` are the view's (Q12). Returns kWeapon* for what it
-    /// did, for whoever draws it.
+    /// trigger held, `next` a press of "the other weapon", `second` the
+    /// other button held: the MP5's launcher, and for any other gun
+    /// "reload"; `pick` a weapon asked for by name (a kWeapon*; 0 none),
+    /// taken if it is carried -- and if it is the one in hand already,
+    /// reloaded; `reload` a reload asked for outright, of any gun (the
+    /// MP5 too, which the other button cannot reload while it has
+    /// grenades to launch). `forward`, `right` and `up` are the view's (Q12). Returns
+    /// kWeapon* for what it did, for whoever draws it.
     inline std::uint32_t weaponsTick(LogicWorld &w, PlayerState &player, WeaponState &state,
                                      const fx *eye, const fx *forward, const fx *right, const fx *up,
-                                     bool attack, bool next, int ms)
+                                     bool attack, bool next, int ms, bool second = false, int pick = 0,
+                                     bool reload = false)
     {
         Inventory &inv = player.inv;
         std::uint32_t did = 0;
         if (state.cooldownMs > 0)
             state.cooldownMs -= ms;
+        if (state.secondMs > 0)
+            state.secondMs -= ms;
         // Something not held is not in hand (a save from before it was).
         if (inv.current != kWeaponNone && !(inv.have & (1u << inv.current)))
             inv.current = weaponAfter(inv);
 
-        std::int16_t *clip = inv.current == kWeaponGlock ? &inv.clipGlock
-                             : inv.current == kWeaponShotgun ? &inv.clipShotgun : nullptr;
-        std::int16_t *spare = inv.current == kWeaponGlock ? &inv.ammo9mm
-                              : inv.current == kWeaponShotgun ? &inv.ammoBuck : nullptr;
-        const int holds = inv.current == kWeaponGlock ? 17 : 8;
+        std::int16_t *clip = gunClip(inv);
+        std::int16_t *spare = gunSpare(inv);
+        const GunKind &gun = gunKind(inv.current);
+        const int holds = gun.holds;
+        const bool picked = pick > kWeaponNone && pick < kWeaponCount && pick != inv.current &&
+                            (inv.have & (1u << pick)) != 0;
+        reload = reload || (pick > kWeaponNone && pick == inv.current);
 
         if (state.reloadMs > 0)
         {
             state.reloadMs -= ms;
-            if (state.reloadMs > 0 && !next)
+            if (state.reloadMs > 0 && !next && !picked)
                 return did;
             if (state.reloadMs <= 0 && clip != nullptr)
             {
@@ -1329,9 +2444,9 @@ namespace hldata
             }
             state.reloadMs = 0;
         }
-        if (next)
+        if (next || picked)
         {
-            const std::uint8_t other = weaponAfter(inv);
+            const std::uint8_t other = picked ? static_cast<std::uint8_t>(pick) : weaponAfter(inv);
             if (other != inv.current)
             {
                 inv.current = other;
@@ -1339,6 +2454,37 @@ namespace hldata
                 state.reloadMs = 0;
                 return did | kWeaponDrawn;
             }
+        }
+        // The other button: the MP5's launcher -- a grenade that goes off
+        // at what it touches, once a second -- and with any other gun (or
+        // an MP5 with nothing to launch), a reload that was not waited for.
+        if (second && !reload && inv.current == kWeaponMp5 && inv.ammoAr > 0)
+        {
+            if (state.secondMs > 0 || w.actors == nullptr)
+                return did;
+            fx from[3], velocity[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                from[i] = eye[i] + forward[i] * 16;
+                velocity[i] = forward[i] * 800;
+            }
+            if (!projectileAdd(*w.actors, kShotContact, from, velocity, 10000))
+                return did;
+            inv.ammoAr = static_cast<std::int16_t>(inv.ammoAr - 1);
+            state.secondMs = 1000;
+            state.cooldownMs = state.cooldownMs > 1000 ? state.cooldownMs : 1000;
+            if (w.heard != nullptr)
+                w.heard->add(CommonSound::Launcher, nullptr);
+            return did | kWeaponSecondary;
+        }
+        if ((second || reload) && clip != nullptr && *clip < holds && *spare > 0 && state.cooldownMs <= 0)
+        {
+            state.reloadMs = inv.current == kWeaponShotgun
+                                 ? 500 + 500 * (holds - *clip < *spare ? holds - *clip : *spare)
+                                 : gun.reloadMs;
+            if (w.heard != nullptr)
+                w.heard->add(gun.reload, nullptr);
+            return did | kWeaponReload;
         }
         if (!attack || state.cooldownMs > 0 || inv.current == kWeaponNone)
             return did;
@@ -1384,7 +2530,7 @@ namespace hldata
                 for (int i = 0; i < w.actors->count; ++i)
                 {
                     const ActorState &actor = w.actors->states[i];
-                    if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
+                    if (!actor.active || !(isMonster(actor.kind) || isGrunt(actor.kind)) || actor.ai >= kAiDying)
                         continue;
                     const fx half = monsterKind(actor.kind).height / 2;
                     const fx to[3] = {actor.pos[0] - eye[0], actor.pos[1] - eye[1],
@@ -1424,11 +2570,10 @@ namespace hldata
         {
             if (*spare > 0)
             {
-                state.reloadMs = inv.current == kWeaponGlock ? 1500 : 500 + 500 * (holds < *spare ? holds : *spare);
+                state.reloadMs = inv.current == kWeaponShotgun ? 500 + 500 * (holds < *spare ? holds : *spare)
+                                                               : gun.reloadMs;
                 if (w.heard != nullptr)
-                    w.heard->add(inv.current == kWeaponGlock ? CommonSound::Reload
-                                                             : CommonSound::ShotgunReload,
-                                 nullptr);
+                    w.heard->add(gun.reload, nullptr);
                 return did | kWeaponReload;
             }
             state.cooldownMs = 300; // a click
@@ -1438,29 +2583,47 @@ namespace hldata
         }
         *clip = static_cast<std::int16_t>(*clip - 1);
         if (w.heard != nullptr)
-            w.heard->add(inv.current == kWeaponGlock ? CommonSound::Pistol : CommonSound::Shotgun, nullptr);
-        bool hit = false;
-        if (inv.current == kWeaponGlock)
+            w.heard->add(gun.fire, nullptr);
+        // (Loud enough to turn a head.)
+        if (w.actors != nullptr)
         {
-            hit = fireLine(w, player, eye, forward, 4096, 8, true);
-            state.cooldownMs = 300;
+            for (int i = 0; i < 3; ++i)
+                w.actors->noise[i] = eye[i];
+            w.actors->noiseMs = 400;
         }
-        else
+        // The flash at the gun's end: ahead of the eye, to the right and a
+        // little down, where the gun is held.
+        if (w.actors != nullptr)
         {
-            // Six pellets in a cone of five degrees or so.
-            for (int n = 0; n < 6; ++n)
+            fx at[3];
+            for (int i = 0; i < 3; ++i)
+                at[i] = eye[i] + forward[i] * 30 + right[i] * 6 - up[i] * 5;
+            effectAdd(*w.actors, kEffectMuzzle, at, nullptr, 0, 50);
+        }
+        // Each round (each pellet) a little off line, by as much as the gun
+        // is loose.
+        bool hit = false;
+        for (int n = 0; n < gun.pellets; ++n)
+        {
+            fx dir[3] = {forward[0], forward[1], forward[2]};
+            if (gun.spread != 0)
             {
+                const std::uint32_t wide = static_cast<std::uint32_t>(gun.spread) * 2 + 1;
                 state.seed = state.seed * 1664525u + 1013904223u;
-                const int x = static_cast<int>((state.seed >> 8) % 715) - 357;
+                const int x = static_cast<int>((state.seed >> 8) % wide) - gun.spread;
                 state.seed = state.seed * 1664525u + 1013904223u;
-                const int y = static_cast<int>((state.seed >> 8) % 715) - 357;
-                fx dir[3];
+                const int y = static_cast<int>((state.seed >> 8) % wide) - gun.spread;
                 for (int i = 0; i < 3; ++i)
                     dir[i] = forward[i] + ((right[i] * x + up[i] * y) >> kFxShift);
-                hit = fireLine(w, player, eye, dir, 2048, 5, true) || hit;
             }
-            state.cooldownMs = 750;
+            hit = fireLine(w, player, eye, dir, gun.range, gun.damage, true) || hit;
         }
+        // (What the wait ran over by comes off the next: a gun that fires
+        // ten times a second does, whatever the length of a tick.)
+        state.cooldownMs = gun.refireMs + (state.cooldownMs > -ms ? state.cooldownMs : -ms);
         return did | kWeaponFired | (hit ? kWeaponHit : 0);
     }
 } // namespace hldata
+
+#include "HlEffects.hpp"
+#include "HlGrunt.hpp"

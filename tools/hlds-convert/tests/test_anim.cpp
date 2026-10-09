@@ -11,9 +11,12 @@
 // Needs HLDS_VALVE_DIR. Set HLDS_DUMP_DIR as well to have the skins written
 // there as PNGs, for looking at.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "HlAnim.hpp"
 #include "TestBspBuilder.hpp"
@@ -140,6 +143,131 @@ namespace
         if (dump != nullptr && *dump != '\0' && cooked.atlas.width != 0)
             writePng(std::string(dump) + "/" + mdl.name + "_atlas.png", cooked.atlas, error);
     }
+
+    /// Bone controllers: what the game sets by hand on top of a clip. For
+    /// each setting tried, every bone must be where the game's own maths
+    /// puts it with that much added to the bone's angle (or place).
+    ///
+    /// `settings` are in the controller's own terms: degrees, or units.
+    void checkControls(const std::string &dir, const char *file, const std::vector<std::string> &clips,
+                       int controllers, int hitboxes,
+                       const std::vector<std::array<double, 2>> &settings)
+    {
+        MdlFile mdl;
+        std::string error;
+        CookedModel cooked;
+        ModelCookReport report;
+        std::vector<std::uint8_t> bytes;
+        if (!mdl.load(dir + "/models/" + file, error) ||
+            !cookModel(mdl, clips, cooked, report, error) || !writeModel(cooked, bytes, error))
+        {
+            std::printf("test_anim: %s: %s\n", file, error.c_str());
+            check(false, "a model with controllers cooks");
+            return;
+        }
+        std::vector<std::uint32_t> aligned((bytes.size() + 3) / 4);
+        std::memcpy(aligned.data(), bytes.data(), bytes.size());
+        ModelView view;
+        if (!view.open(reinterpret_cast<const std::uint8_t *>(aligned.data()),
+                       static_cast<std::uint32_t>(bytes.size())))
+        {
+            check(false, "a model with controllers opens");
+            return;
+        }
+        check(view.header->controllerCount == controllers && view.header->hitboxCount == hitboxes,
+              "its controllers and hit boxes are kept");
+
+        double worstTurn = 0, worstPlace = 0;
+        std::vector<BoneMatrix> pose(mdl.bones.size());
+        for (int c = 0; c < view.header->clipCount; ++c)
+        {
+            const int sequence = mdl.sequenceByName(clips[c]);
+            const MdlSequence &seq = mdl.sequences[sequence];
+            std::vector<MdlPose> poses;
+            mdl.decode(sequence, poses, error);
+            const std::size_t boneCount = mdl.bones.size();
+            for (int f = 0; f < seq.frameCount; f += std::max(1, seq.frameCount / 6))
+            {
+                for (const std::array<double, 2> &setting : settings)
+                {
+                    // (Coming up, folding away and falling apart, the game
+                    // has them at rest; and those clips swing the bones
+                    // about, which the others do not.)
+                    const bool held = clips[c] != "deploy" && clips[c] != "retire" && clips[c] != "die";
+                    if (!held && (setting[0] != 0 || setting[1] != 0))
+                        continue;
+                    std::vector<MdlPose> frame(poses.begin() + f * boneCount,
+                                               poses.begin() + (f + 1) * boneCount);
+                    for (int a = 0; a < 3; ++a)
+                    {
+                        if (seq.motionType & (1 << a))
+                            frame[seq.motionBone].pos[a] = 0;
+                    }
+                    std::int32_t controls[kModelControls] = {0, 0, 0, 0};
+                    for (const MdlController &control : mdl.controllers)
+                    {
+                        if (control.index < 0 || control.index > 1)
+                            continue;
+                        // The game's SetController, without its rounding to
+                        // a byte: a travel written backwards turns the value
+                        // round; then it is kept within the travel.
+                        double value = setting[control.index];
+                        const int type = control.type & 0x7FFF;
+                        const bool turns = type >= kMdlMotionXR;
+                        if (turns)
+                        {
+                            if (control.end < control.start)
+                                value = -value;
+                            if (control.start + 359.0 >= control.end)
+                            {
+                                const double middle = (control.start + control.end) / 2;
+                                while (value > middle + 180)
+                                    value -= 360;
+                                while (value < middle - 180)
+                                    value += 360;
+                            }
+                            else
+                            {
+                                value = value - 360.0 * std::floor(value / 360.0);
+                            }
+                        }
+                        value = std::clamp(value, std::min<double>(control.start, control.end),
+                                           std::max<double>(control.start, control.end));
+                        int which = 0;
+                        for (int bit = 0; bit < 6; ++bit)
+                            which = (type & (1 << bit)) ? bit : which;
+                        if (turns)
+                            frame[control.bone].rot[which - 3] += static_cast<float>(value * M_PI / 180.0);
+                        else
+                            frame[control.bone].pos[which] += static_cast<float>(value);
+                        controls[control.index] =
+                            turns ? static_cast<std::int32_t>(std::lround(setting[control.index] * 65536.0 / 360.0))
+                                  : static_cast<std::int32_t>(std::lround(setting[control.index] * 4096.0));
+                    }
+                    std::vector<std::array<double, 12>> want;
+                    mdlBoneMatrices(mdl, frame.data(), want);
+                    poseModel(view, c, static_cast<std::uint32_t>(f) << 8, pose.data(), controls);
+                    for (std::size_t b = 0; b < boneCount; ++b)
+                    {
+                        for (int row = 0; row < 3; ++row)
+                        {
+                            for (int column = 0; column < 3; ++column)
+                                worstTurn = std::max(worstTurn, std::fabs(want[b][row * 4 + column] -
+                                                                          pose[b].r[row * 3 + column] / 16384.0));
+                            worstPlace = std::max(worstPlace,
+                                                  std::fabs(want[b][row * 4 + 3] - pose[b].t[row] / 4096.0));
+                        }
+                    }
+                }
+            }
+        }
+        std::printf("test_anim: %s: %d controllers, %d hit boxes; set by hand, its bones are within %.4f of the "
+                    "game's turn and %.2f units of its place\n",
+                    file, view.header->controllerCount, view.header->hitboxCount, worstTurn, worstPlace);
+        // (Two units: what cutting the animation down to keys costs a model
+        // this size by itself.)
+        check(worstTurn < 0.02 && worstPlace < 2.0, "a bone set by hand is where the game puts it");
+    }
 } // namespace
 
 int main()
@@ -157,6 +285,77 @@ int main()
     checkModel(dir, "v_crowbar.mdl", {"idle1", "attack1", "draw"});
     checkModel(dir, "zombie.mdl", {"idle1", "walk"});
     checkModel(dir, "forklift.mdl", {"idle2", "drive"});
+
+    // What the game sets by hand: a turret's aim (round, and up and down),
+    // a barnacle's tongue.
+    const std::vector<std::string> turretClips = {"idle_off", "fire", "spin", "deploy", "retire", "die"};
+    const std::vector<std::array<double, 2>> aims = {
+        {0, 0}, {30, 10}, {135, -12}, {-70, 40}, {250, -80}, {359, 15}, {-200, 3}};
+    checkControls(dir, "miniturret.mdl", turretClips, 2, 4, aims);
+    checkControls(dir, "sentry.mdl", turretClips, 2, 6, aims);
+    checkControls(dir, "turret.mdl", turretClips, 2, 6, aims);
+    checkControls(dir, "barnacle.mdl", {"idle1", "attack1", "chewcycle"}, 1, 12,
+                  {{0, 0}, {-100, 0}, {-777.5, 0}, {-2000, 0}, {50, 0}});
+
+    // Attachments and skins: the big turret's eye is its second attachment,
+    // and goes round with the gun; a soldier's second skin is another
+    // picture on his head and arms, and nothing else is made twice.
+    {
+        MdlFile mdl;
+        std::string error;
+        CookedModel cooked;
+        ModelCookReport report;
+        std::vector<std::uint8_t> bytes;
+        const bool ok = mdl.load(std::string(dir) + "/models/turret.mdl", error) &&
+                        cookModel(mdl, turretClips, cooked, report, error) && writeModel(cooked, bytes, error);
+        check(ok, "the turret cooks");
+        std::vector<std::uint32_t> aligned((bytes.size() + 3) / 4);
+        std::memcpy(aligned.data(), bytes.data(), bytes.size());
+        ModelView view;
+        if (ok && view.open(reinterpret_cast<const std::uint8_t *>(aligned.data()),
+                            static_cast<std::uint32_t>(bytes.size())))
+        {
+            check(view.header->attachmentCount == 2, "it has its two attachments");
+            std::vector<BoneMatrix> pose(mdl.bones.size());
+            const int spin = view.findClip(nameHash("spin"));
+            fx ahead[3], turned[3], none[3];
+            std::int32_t controls[kModelControls] = {0, 0, 0, 0};
+            poseModel(view, spin, 0, pose.data(), controls);
+            check(attachmentPoint(view, pose.data(), 1, ahead) && !attachmentPoint(view, pose.data(), 2, none),
+                  "the eye is where its bone is; there is no third");
+            controls[0] = 16384; // a quarter turn
+            poseModel(view, spin, 0, pose.data(), controls);
+            attachmentPoint(view, pose.data(), 1, turned);
+            // (About the turret's axis: what was its x is now its y.)
+            const double before[2] = {ahead[0] / 4096.0, ahead[1] / 4096.0};
+            const double after[2] = {turned[0] / 4096.0, turned[1] / 4096.0};
+            std::printf("test_anim: the turret's eye at %.1f %.1f; a quarter turn of the gun on, at %.1f %.1f\n",
+                        before[0], before[1], after[0], after[1]);
+            check(std::fabs(std::hypot(before[0], before[1]) - std::hypot(after[0], after[1])) < 1.5 &&
+                      std::hypot(before[0] - after[0], before[1] - after[1]) > 4.0 &&
+                      std::fabs(ahead[2] - turned[2]) < 4096,
+                  "it goes round with the gun, the same way out and as high");
+        }
+        MdlFile grunt;
+        const bool soldier = grunt.load(std::string(dir) + "/models/hgrunt.mdl", error) &&
+                             cookModel(grunt, {"idle1", "run"}, cooked, report, error);
+        check(soldier, "the soldier cooks");
+        if (soldier)
+        {
+            int usual = 0, other = 0, both = 0;
+            for (const ModelBatch &batch : cooked.batches)
+            {
+                usual += batch.skin == 1;
+                other += batch.skin == 2;
+                both += batch.skin == 0;
+            }
+            std::printf("test_anim: hgrunt.mdl: %zu skins; %d batches for all of them, %d for the first alone, "
+                        "%d for the second\n",
+                        grunt.skins.size(), both, usual, other);
+            check(grunt.skins.size() == 2 && usual > 0 && usual == other && both > 0,
+                  "his second skin is the same parts with another picture on them");
+        }
+    }
 
     // Time: a clip that loops goes round, one that does not stops and says so.
     ModelClip clip{};

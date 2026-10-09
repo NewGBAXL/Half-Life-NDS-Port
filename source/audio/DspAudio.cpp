@@ -7,6 +7,8 @@
 
 #include <nds.h>
 
+#include <NEAMain.h>
+
 #include "Global.hpp"
 
 extern "C"
@@ -94,7 +96,7 @@ namespace hlrt
         up_ = false;
         started_ = false;
         echo_ = RoomEcho{0, 0, 0};
-        soundExtSetRatio(8);
+        NEA_SoundSetDSiMixRatio(8);
     }
 
     bool DspAudio::start()
@@ -135,7 +137,7 @@ namespace hlrt
             captureRead_ = 0;
         }
         // Half the speakers each to the ordinary channels and to the DSP.
-        soundExtSetRatio(4);
+        NEA_SoundSetDSiMixRatio(4);
         return true;
     }
 

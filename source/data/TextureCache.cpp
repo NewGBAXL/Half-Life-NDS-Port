@@ -69,6 +69,23 @@ namespace hlrt
         return true;
     }
 
+    unsigned TextureCache::shown(unsigned index, bool switched) const
+    {
+        const hldata::TextureRef &ref = level.view.textures[index];
+        unsigned first = index, pictures = ref.frames;
+        if (switched && ref.other != hldata::kNoTexture)
+        {
+            first = ref.other;
+            pictures = ref.otherFrames;
+        }
+        return pictures > 1 ? first + tick_ % pictures : first;
+    }
+
+    void TextureCache::frame()
+    {
+        tick_ = Global::vblanks() / 6;
+    }
+
     bool TextureCache::loadOne(unsigned index)
     {
         const hldata::TextureRef &ref = level.view.textures[index];
@@ -76,7 +93,9 @@ namespace hlrt
         const bool a3i5 = (ref.flags & hldata::kTextureA3I5) != 0;
         hldata::textureFileName(ref.name, ref.width, ref.height, a3i5, fileName);
         const std::string path = global.texDir() + fileName;
-        return loadFile(path.c_str(), (ref.flags & hldata::kTextureLiquid) != 0, ref.width,
+        // (A liquid's coordinates go through the texture matrix, and a
+        // conveyor belt's.)
+        return loadFile(path.c_str(), (ref.flags & (hldata::kTextureLiquid | hldata::kTextureScroll)) != 0, ref.width,
                         ref.height, a3i5 ? 1 : 0, materials_[index], palettes_[index]);
     }
 

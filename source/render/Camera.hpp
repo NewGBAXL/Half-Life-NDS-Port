@@ -47,6 +47,12 @@ namespace hlrt
         hldata::fx pos[3] = {0, 0, 0};
         std::uint16_t yaw = 0;   ///< turns; 0 looks down +X, positive turns left
         std::int16_t pitch = 0;  ///< turns; positive looks up
+        /// What is added to those for the picture only, and goes again:
+        /// the kick of a weapon or a blow, the lean into a sidestep, the
+        /// roll of a fall (shared/HlView.hpp). Turns.
+        std::int16_t kickPitch = 0;
+        std::int16_t kickYaw = 0;
+        std::int16_t roll = 0;   ///< positive leans to the right
 
         // Derived by update(). Unit vectors in Q12.
         std::int32_t forward[3];

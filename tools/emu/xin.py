@@ -73,12 +73,43 @@ for command in sys.argv[1].split(';'):
         key(a[1], True)
         time.sleep(float(a[2]))
         key(a[1], False)
+    elif a[0] == 'ready':
+        # ready [seconds]: wait until the game is on the top screen (the
+        # emulator may take a long time over the card before it starts, and
+        # how long depends on what has changed on it), then a second more.
+        import tempfile
+        from PIL import Image
+        probe = os.path.join(tempfile.gettempdir(), 'xin_ready_%d.png' % os.getpid())
+        end = time.time() + (float(a[1]) if len(a) > 1 else 90)
+        while time.time() < end:
+            shot(probe)
+            try:
+                # (A picture, not the blank white the emulator starts with;
+                # and the game's own pad drawn under it.)
+                whole = Image.open(probe).convert('L')
+                top = whole.crop((0, 120, 256, 247)).histogram()
+                pad = whole.crop((0, 400, 256, 440)).histogram()
+                if sum(top[40:]) > 2000 and sum(top[230:]) < 16000 and sum(pad[200:]) > 300:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.5)
+        if os.path.exists(probe):
+            os.remove(probe)
+        time.sleep(1.0)
     elif a[0] == 'tap':
         # tap <x> <y>: the stylus down and up again, quickly
         move(int(a[1]), int(a[2]))
         time.sleep(0.03)
         button(True)
         time.sleep(0.06)
+        button(False)
+    elif a[0] == 'down':
+        # down <x> <y> ... up: the stylus put down and held, then lifted
+        move(int(a[1]), int(a[2]))
+        time.sleep(0.03)
+        button(True)
+    elif a[0] == 'up':
         button(False)
     elif a[0] == 'drag':
         x0, y0, x1, y1 = map(int, a[1:5])

@@ -1,4 +1,5 @@
 #include "hlds/ModelCook.hpp"
+#include "hlds/ModelMesh.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -260,8 +261,11 @@ namespace hlds
         }
 
         /// One sub-model's meshes as batches of at most kModelBatchBones bones.
+        /// `family` is the skin the batches are made in; `tag` what they are
+        /// marked for (ModelBatch::skin).
         void buildBatches(const MdlFile &mdl, const MdlSubModel &model, int bodyPart, int subModel,
-                          const std::vector<AtlasRect> &rects, int vertexShift, CookedModel &out)
+                          const std::vector<AtlasRect> &rects, int vertexShift, CookedModel &out,
+                          int family = 0, int tag = 0, int level = 0)
         {
             struct Open
             {
@@ -271,8 +275,15 @@ namespace hlds
                 int vertices = 0;
             };
             Open batch;
+            // (Which bone's matrix and which normal the hardware has: they
+            // last from one strip to the next, so a strip that begins as the
+            // last ended says neither again.)
+            int currentBone = -1;
+            std::uint32_t currentNormal = 0xFFFFFFFFu;
             auto flush = [&]()
             {
+                currentBone = -1;
+                currentNormal = 0xFFFFFFFFu;
                 if (batch.commands.empty())
                     return;
                 ModelBatch record{};
@@ -283,6 +294,8 @@ namespace hlds
                 record.vertices = static_cast<std::uint16_t>(batch.vertices);
                 record.bodyPart = static_cast<std::uint8_t>(bodyPart);
                 record.subModel = static_cast<std::uint8_t>(subModel);
+                record.skin = static_cast<std::uint8_t>(tag);
+                record.level = static_cast<std::uint8_t>(level);
                 record.boneCount = static_cast<std::uint8_t>(batch.bones.size());
                 for (std::size_t i = 0; i < batch.bones.size(); ++i)
                     record.bones[i] = static_cast<std::uint8_t>(batch.bones[i]);
@@ -290,7 +303,9 @@ namespace hlds
                 batch = Open();
             };
 
-            const std::vector<int> &skin = mdl.skins.empty() ? std::vector<int>() : mdl.skins[0];
+            const std::vector<int> &skin =
+                mdl.skins.empty() ? std::vector<int>()
+                                  : mdl.skins[family < static_cast<int>(mdl.skins.size()) ? family : 0];
             for (const MdlMesh &mesh : model.meshes)
             {
                 const int textureIndex =
@@ -328,8 +343,6 @@ namespace hlds
                     }
                     batch.bones.insert(batch.bones.end(), fresh.begin(), fresh.end());
 
-                    int currentBone = -1;
-                    std::uint32_t currentNormal = 0xFFFFFFFFu;
                     auto emit = [&](const MdlCorner &corner)
                     {
                         const int bone = model.vertexBone[corner.vertex];
@@ -408,384 +421,6 @@ namespace hlds
             flush();
         }
 
-        // ------------------------------------------------------------ fewer triangles
-
-        // A scientist is 740 triangles and the DS draws 2048 a frame, world
-        // included. So a model's skin is thinned before it is cooked: edges
-        // are collapsed, cheapest first, until it is down to its target.
-        //
-        // A collapse moves one end of an edge ONTO the other -- no new
-        // vertices are made, so every vertex that is left is one of the
-        // model's own, on its own bone, and the skinning stays exactly as
-        // rigid as it was. The cost of a collapse is how far it moves the
-        // surface (the sum of squared distances to the planes of the
-        // triangles that met at the vertex that goes), measured with the
-        // model standing in its first sequence. It is refused where it would
-        // turn a triangle over, pull the open edge of a mesh inwards, or move
-        // a vertex that sits on a seam of the texture.
-
-        struct Quadric
-        {
-            double q[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // a2 ab ac ad b2 bc bd c2 cd d2
-
-            void addPlane(double a, double b, double c, double d, double weight)
-            {
-                const double v[10] = {a * a, a * b, a * c, a * d, b * b, b * c, b * d, c * c, c * d, d * d};
-                for (int i = 0; i < 10; ++i)
-                    q[i] += v[i] * weight;
-            }
-            void add(const Quadric &o)
-            {
-                for (int i = 0; i < 10; ++i)
-                    q[i] += o.q[i];
-            }
-            double at(const double *p) const
-            {
-                return q[0] * p[0] * p[0] + 2 * q[1] * p[0] * p[1] + 2 * q[2] * p[0] * p[2] + 2 * q[3] * p[0] +
-                       q[4] * p[1] * p[1] + 2 * q[5] * p[1] * p[2] + 2 * q[6] * p[1] + q[7] * p[2] * p[2] +
-                       2 * q[8] * p[2] + q[9];
-            }
-        };
-
-        struct Tri
-        {
-            MdlCorner c[3];
-            int mesh = 0;
-            bool alive = true;
-        };
-
-        void cross(const double *a, const double *b, const double *c, double *n)
-        {
-            const double e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
-            const double e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-            n[0] = e1[1] * e2[2] - e1[2] * e2[1];
-            n[1] = e1[2] * e2[0] - e1[0] * e2[2];
-            n[2] = e1[0] * e2[1] - e1[1] * e2[0];
-        }
-
-        /// The triangles of `tris` that are left, as strips: each grown from
-        /// a triangle through whichever neighbours share an edge with the
-        /// same corners (place, normal and texture coordinate alike).
-        void stripify(const std::vector<Tri> &tris, int mesh, std::vector<MdlStrip> &out)
-        {
-            using Key = std::array<int, 4>;
-            auto keyOf = [](const MdlCorner &c) { return Key{c.vertex, c.normal, c.s, c.t}; };
-            std::vector<int> mine;
-            for (std::size_t i = 0; i < tris.size(); ++i)
-            {
-                if (tris[i].alive && tris[i].mesh == mesh)
-                    mine.push_back(static_cast<int>(i));
-            }
-            // Directed edge -> the triangle that has it, and which corner is
-            // the one not on it.
-            std::map<std::pair<Key, Key>, std::pair<int, int>> edges;
-            for (int t : mine)
-            {
-                for (int e = 0; e < 3; ++e)
-                    edges.insert({{keyOf(tris[t].c[e]), keyOf(tris[t].c[(e + 1) % 3])}, {t, (e + 2) % 3}});
-            }
-            std::vector<char> used(tris.size(), 0);
-            auto grow = [&](int start, int rotation, std::vector<char> &taken)
-            {
-                std::vector<MdlCorner> strip = {tris[start].c[rotation], tris[start].c[(rotation + 1) % 3],
-                                                tris[start].c[(rotation + 2) % 3]};
-                std::vector<int> members = {start};
-                taken[start] = 1;
-                for (;;)
-                {
-                    const std::size_t i = strip.size() - 2; // the triangle to add
-                    const MdlCorner &p = strip[i], &q = strip[i + 1];
-                    const auto found = (i & 1) ? edges.find({keyOf(q), keyOf(p)})
-                                               : edges.find({keyOf(p), keyOf(q)});
-                    if (found == edges.end() || taken[found->second.first])
-                        break;
-                    taken[found->second.first] = 1;
-                    members.push_back(found->second.first);
-                    strip.push_back(tris[found->second.first].c[found->second.second]);
-                }
-                for (int member : members)
-                    taken[member] = 0;
-                return std::make_pair(strip, members);
-            };
-            for (int t : mine)
-            {
-                if (used[t])
-                    continue;
-                auto best = grow(t, 0, used);
-                for (int rotation = 1; rotation < 3; ++rotation)
-                {
-                    auto other = grow(t, rotation, used);
-                    if (other.second.size() > best.second.size())
-                        best = std::move(other);
-                }
-                for (int member : best.second)
-                    used[member] = 1;
-                MdlStrip strip;
-                strip.corners = std::move(best.first);
-                out.push_back(std::move(strip));
-            }
-        }
-
-        /// `model` with its meshes thinned to about `target` triangles. `rest`
-        /// is where each of its vertices is with the model standing (model
-        /// space); the vertices and normals themselves are not touched.
-        MdlSubModel thinned(const MdlSubModel &model, const std::vector<std::array<double, 3>> &rest,
-                            int target)
-        {
-            std::vector<Tri> tris;
-            for (std::size_t m = 0; m < model.meshes.size(); ++m)
-            {
-                for (const MdlStrip &strip : model.meshes[m].strips)
-                {
-                    const int n = static_cast<int>(strip.corners.size());
-                    for (int i = 0; i + 2 < n; ++i)
-                    {
-                        Tri tri;
-                        tri.mesh = static_cast<int>(m);
-                        if (strip.fan)
-                            tri.c[0] = strip.corners[0], tri.c[1] = strip.corners[i + 1], tri.c[2] = strip.corners[i + 2];
-                        else if (i & 1)
-                            tri.c[0] = strip.corners[i + 1], tri.c[1] = strip.corners[i], tri.c[2] = strip.corners[i + 2];
-                        else
-                            tri.c[0] = strip.corners[i], tri.c[1] = strip.corners[i + 1], tri.c[2] = strip.corners[i + 2];
-                        if (tri.c[0].vertex != tri.c[1].vertex && tri.c[1].vertex != tri.c[2].vertex &&
-                            tri.c[0].vertex != tri.c[2].vertex)
-                            tris.push_back(tri);
-                    }
-                }
-            }
-            int alive = static_cast<int>(tris.size());
-            const std::size_t vertexCount = model.vertices.size();
-
-            // Vertices that are the same place are one vertex here, whatever
-            // their index (the game repeats a vertex where two bones meet).
-            std::vector<int> same(vertexCount);
-            {
-                std::map<std::array<long, 3>, int> first;
-                for (std::size_t v = 0; v < vertexCount; ++v)
-                {
-                    const std::array<long, 3> key = {std::lround(rest[v][0] * 64), std::lround(rest[v][1] * 64),
-                                                     std::lround(rest[v][2] * 64)};
-                    same[v] = first.insert({key, static_cast<int>(v)}).first->second;
-                }
-            }
-            auto place = [&](int v) { return same[v]; };
-
-            std::vector<Quadric> quadric(vertexCount);
-            std::vector<std::vector<int>> around(vertexCount); // by place: its triangles
-            std::map<std::pair<int, int>, int> edgeUse;        // undirected, by place
-            for (std::size_t t = 0; t < tris.size(); ++t)
-            {
-                double n[3];
-                cross(rest[tris[t].c[0].vertex].data(), rest[tris[t].c[1].vertex].data(),
-                      rest[tris[t].c[2].vertex].data(), n);
-                const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-                for (int k = 0; k < 3; ++k)
-                {
-                    const int v = place(tris[t].c[k].vertex);
-                    around[v].push_back(static_cast<int>(t));
-                    if (length > 0)
-                    {
-                        const double *p = rest[tris[t].c[0].vertex].data();
-                        const double a = n[0] / length, b = n[1] / length, c = n[2] / length;
-                        quadric[v].addPlane(a, b, c, -(a * p[0] + b * p[1] + c * p[2]), length);
-                    }
-                    const int w = place(tris[t].c[(k + 1) % 3].vertex);
-                    ++edgeUse[{std::min(v, w), std::max(v, w)}];
-                }
-            }
-            // An edge with a triangle on one side only is the rim of the
-            // mesh (a cuff, a collar, where the head joins): a vertex on one
-            // may only slide along the rim.
-            std::vector<char> onRim(vertexCount, 0);
-            for (const auto &edge : edgeUse)
-            {
-                if (edge.second == 1)
-                    onRim[edge.first.first] = onRim[edge.first.second] = 1;
-            }
-            auto rimEdge = [&](int v, int u)
-            {
-                const auto found = edgeUse.find({std::min(v, u), std::max(v, u)});
-                return found != edgeUse.end() && found->second == 1;
-            };
-
-            while (alive > target)
-            {
-                double bestCost = 1e300;
-                int bestV = -1, bestU = -1;
-                for (std::size_t v = 0; v < vertexCount; ++v)
-                {
-                    if (around[v].empty())
-                        continue;
-                    // The corners v is used with must agree on its texture
-                    // coordinate within each mesh, or v is on a seam.
-                    bool seam = false;
-                    std::map<int, std::pair<int, int>> st;
-                    std::vector<int> neighbours;
-                    for (int t : around[v])
-                    {
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            const MdlCorner &c = tris[t].c[k];
-                            if (place(c.vertex) == static_cast<int>(v))
-                            {
-                                const auto found = st.insert({tris[t].mesh, {c.s, c.t}});
-                                seam = seam || found.first->second != std::make_pair(c.s, c.t);
-                            }
-                            else if (std::find(neighbours.begin(), neighbours.end(), place(c.vertex)) ==
-                                     neighbours.end())
-                            {
-                                neighbours.push_back(place(c.vertex));
-                            }
-                        }
-                    }
-                    if (seam)
-                        continue;
-                    for (int u : neighbours)
-                    {
-                        if (onRim[v] && !rimEdge(static_cast<int>(v), u))
-                            continue;
-                        Quadric both = quadric[v];
-                        both.add(quadric[u]);
-                        double cost = both.at(rest[u].data());
-                        // Onto another bone costs more: that is where the
-                        // model bends.
-                        if (model.vertexBone[v] != model.vertexBone[u])
-                            cost = cost * 4 + 1e-3;
-                        if (cost >= bestCost)
-                            continue;
-                        // Every triangle that keeps going must still face the
-                        // way it did, and u must have a corner of its own in
-                        // that triangle's mesh to lend it.
-                        bool ok = true;
-                        for (int t : around[v])
-                        {
-                            const Tri &tri = tris[t];
-                            bool hasU = false;
-                            for (int k = 0; k < 3; ++k)
-                                hasU = hasU || place(tri.c[k].vertex) == u;
-                            if (hasU)
-                                continue;
-                            const double *p[3];
-                            const double *moved[3];
-                            for (int k = 0; k < 3; ++k)
-                            {
-                                p[k] = rest[tri.c[k].vertex].data();
-                                moved[k] = place(tri.c[k].vertex) == static_cast<int>(v) ? rest[u].data() : p[k];
-                            }
-                            double before[3], after[3];
-                            cross(p[0], p[1], p[2], before);
-                            cross(moved[0], moved[1], moved[2], after);
-                            const double dot = before[0] * after[0] + before[1] * after[1] + before[2] * after[2];
-                            const double lb = std::sqrt(before[0] * before[0] + before[1] * before[1] + before[2] * before[2]);
-                            const double la = std::sqrt(after[0] * after[0] + after[1] * after[1] + after[2] * after[2]);
-                            if (la < 1e-6 || dot < 0.3 * lb * la)
-                            {
-                                ok = false;
-                                break;
-                            }
-                            bool lends = false;
-                            for (int o : around[u])
-                            {
-                                for (int k = 0; k < 3 && !lends; ++k)
-                                    lends = tris[o].mesh == tri.mesh && place(tris[o].c[k].vertex) == u;
-                            }
-                            if (!lends)
-                            {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        if (ok)
-                        {
-                            bestCost = cost;
-                            bestV = static_cast<int>(v);
-                            bestU = u;
-                        }
-                    }
-                }
-                if (bestV < 0)
-                    break; // nothing more can go without doing harm
-
-                // v onto u: the triangles with both are gone, the rest take
-                // u's corner (of their own mesh, from a triangle that is on
-                // the edge if there is one).
-                const int v = bestV, u = bestU;
-                for (int t : around[v])
-                {
-                    Tri &tri = tris[t];
-                    if (!tri.alive)
-                        continue;
-                    bool hasU = false;
-                    for (int k = 0; k < 3; ++k)
-                        hasU = hasU || place(tri.c[k].vertex) == u;
-                    if (hasU)
-                    {
-                        tri.alive = false;
-                        --alive;
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            const int a = place(tri.c[k].vertex), b = place(tri.c[(k + 1) % 3].vertex);
-                            --edgeUse[{std::min(a, b), std::max(a, b)}];
-                        }
-                        continue;
-                    }
-                    MdlCorner lend{};
-                    bool found = false, onEdge = false;
-                    for (int o : around[u])
-                    {
-                        if (tris[o].mesh != tri.mesh)
-                            continue;
-                        bool touchesV = false;
-                        for (int k = 0; k < 3; ++k)
-                            touchesV = touchesV || place(tris[o].c[k].vertex) == v;
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            if (place(tris[o].c[k].vertex) == u && (!found || (touchesV && !onEdge)))
-                            {
-                                lend = tris[o].c[k];
-                                found = true;
-                                onEdge = touchesV;
-                            }
-                        }
-                    }
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        const int a = place(tri.c[k].vertex), b = place(tri.c[(k + 1) % 3].vertex);
-                        --edgeUse[{std::min(a, b), std::max(a, b)}];
-                    }
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        if (place(tri.c[k].vertex) == v)
-                            tri.c[k] = lend;
-                    }
-                    for (int k = 0; k < 3; ++k)
-                    {
-                        const int a = place(tri.c[k].vertex), b = place(tri.c[(k + 1) % 3].vertex);
-                        ++edgeUse[{std::min(a, b), std::max(a, b)}];
-                    }
-                    around[u].push_back(t);
-                }
-                around[v].clear();
-                around[u].erase(std::remove_if(around[u].begin(), around[u].end(),
-                                               [&](int t) { return !tris[t].alive; }),
-                                around[u].end());
-                quadric[u].add(quadric[v]);
-                onRim[u] = onRim[u] || onRim[v];
-            }
-
-            MdlSubModel out = model;
-            for (std::size_t m = 0; m < out.meshes.size(); ++m)
-            {
-                out.meshes[m].strips.clear();
-                stripify(tris, static_cast<int>(m), out.meshes[m].strips);
-                out.meshes[m].triangles = 0;
-                for (const MdlStrip &strip : out.meshes[m].strips)
-                    out.meshes[m].triangles += static_cast<int>(strip.corners.size()) - 2;
-            }
-            return out;
-        }
-
         // ------------------------------------------------------------ animation
 
         struct BoneFrame
@@ -848,7 +483,7 @@ namespace hlds
     } // namespace
 
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
-                   ModelCookReport &report, std::string &error, int skinTexels)
+                   ModelCookReport &report, std::string &error, int skinTexels, bool full)
     {
         out = CookedModel();
         report = ModelCookReport();
@@ -893,7 +528,12 @@ namespace hlds
             mdlBoneMatrices(mdl, poses.data(), standing);
         }
 
-        // ---- how many triangles it may keep
+        // ---- how many triangles it may keep, at each level of detail
+        //
+        // The first level is what a model has always been thinned to; the
+        // next two are a half and a quarter of that (a model already small
+        // has the one). With `full`, the model as the game has it is a
+        // level above them all -- for a machine with the memory for it.
         int sourceTriangles = 0;
         for (const MdlSubModel *model : mdl.selectBody(0))
             sourceTriangles += model->triangleCount();
@@ -901,6 +541,76 @@ namespace hlds
         const int allowed = sourceTriangles > kModelTriangleTarget
                                 ? std::max(kModelTriangleTarget, sourceTriangles / 4)
                                 : sourceTriangles;
+        std::vector<int> levelTargets = {allowed};
+        if (sourceTriangles > kModelLevelLeast * 2)
+        {
+            levelTargets.push_back(std::max(kModelLevelLeast, allowed / 2));
+            levelTargets.push_back(std::max(kModelLevelLeast, allowed * 35 / 100));
+        }
+        const bool withFull = full && allowed < sourceTriangles;
+
+        // Every sub-model at every level, each in the same proportion.
+        struct Made
+        {
+            std::vector<MeshLevel> levels;
+            MdlSubModel whole; ///< as the game has it, in the best strips
+        };
+        std::vector<std::vector<Made>> made(mdl.bodyParts.size());
+        std::vector<int> total(levelTargets.size(), 0), sent(levelTargets.size(), 0);
+        std::vector<double> off(levelTargets.size(), 0);
+        int wholeSent = 0;
+        for (std::size_t p = 0; p < mdl.bodyParts.size(); ++p)
+        {
+            const MdlBodyPart &part = mdl.bodyParts[p];
+            made[p].resize(part.models.size());
+            for (std::size_t m = 0; m < part.models.size(); ++m)
+            {
+                const MdlSubModel &source = part.models[m];
+                std::vector<std::array<double, 3>> rest;
+                const MeshInput input = meshInput(mdl, source, standing, rest);
+                const int had = source.triangleCount();
+                std::vector<int> targets;
+                for (int level : levelTargets)
+                    targets.push_back(sourceTriangles > 0
+                                          ? static_cast<int>(static_cast<long>(had) * level / sourceTriangles)
+                                          : had);
+                made[p][m].levels = meshLevels(input, targets);
+                if (withFull)
+                    made[p][m].whole = restripped(source);
+                const bool ofBodyZero = m == static_cast<std::size_t>((0 / part.base) % part.models.size());
+                for (std::size_t l = 0; l < levelTargets.size(); ++l)
+                {
+                    off[l] = std::max(off[l], made[p][m].levels[l].error);
+                    if (ofBodyZero)
+                    {
+                        total[l] += made[p][m].levels[l].triangles;
+                        sent[l] += sentVertices(made[p][m].levels[l].model);
+                    }
+                }
+                if (ofBodyZero && withFull)
+                    wholeSent += sentVertices(made[p][m].whole);
+            }
+        }
+        // A level that would save less than a seventh over the one before
+        // it is not worth its memory.
+        std::vector<int> kept = {0};
+        for (std::size_t l = 1; l < levelTargets.size(); ++l)
+        {
+            if (total[l] * 20 <= total[kept.back()] * 17)
+                kept.push_back(static_cast<int>(l));
+        }
+        std::vector<double> levelError;
+        if (withFull)
+        {
+            levelError.push_back(0);
+            report.levels.push_back({sourceTriangles, wholeSent, 0.0});
+        }
+        for (int l : kept)
+        {
+            levelError.push_back(off[l]);
+            report.levels.push_back({total[l], sent[l], off[l]});
+        }
+        report.triangles = report.levels.front().triangles;
 
         // ---- the meshes
         int worstPolygons = 0;
@@ -917,33 +627,45 @@ namespace hlds
             int most = 0;
             for (std::size_t m = 0; m < part.models.size(); ++m)
             {
-                const std::size_t before = out.batches.size();
-                // Thinned first, every part in the same proportion.
-                const MdlSubModel &source = part.models[m];
-                std::vector<std::array<double, 3>> rest(source.vertices.size());
-                for (std::size_t v = 0; v < rest.size(); ++v)
+                for (std::size_t level = 0; level < levelError.size(); ++level)
                 {
-                    const auto &bone = standing[source.vertexBone[v]];
-                    const auto &at = source.vertices[v];
-                    for (int a = 0; a < 3; ++a)
-                        rest[v][a] = bone[a * 4] * at[0] + bone[a * 4 + 1] * at[1] + bone[a * 4 + 2] * at[2] +
-                                     bone[a * 4 + 3];
+                    const std::size_t before = out.batches.size();
+                    const MdlSubModel &cut = withFull && level == 0
+                                                 ? made[p][m].whole
+                                                 : made[p][m].levels[kept[level - (withFull ? 1 : 0)]].model;
+                    // A part that some other skin of the model puts a
+                    // different picture on is made once for each skin (up
+                    // to four); the rest once, for all of them.
+                    const int families = std::min<int>(4, static_cast<int>(mdl.skins.size()));
+                    bool differs = false;
+                    for (int f = 1; f < families; ++f)
+                    {
+                        for (const MdlMesh &mesh : cut.meshes)
+                        {
+                            const std::size_t ref = static_cast<std::size_t>(mesh.skinRef);
+                            differs = differs || (mesh.skinRef >= 0 && ref < mdl.skins[0].size() &&
+                                                  ref < mdl.skins[f].size() && mdl.skins[f][ref] != mdl.skins[0][ref]);
+                        }
+                    }
+                    const int tag = static_cast<int>(level);
+                    buildBatches(mdl, cut, index, static_cast<int>(m), rects, vertexShift, out, 0, differs ? 1 : 0, tag);
+                    const std::size_t usual = out.batches.size();
+                    for (int f = 1; differs && f < families; ++f)
+                        buildBatches(mdl, cut, index, static_cast<int>(m), rects, vertexShift, out, f, f + 1, tag);
+                    int polygons = 0;
+                    for (std::size_t b = before; b < usual; ++b)
+                        polygons += out.batches[b].polygons;
+                    if (level == 0)
+                        most = std::max(most, polygons);
                 }
-                const int had = source.triangleCount();
-                const MdlSubModel cut =
-                    allowed < sourceTriangles
-                        ? thinned(source, rest,
-                                  static_cast<int>(static_cast<long>(had) * allowed / sourceTriangles))
-                        : source;
-                if (m == static_cast<std::size_t>((0 / part.base) % part.models.size()))
-                    report.triangles += cut.triangleCount();
-                buildBatches(mdl, cut, index, static_cast<int>(m), rects, vertexShift, out);
-                int polygons = 0;
-                for (std::size_t b = before; b < out.batches.size(); ++b)
-                    polygons += out.batches[b].polygons;
-                most = std::max(most, polygons);
             }
             worstPolygons += most;
+        }
+        for (int l = 0; l < kModelLevels; ++l)
+        {
+            out.levelError[l] = static_cast<std::size_t>(l) < levelError.size()
+                                    ? static_cast<std::uint8_t>(std::clamp(std::lround(levelError[l] * 16), 0L, 254L))
+                                    : kModelNoLevel;
         }
         report.batches = static_cast<int>(out.batches.size());
 
@@ -982,6 +704,7 @@ namespace hlds
             if (!label.empty() && std::find(wanted.begin(), wanted.end(), label) == wanted.end())
                 wanted.push_back(label);
         }
+        std::vector<std::vector<double>> clipFirstZ;
         for (const std::string &label : wanted)
         {
             const int index = mdl.sequenceByName(label);
@@ -995,6 +718,11 @@ namespace hlds
             if (!mdl.decode(index, poses, error))
                 return false;
             const int boneCount = static_cast<int>(mdl.bones.size());
+            // (How the clip holds each bone about z to begin with: for the
+            // bone controllers, below.)
+            clipFirstZ.emplace_back();
+            for (int b = 0; b < boneCount; ++b)
+                clipFirstZ.back().push_back(poses[b].rot[2]);
             const int frameCount = seq.frameCount;
 
             ModelClip clip{};
@@ -1138,7 +866,101 @@ namespace hlds
         report.clips = static_cast<int>(out.clips.size());
         report.keys = static_cast<int>(out.keys.size());
 
+        // ---- what the game sets by hand, and what a shot is tried against
+        std::vector<int> controlTypes;
+        for (const MdlController &c : mdl.controllers)
+        {
+            if (c.index < 0 || c.index >= kModelControls)
+                continue; // (the mouth: nothing here speaks with one)
+            ModelController control{};
+            control.bone = static_cast<std::uint8_t>(c.bone);
+            control.index = static_cast<std::uint8_t>(c.index);
+            const int type = c.type & 0x7FFF;
+            if (type == kMdlMotionX || type == kMdlMotionY || type == kMdlMotionZ)
+                control.kind = kControlSlide;
+            else if (type == kMdlMotionYR || type == kMdlMotionZR)
+                control.kind = kControlTurn;
+            else if (type == kMdlMotionXR)
+                control.kind = kControlTwist;
+            else
+                continue;
+            if (control.kind != kControlSlide)
+            {
+                control.flags = (c.type & kMdlMotionLoops) ? kControlLoops : 0;
+                control.start = static_cast<std::int32_t>(std::lround(c.start * 65536.0 / 360.0));
+                control.end = static_cast<std::int32_t>(std::lround(c.end * 65536.0 / 360.0));
+            }
+            else
+            {
+                control.start = fxFromDouble(c.start);
+                control.end = fxFromDouble(c.end);
+            }
+            out.controllers.push_back(control);
+            controlTypes.push_back(type);
+        }
+        // The axis of each, for each clip. A bone is turned about its x,
+        // then y, then z. More about z is a turn about the parent's z, made
+        // last; more about x is a turn about the bone's own x, made first;
+        // more about y, the one in the middle, is a turn about y as the
+        // bone's turn about z leaves it -- and that depends on how the clip
+        // holds the bone (a sentry's gun is held by one set of angles
+        // folded away and by another when it is up). It is taken from the
+        // clip's first frame: the clips the game aims in hold it still.
+        for (std::size_t clip = 0; clip < out.clips.size(); ++clip)
+        {
+            for (std::size_t n = 0; n < out.controllers.size(); ++n)
+            {
+                const int type = controlTypes[n];
+                double axis[3] = {0, 0, 0};
+                if (type == kMdlMotionYR)
+                {
+                    const double z = clipFirstZ[clip][out.controllers[n].bone];
+                    axis[0] = -std::sin(z);
+                    axis[1] = std::cos(z);
+                }
+                else if (type == kMdlMotionX || type == kMdlMotionXR)
+                    axis[0] = 1;
+                else if (type == kMdlMotionY)
+                    axis[1] = 1;
+                else
+                    axis[2] = 1;
+                ModelControlAxis a{};
+                for (int k = 0; k < 3; ++k)
+                    a.v[k] = static_cast<std::int16_t>(std::lround(axis[k] * 16384.0));
+                out.controlAxes.push_back(a);
+            }
+        }
+        for (const MdlHitbox &box : mdl.hitboxes)
+        {
+            if (out.hitboxes.size() >= 255)
+                break;
+            ModelHitbox hit{};
+            hit.bone = static_cast<std::uint8_t>(box.bone);
+            hit.group = static_cast<std::uint8_t>(std::clamp(box.group, 0, 255));
+            for (int a = 0; a < 3; ++a)
+            {
+                hit.mins[a] = static_cast<std::int16_t>(
+                    std::clamp(std::floor(double(box.mins[a]) * (1 << kHitboxShift)), -32768.0, 32767.0));
+                hit.maxs[a] = static_cast<std::int16_t>(
+                    std::clamp(std::ceil(double(box.maxs[a]) * (1 << kHitboxShift)), -32768.0, 32767.0));
+            }
+            out.hitboxes.push_back(hit);
+        }
+
+        for (const MdlFile::Attachment &a : mdl.attachments)
+        {
+            ModelAttachment attachment{};
+            attachment.bone = static_cast<std::uint8_t>(a.bone);
+            for (int k = 0; k < 3; ++k)
+                attachment.at[k] = static_cast<std::int16_t>(
+                    std::clamp(std::lround(double(a.at[k]) * (1 << kHitboxShift)), -32768L, 32767L));
+            out.attachments.push_back(attachment);
+        }
+
         ModelHeader &h = out.header;
+        h.attachmentCount = static_cast<std::uint8_t>(out.attachments.size());
+        h.controllerCount = static_cast<std::uint8_t>(out.controllers.size());
+        h.hitboxCount = static_cast<std::uint8_t>(out.hitboxes.size());
         std::memcpy(h.magic, kModelMagic, 4);
         h.version = kModelVersion;
         h.boneCount = static_cast<std::uint16_t>(mdl.bones.size());
@@ -1160,6 +982,8 @@ namespace hlds
         // Half as much again: an animation reaches further than the rest pose.
         h.radius = static_cast<std::uint16_t>(std::min(65535.0, std::ceil(radius * 1.5)));
         h.polygons = static_cast<std::uint16_t>(std::min(worstPolygons, 65535));
+        for (int l = 0; l < kModelLevels; ++l)
+            h.levelError[l] = out.levelError[l];
         return true;
     }
 
@@ -1181,6 +1005,10 @@ namespace hlds
         append(model.tracks.data(), model.tracks.size() * sizeof(ModelTrack));
         append(model.keys.data(), model.keys.size() * sizeof(ModelKey));
         append(model.events.data(), model.events.size() * sizeof(ModelEvent));
+        append(model.controllers.data(), model.controllers.size() * sizeof(ModelController));
+        append(model.controlAxes.data(), model.controlAxes.size() * sizeof(ModelControlAxis));
+        append(model.hitboxes.data(), model.hitboxes.size() * sizeof(ModelHitbox));
+        append(model.attachments.data(), model.attachments.size() * sizeof(ModelAttachment));
 
         ModelHeader header = model.header;
         header.fileSize = static_cast<std::uint32_t>(out.size());

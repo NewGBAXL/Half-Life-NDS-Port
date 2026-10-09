@@ -59,6 +59,9 @@ namespace hlds
             blobOf(level.sentences),
             blobOf(level.sentenceWords),
             blobOf(level.rooms),
+            blobOf(level.sprites),
+            blobOf(level.speech),
+            blobOf(level.messages),
         };
 
         SectionDir dir[kSectionCount];

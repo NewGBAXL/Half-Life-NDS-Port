@@ -6,7 +6,7 @@ A port of Half-Life to the Nintendo DS and DSi, written in C++ for
 **No game data is in this repository or in the ROM.** A converter turns your
 own copy of Half-Life into the files the DS reads from its SD card.
 
-## Status: milestone 7, "more monsters", with DSi audio
+## Status: milestone 11, "levels of detail"
 
 Working:
 
@@ -63,9 +63,8 @@ Working:
   pause menu. The game continues from the save when the console is switched
   on again.
 - Models: the game's studio models, cooked to a DS format (one skin texture a
-  model, animation as keys) and skinned by the hardware's matrix stack. The
-  converter thins each to about 350 triangles (people are 600-850 in the
-  game), so that several fit in a frame with the world.
+  model, animation as keys) and skinned by the hardware's matrix stack, at
+  several levels of detail (below).
   Scientists, guards and props stand and animate in the maps; scripted
   sequences play (an actor goes to its mark as soon as a script takes it,
   waits there, acts when told, and what waits on it happens when it is
@@ -117,6 +116,44 @@ Working:
   bullsquids spit, bite and whip, houndeyes run up and let off a blast. Hand
   grenades bounce, and burst after three seconds. Bolts, spit and blasts are
   drawn as plain shapes.
+- Turrets, by the game's own rules: the miniturret (on a floor or hung
+  from a ceiling), the sentry and the big turret. Folded away until one sees
+  someone or is switched on by name (a door, a tripwire's relay); out,
+  sweeping and pinging; onto whoever it sees, turning as the game's does and
+  firing ten rounds a second with no spread; away again when nobody has
+  come. A sentry is woken by a touch or a shot and wakes the others of its
+  name; plating turns a bullet; one nearly done for goes wild. The big one
+  has to spin up. Their guns are aimed by the models' own bone controllers,
+  which the converter now keeps (the barnacle's tongue is one too).
+- A hit to the head counts three times, as in the game. Where a shot lands
+  is found on the model's own hit boxes, posed as the monster stands; a shot
+  that goes through its outline but between the boxes still counts, as a
+  hit to the body.
+- The bullsquid is as wide as the game has it: the converter cooks the
+  world's third clip hull, and it walks only where that has room.
+- A monster the map marks as a prisoner goes for nobody (what is glimpsed
+  during the cascade), and a map's "kill" of a name takes people and
+  monsters away as well as brushes.
+- The game's sprites. The converter reads its `.spr` files and cooks each
+  to one small texture, its frames side by side (`spr/` on the card;
+  `shared/HlSprite.hpp`). Most of them are "additive" in the game -- light,
+  added to what is behind -- which the DS cannot do: how bright a texel was
+  becomes how solid it is. Against the dark that is the same; against
+  something bright it is dimmer than the game's.
+- What the maps show and shake, from their own entities
+  (`shared/HlEffects.hpp`): sprites and glows (`env_sprite`, `env_glow`),
+  beams and lasers (`env_beam`, `env_laser`: straight or thrown about like
+  lightning, striking and striking again as the map times them, burning
+  whoever stands in one that burns), explosions (`env_explosion`: seen,
+  heard, felt and hurting), shakes of the view (`env_shake`), sparks
+  (`env_spark`), things thrown out (`env_shooter`, `gibshooter`),
+  `env_render` making a brush see-through or unseen, and fades of the
+  screen (`env_fade`).
+- The port's own effects are drawn with the game's pictures: a grenade's
+  fireball, an alien slave's lightning, a turret's tracer and muzzle flash,
+  a bullsquid's spit, a houndeye's shock wave; a flash at the player's own
+  gun, a puff where a shot lands on something that bleeds; the view shakes
+  at an explosion near by.
 - The HEV suit is taken where the game has it (it is what opens the way on),
   and armour is for someone wearing it.
 - The seated and the dead are let down onto what is under them, as the game
@@ -136,11 +173,277 @@ Working:
 - Player movement with Half-Life's own numbers: walking, jumping, crouching,
   steps, climbing, sliding along walls, in fixed point throughout (the DS has
   no FPU).
+- The arithmetic. Everything that runs every frame is compiled as ARM
+  (the build tool had been compiling the `.arm.cpp` files as Thumb, where
+  every 64-bit multiply is a call), and the compiler's 64-bit divide and
+  the fixed-point square root go to the console's own divider and
+  square-root unit (`source/HwMath.s`): same answers, a tenth of the time.
+  A build with `HLDS_PROFILE` checks the hardware's sums against the slow
+  way at start-up and says so in `perf.txt`.
+- On a DSi the 47.6 kHz output is asked of NEA
+  (`NEA_SoundEnableDSiOutput`); it is the same output the game had by
+  asking libnds directly.
+- Soldiers (`shared/HlGrunt.hpp`): the game's human grunt by its rules and
+  its numbers. Cooked with the head, gun and skin of what the map has him
+  carry (MP5, shotgun, hand grenades, the launcher). He sees what is in
+  front of him within 2048 units, and turns to a shot or a blast; fires
+  bursts of three rounds a tenth of a second apart, four bursts running
+  (a shotgun: a shell of five pellets), standing or crouched, and never
+  with one of his own in the line; reloads when the clip is out, behind
+  cover if there is any; kicks whoever is within reach; throws a grenade in
+  the game's arc, or launches one at where the player will be -- never from
+  within 256 units, never onto his own, never twice in six seconds, and
+  first of all when the player is out of sight; runs from a grenade that
+  lands by him; takes cover nine times in ten when he is hurt, and limps
+  under twenty health. His helmet takes twenty off a round, a round in the
+  head counts three times, and he dies as he was hit.
+  Squads are the game's: by the map's names where it names them and flags
+  a leader, else whoever of his kind a soldier can see within 1024 units
+  when the map starts. The whole squad learns of the player at once; the
+  leader calls it, waves the others on the first time, and opens fire while
+  they make for cover; two of a squad fire at once and two may have a
+  grenade in hand; the rest hide, or go in for a line of fire. Cover is the
+  nearest place the player has no line to: a few steps to one side, or one
+  of the map's path nodes. They talk -- the game's own lines for a grenade,
+  the alert, cover, a charge, a taunt, and the questions and answers of
+  soldiers with nothing to do -- off the card, one line at a time.
+  Monstermakers make them, scripts move them, and what a map has one set
+  off when he sees the player, is hurt or dies is set off.
+- Tripmines: armed two and a half seconds after the map starts (one, where
+  the map says), a beam to the first thing in its way; the mine goes off
+  when the beam gets shorter or longer by anything -- the player, a
+  monster, a door -- or when it is shot or caught in a blast: 150, to 375
+  units, so that one sets off the next.
+- The MP5 and the .357, found where the game leaves them. The MP5 fires ten
+  rounds a second from a clip of fifty (9 mm, which it shares with the
+  pistol), and **R** launches a grenade that goes off at what it touches;
+  the .357 is six rounds of forty. With any other gun in hand, R reloads.
+- What is taken far past dead comes apart: into the game's own pieces (the
+  skull and four more for a person, four for an alien), which fly, tumble,
+  bounce, lie, and are gone after a while. A body caught in a blast does
+  too. What the maps throw out (`env_shooter`) is the model the map names.
+- The big turret's eye glows red at each ping, where the model has it.
+- Beams whose ends are things that move follow them (the lasers on the
+  trains of c1a1, the cascade's); a beam with one end left to chance
+  strikes somewhere new each time, as far as the world lets it; one with
+  several targets of a name picks among them; rings are rings.
+- Everything see-through -- glass, sprites, beams, effects -- is drawn in
+  one order, far to near, and what the effects cost is counted against the
+  polygon budget with the rest.
+- Sound in layers, through maxmod (by way of NEA where NEA has the call).
+  Maxmod plays samples out of a "sound bank"; ours is not a file but the
+  map's cooked sounds where they already are in memory, each handed over as
+  a small header that points at it, so nothing is cooked twice and the
+  hardware still plays the ADPCM itself, loops included. Every sound is of
+  a layer -- the player's own, the world's, the voice, the loops of a
+  place, the menu -- and each layer has its share of the fifteen voices
+  (3, 6, 1, 4, 1), which no other layer can take from it; over its share a
+  layer has only what is free, and gives it back, the quietest first, to
+  whoever is short (`shared/HlMixer.hpp`). So a far headcrab does not cut
+  off the player's gun, and a spoken line is cut short only by the next.
+  What has a place goes on being placed as the view moves and turns:
+  louder, quieter, from one side to the other; a soldier's line comes from
+  where he stood. In the pause menu the game's own layers are silent (the
+  music and the menu's clicks are not). The music, on a DS, is a maxmod
+  stream fed from the card.
+- The pause menu has two pages: RESUME, SAVE, NEW GAME, OPTIONS, COMMAND;
+  and under OPTIONS the rendering mode, the DSi's sound, a volume slider
+  each for the music, the effects, the voices and the ambience, which
+  side the touch screen's buttons are, and the
+  debug readout (off unless switched on; it is drawn along the top of the
+  touch screen in every rendering mode). Buttons act when the stylus is
+  lifted from them; sliders follow it. The command line has a keyboard of
+  the port's own.
+- The touch screen is laid out as the DS's better first-person games lay
+  theirs out (Dementium II is the model), in the suit's amber on dark: a
+  bar along the top with MENU, USE in the middle and RELOAD (faint when
+  there is nothing to reload; health and the suit's charge are on the top
+  screen and not said twice); a framed aim pad; JUMP, the lamp and DUCK in a column beside it; and along the
+  bottom a slot for each weapon, always in the same place, with the
+  game's own picture of it (cooked from your `sprites/320hud1.spr`), the
+  one in hand lit with its rounds under it. A touch on a slot takes that
+  weapon; a touch on the one in hand reloads it, as RELOAD does (the MP5
+  too, which R cannot reload while it has grenades to launch). One table (`shared/HlTouchLayout.hpp`) says where everything
+  is, to the code that draws and the code that tests a touch alike. For
+  a stylus in the left hand, "Buttons: left" in the options mirrors it.
+- The picture is the player's to tune: OPTIONS > GRAPHICS in the pause
+  menu (`shared/HlFog.hpp` has what each choice stands for).
+  - **Fog**: *off*, *when needed* (only while a view too heavy to draw
+    is being cut short -- what the fog was always for) or *always* (a
+    steady distance fog). **Strength** is how solid it gets at its far
+    end; it used to be solid black right up to the cut, a wall: it now
+    comes on along a curve and stops at seven tenths unless asked for
+    more. **Distance** is where an always-fog is whole (768 to 6144
+    units) and how close to the cut the other kind is allowed to sit.
+    **Colour**: black, grey, blue, brown or green -- the empty distance
+    behind everything takes the same colour, so a cut does not show as
+    an edge.
+  - **Model detail** (low / normal / high): how far off people and
+    monsters step down to their coarser meshes -- half, as cooked for,
+    or twice the distance.
+  - **World detail**: how readily small far surfaces are left out when a
+    frame is heavy -- sooner, as before, or never (then the view is cut
+    shorter instead).
+  - **Models at once**: 4 to 12, or what the machine is good for (8 on a
+    DS, 12 on a DSi).
+  - **Draw distance**: far (8192 units), medium (3072) or near (1536).
+  The hardware's fog is 32 steps of density over a band of fixed widths:
+  a light or near fog shows its steps.
+- Textures that change, the game's four kinds:
+  - **Cycling** (`+0name` .. `+9name`): screens and panels that play
+    their pictures ten a second. The level lists a cycle's pictures one
+    after another, all cooked at one size, and surfaces name the first;
+    which is bound is the console's to say (`TextureCache::shown`). The
+    geometry carries no texture choice of its own, so it costs nothing to
+    draw -- only the pictures' video memory, which the budget counts.
+  - **Switched** (`+0name` / `+Aname`): the other face of a brush -- a
+    light fixture switched off, a button pressed in, a health or suit
+    charger with nothing left -- shown by what the thing is doing
+    (`BrushState::frame`, worked out each tick).
+  - **Sliding**: a `func_conveyor` carries whoever stands on it at its
+    speed, runs the other way when used, and its `scroll` texture slides
+    with it through the texture matrix. (The same texture on a plain wall
+    stays still, as in the game.)
+  - **Varied** (`-0name` .. `-9name`): each face wears one of the
+    texture's variants, by where the face is, so big floors and walls do
+    not visibly repeat. Decided by the converter; at run time they are
+    ordinary textures. It costs about a hundredth more surfaces and some
+    texture memory; `--plain-tiles` cooks without it. The choice is not
+    the game's own (that comes from the C library's random numbers): the
+    same idea, another scatter.
+- What a shot, a blow and a fall do, as in the game:
+  - **Marks on walls** -- bullet holes, the crowbar's dent, blood behind
+    what is shot and under what dies or lands in pieces (yellow for the
+    aliens), the scorch of a blast, cracks on glass that is shot and
+    stands. They are the game's own decals (your `decals.wad`, cooked to
+    one small texture), each drawn as one quad in its wall's plane with
+    the hardware's "same depth" test, which is what that test is for. A
+    ring of them (24 on a DS, 64 on a DSi); one on a door or a pane goes
+    with it. Dust flies off a wall that is hit, and now and then the
+    round whines away.
+  - **Breaking** -- what breaks throws pieces *of itself*: small tumbling
+    patches of the broken brush's own texture (glass see-through), as
+    many and as heavy as its material says, which fall, lie and go. No
+    shard models, no extra video memory.
+  - **Being hurt** -- the screen reddens (a red sheet, as the game does
+    it), a mark on each side of its middle the blow came from, and the
+    head is knocked back. Falls hurt by the game's rule (safe to 580
+    units a second, fatal at 1024). Dying, the camera sinks to the floor
+    and rolls over before the game goes back.
+  - **The view** -- each weapon's own kick when it fires, the bob of a
+    walk and the lean into a sidestep (the game's numbers; "View bob" in
+    the options turns them off), the dip of a landing, casings thrown
+    from the pistol, the MP5 and the shotgun (`shared/HlView.hpp`).
+- Two things that could hold the game for good are closed. A player
+  stuck fast in something (nothing got them out but a few units' nudge)
+  is, after half a second, put somewhere clear up to 128 units off. And
+  dying goes back to the latest save -- but three deaths on end, each
+  within twenty seconds of going back, go back to the save made on
+  coming into the map instead (a second save file), and failing that to
+  the map's start: a save made a moment before certain death is no
+  longer a loop with no way out.
+- The game's writing over the picture: the HALF-LIFE title on the first
+  map, the names of the introduction along the tram ride, each chapter's
+  name as it begins. The converter reads the game's `titles.txt` (what
+  each message says, where, in what colours, how it comes and goes) and
+  cooks every `env_message` and the world's `chaptertitle` / `gametitle`
+  into the level; the console writes them on sprites of the top screen,
+  in front of the 3D picture and added to it as the game adds its own
+  (`source/render/TopText.cpp`: video bank G, no texture memory, the same
+  in all three rendering modes), in the game's title face, faded or
+  written out letter by letter as the file asks.
+- The suit's lamp, by the game's rules (it wants the suit; two minutes
+  alight, twenty seconds to be full again). The world's light is baked
+  into its vertices and cannot be relit, so the lamp's light is
+  *projected*: the surfaces in its beam are drawn a second time with one
+  small round picture of light, and the hardware itself works out where
+  on that picture each vertex is from where the vertex is in the world
+  (its texture matrix, in the mode that takes the vertex --
+  `NEA_TEXGEN_POSITION`; `WorldDraw::lampPass`, `shared/HlLamp.hpp`). So
+  the light lies on the walls as a light does: it bends round a corner or
+  a pillar, is long on a floor it skims, smaller on the screen the
+  farther off, brighter on a wall met head-on. The surface's own packed
+  geometry is sent again through a small filter (vertices as they are,
+  colours white, the projection's constant for a texture coordinate) and
+  drawn only where the depth is the very same. The lamp is carried a
+  little beside the eyes, so what is near is lit a little off the view's
+  middle. Doors and other solid brushes are lit the same way; whoever
+  stands in the beam is lit by a second hardware light along the view,
+  with the material's specular colour and a shininess table. What it is
+  not: a true cone (one radius a frame, taken where the beam lands),
+  added light (the DS blends towards a colour), or a caster of shadows.
+  Its button is in the touch screen's column between JUMP and DUCK, with
+  what is left in it; Select switches it too; the game's lamp icon is at
+  the top right of the top screen while it is alight or filling.
+- Everything on the touch screen is drawn in the game's own fonts, which
+  the converter cooks from your `fonts.wad` and `gfx.wad` (`ui/` on the
+  card; `shared/HlFont.hpp` draws them on a screen of tiles). The libnds
+  text console is gone. A card cooked before this has no fonts: then the
+  same code writes in the 8x8 letters that are in the ROM anyway.
+- A head-up display on the top screen, as the game has it, in its own
+  digits and pictures (its 320-wide set, cooked to one small texture):
+  health and armour at the bottom left, what is in the gun and what is
+  carried for it at the bottom right, the MP5's grenades above that, a
+  crosshair for what is aimed. Nothing, until the suit is worn. It is
+  drawn as flat quads six units in front of the eye through the world's
+  own projection, which is right in all three rendering modes.
+- Loading is still: the last picture of the game stays on the top screen,
+  frozen, until the next map's first picture is whole (`FrameFreeze`). The
+  3D picture left on the screen is drawn by the hardware again every frame
+  out of video memory, and a load writes over video memory: so the screen
+  is captured first and the capture shown in front of the 3D layer. In
+  single-pass that takes a bank of video memory, D, which textures no
+  longer use there (the two-pass DMA mode never had it, and every map
+  fits); plain two-pass captures into one of its own two; in the DMA mode
+  the picture is in main memory already. The very first load has no
+  picture to keep and shows the game's own loading picture (cooked from
+  your `cached.wad`); a load that changes the rendering mode shows black.
+  The screen is blacked out for the frame or two the new map's first
+  picture takes. One owner of the screen's brightness (`ScreenFade`)
+  keeps the map's fades, the dimness of being under water and this
+  curtain from undoing each other.
+- Levels of detail for models, made with meshoptimizer
+  (`thirdparty/meshoptimizer`; `tools/hlds-convert/core/src/ModelMesh.cpp`).
+  A person is 600 to 850 triangles in the game and the DS draws 2048 a
+  frame, so every model is cooked at three levels: about 350 triangles
+  (what it always was thinned to), half of that, and about a third. The
+  simplifier weighs texture coordinates and normals with the shape and
+  only ever keeps vertices the model has, each on its own bone at its own
+  texel, so skinning and the skin's seams are as they were; each level
+  records how far it is from the game's own mesh (the distance all but
+  three in a hundred of its vertices are within). The console draws each
+  model at the coarsest level whose error is under a pixel and a half at
+  its distance, a level coarser for each step of pressure for all but the
+  nearest, and coarser still before it gives a model up for want of room:
+  a far soldier costs 120 polygons where he cost 350. A model small to
+  begin with has fewer levels, or the one.
+  A DSi's model files have a fourth level on top: the game's own mesh,
+  untouched, for the nearest model (and the weapon in hand) in a frame
+  with room. A DS has not the memory for a second copy of every mesh.
+- Strips. The DS has no index buffers: a vertex costs each time it is
+  sent. Every model's triangles -- thinned or not -- are made into strips
+  afresh, by meshoptimizer's strip builder and by a plain one, and whichever
+  sends fewer vertices is kept per mesh (the game's own, with their fans,
+  if neither does better). About 1.5 to 1.6 vertices a triangle, where a
+  model as the game has it sends 1.6 to 1.9: a tenth to a sixth fewer
+  vertices for the same picture.
 - One ROM for DS and DSi; DSi mode uses the 134 MHz clock and 16 MB of RAM.
+  What a DSi has over a DS, apart from speed: sounds at the rate the game
+  has them (up to 22 kHz, two megabytes a map: the converter writes those
+  beside the DS's own, and says how many); twice as many effects, things in
+  flight and pieces at once; twelve models drawn at once where a DS draws
+  eight; the stereo music and room echo of its DSP,
+  when that is switched on. Nothing is left out for a DS that it had
+  before: the heaviest soldier maps (c1a3a, c2a2b1) leave it 1.6 MB and more
+  free.
 
-Not yet: turrets; friends who follow and talk; the game's own sprites and
-beams; room echo, the suit's voice, the
-chatter of scientists and guards, the sounds of trains and lifts. Scientists and guards do not
+Not yet: friends who follow and talk; the rest of the game's weapons and
+monsters; `env_bubbles`; the suit's voice, the chatter of scientists
+and guards, the sounds of trains and lifts. Soldiers fight the player only
+(not the aliens), do not drop their guns, do not come down ropes, and are
+not eaten by barnacles; the player cannot yet lay a tripmine. What breaks
+still comes apart into plain scraps (it is monsters, and what the maps throw
+out, that have the game's pieces). Scientists and guards do not
 think: they stand where the map puts them and go, in a straight line, where a
 script sends them. A script whose actor this port does not have is taken as
 played after a few seconds, so that what waits on it still happens. Monsters
@@ -155,12 +458,14 @@ The converter counts what it does not handle rather than refusing a map.
 | Stylus drag | look around |
 | D-pad, or A B X Y | move |
 | L | fire, or swing the crowbar |
-| Touch WEAPON | the next weapon |
-| Tap twice | jump (hold the second tap to keep it held) |
+| R | the MP5's grenade launcher; with any other gun, reload |
+| Touch a weapon's slot | take that weapon; the one in hand: reload it |
+| Touch RELOAD | reload |
+| Touch JUMP, or tap the pad twice | jump (hold it, or the second tap, to keep it held) |
 | Touch DUCK | crouch |
 | Touch USE | press a button, open a use-only door, charge at a wall unit |
-| Start | pause menu: rendering mode, DSi sound (on a DSi), save, new game, debug command line |
-| Select | fly through walls (debug) |
+| Start, or touch MENU | pause menu: resume, save, new game, options (graphics: rendering mode, fog, detail; DSi sound, volumes, buttons left or right, view bob, debug readout), debug command line |
+| Select, or touch the lamp | the suit's lamp |
 
 The pause menu's COMMAND opens a debug command line on the on-screen
 keyboard: `map <name>` goes to a map, `give` hands over every weapon with its
@@ -226,6 +531,13 @@ way to look at a rendering or logic change on the console.
 | `architectds_nea_mod/` | the ROM build system (ArchitectDS with Nitro Engine Advanced support) |
 | `thirdparty/yas/` | serialization, used for the manifest |
 | `thirdparty/minimp3/` | MP3 decoder (CC0), used by the converter for the music |
+
+## Third-party code
+
+- **meshoptimizer** 1.3 (`thirdparty/meshoptimizer/`), in the converter
+  only: Copyright (c) 2016-2026 Arseny Kapoulkine, MIT licence (its
+  `LICENSE.md` is beside it).
+- **minimp3** and **yas** (`thirdparty/`), under their own licences.
 
 ## Provenance
 

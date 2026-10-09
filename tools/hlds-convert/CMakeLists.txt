@@ -11,6 +11,23 @@ endif()
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 # ---------------------------------------------------------------------------
+# meshoptimizer (thirdparty/meshoptimizer, MIT): the model meshes' thinning and
+# strips. Only the parts of it the converter uses, as a library of its own --
+# it is not ours to hold to our warnings. Floating-point contraction is off so
+# that every machine thins a model to the same triangles.
+# ---------------------------------------------------------------------------
+add_library(meshoptimizer STATIC
+    "${REPO_ROOT}/thirdparty/meshoptimizer/indexgenerator.cpp"
+    "${REPO_ROOT}/thirdparty/meshoptimizer/rasterizer.cpp"
+    "${REPO_ROOT}/thirdparty/meshoptimizer/simplifier.cpp"
+    "${REPO_ROOT}/thirdparty/meshoptimizer/stripifier.cpp"
+    "${REPO_ROOT}/thirdparty/meshoptimizer/vcacheoptimizer.cpp"
+)
+if(NOT MSVC)
+    target_compile_options(meshoptimizer PRIVATE -ffp-contract=off)
+endif()
+
+# ---------------------------------------------------------------------------
 # Core -- pure C++20, NO Qt.
 #
 # The GUI and the CLI are both thin drivers over this. Keeping Qt out is what
@@ -31,12 +48,17 @@ add_library(hlds_convert_core STATIC
     core/src/LightBake.cpp
     core/src/MdlFile.cpp
     core/src/ModelCook.cpp
+    core/src/ModelMesh.cpp
     core/src/MapStats.cpp
     core/src/MeshOptimize.cpp
     core/src/PathNodes.cpp
     core/src/SoundCook.cpp
+    core/src/SpriteCook.cpp
     core/src/TextureEncoder.cpp
+    core/src/TitlesFile.cpp
+    core/src/UiCook.cpp
     core/src/TextureBudget.cpp
+    core/src/TextureFamily.cpp
     core/src/TextureCook.cpp
     core/src/TextureImage.cpp
     core/src/TextureSize.cpp
@@ -50,7 +72,7 @@ target_include_directories(hlds_convert_core PUBLIC
 )
 
 find_package(Threads REQUIRED)
-target_link_libraries(hlds_convert_core PUBLIC Threads::Threads)
+target_link_libraries(hlds_convert_core PUBLIC Threads::Threads PRIVATE meshoptimizer)
 
 # yas reads its byte order from these, exactly as the ARM9 build pins it
 # (build.py): both sides must be told the same thing, explicitly.
@@ -87,9 +109,18 @@ if(HLDS_BUILD_TESTS)
             test_logic
             test_track
             test_monsters
+            test_soldiers
+            test_ui
+            test_lod
+            test_titles
+            test_view
+            test_families
+            test_mixer
             test_cascade
             test_actors
             test_sound
+            test_sprite
+            test_effects
             test_manifest
             test_mdl
             test_mesh

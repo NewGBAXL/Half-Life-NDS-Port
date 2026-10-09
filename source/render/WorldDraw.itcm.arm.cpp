@@ -1,3 +1,4 @@
+#include "render/HudDraw.hpp"
 #include "render/WorldDraw.hpp"
 
 #include "render/EffectDraw.hpp"
@@ -211,7 +212,7 @@ namespace hlrt
                 {
                     // What NEA_MaterialUse writes to registers, as commands.
                     bound = surface.texture;
-                    const std::uint32_t *bind = textureCache.bind(bound);
+                    const std::uint32_t *bind = textureCache.bind(textureCache.shown(bound));
                     *at++ = FIFO_COMMAND_PACK(FIFO_PAL_FORMAT, FIFO_COLOR, FIFO_TEX_FORMAT, FIFO_NOP);
                     *at++ = bind[1];
                     *at++ = 0x7FFF;
@@ -274,7 +275,8 @@ namespace hlrt
                 if (surface.texture != bound)
                 {
                     bound = surface.texture;
-                    const NEA_Material *material = textureCache.material(bound);
+                    // (Whichever picture of it is due: TextureCache.)
+                    const NEA_Material *material = textureCache.material(textureCache.shown(bound));
                     if (material != nullptr)
                         NEA_MaterialUse(material);
                     else
@@ -287,6 +289,22 @@ namespace hlrt
                     GFX_FIFO = *word++;
             }
         }
+    }
+
+    // Liquids sway: their textures' coordinates go through the texture
+    // matrix (TextureCache asks for that), and the matrix slides them round
+    // a small circle, a couple of texels across, every four seconds. In the
+    // matrix a texel is 16: the hardware feeds it a sixteenth where a vertex
+    // has a one.
+    void WorldDraw::sway()
+    {
+        const auto phase = static_cast<std::uint16_t>(Global::vblanks() * 273u);
+        fx sine, cosine;
+        fxSinCos(phase, sine, cosine);
+        glMatrixMode(GL_TEXTURE);
+        glLoadIdentity();
+        glTranslatef32(sine << 5, cosine << 5, 0);
+        glMatrixMode(GL_MODELVIEW);
     }
 
     void WorldDraw::draw()
@@ -304,23 +322,19 @@ namespace hlrt
             (level.view.leaves[leaf].flags & kLeafSeesSky))
             drawSky();
 
-        // Liquids sway: their textures' coordinates go through the texture
-        // matrix (TextureCache asks for that), and the matrix slides them
-        // round a small circle, a couple of texels across, every four
-        // seconds. In the matrix a texel is 16: the hardware feeds it a
-        // sixteenth where a vertex has a one.
-        {
-            const auto phase = static_cast<std::uint16_t>(Global::vblanks() * 273u);
-            fx sine, cosine;
-            fxSinCos(phase, sine, cosine);
-            glMatrixMode(GL_TEXTURE);
-            glLoadIdentity();
-            glTranslatef32(sine << 5, cosine << 5, 0);
-            glMatrixMode(GL_MODELVIEW);
-        }
+        textureCache.frame();
+        sway();
         {
             const DebugLog::Perf::Scope scope(DebugLog::Section::Walk);
             modelDraw.plan(modelPolygons_, modelVertices_);
+            // (What is only seen -- sprites, beams, bursts -- is costed
+            // with the models: the world has what both leave.)
+            effectDraw.gather(modelPolygons_, modelVertices_);
+            // (... and the head-up display, which is drawn over it all.)
+            modelPolygons_ += HudDraw::kPolygons + (hudDraw.lampAlight() ? HudDraw::kLampPolygons : 0) +
+                              EffectDraw::kDecalPolygons;
+            modelVertices_ += HudDraw::kVertices + (hudDraw.lampAlight() ? HudDraw::kLampVertices : 0) +
+                              EffectDraw::kDecalPolygons * 4;
             walk();
             // ... and the models' share is counted with the world's from here
             // on, so that the brushes are held to what is really left.
@@ -339,8 +353,7 @@ namespace hlrt
             stats_.models = 0;
             stats_.modelsCut = 0;
             modelDraw.draw(stats_.models, stats_.modelsCut);
-            drawBrushes();
-            effectDraw.draw();
+            drawBrushes(); // (and the effects, in among the glass)
             modelDraw.drawHeld();
         }
 

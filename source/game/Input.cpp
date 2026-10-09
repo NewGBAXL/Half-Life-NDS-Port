@@ -3,6 +3,7 @@
 #include <nds.h>
 
 #include "Global.hpp"
+#include "Settings.hpp"
 
 namespace hlrt
 {
@@ -18,11 +19,13 @@ namespace hlrt
         // Edges are worked out here, not taken from keysDown(): in two-pass
         // mode NEA scans the keys as well, and keysDown() only reports what
         // changed since the LAST scan, whoever made it.
-        noclipPressed = (held & ~lastHeld_ & KEY_SELECT) != 0;
+        lampPressed = (held & ~lastHeld_ & KEY_SELECT) != 0;
         startPressed = (held & ~lastHeld_ & KEY_START) != 0;
         tapped = false;
         usePressed = false;
-        weaponPressed = false;
+        weaponPick = 0;
+        menuPressed = false;
+        reloadPressed = false;
         lastHeld_ = held;
 
         lookDx = 0;
@@ -36,24 +39,19 @@ namespace hlrt
                 tapped = true;
                 tapX = touch.px;
                 tapY = touch.py;
-                // USE is a press, not a hold: it happens on the frame the
-                // stylus lands on the button.
-                usePressed = touch.py >= kButtonTop && touch.px >= kUseLeft &&
-                             touch.px < kUseLeft + kButtonWidth;
-                weaponPressed = touch.px >= kWeaponLeft && touch.py >= kWeaponTop &&
-                                touch.py < kWeaponBottom;
                 // Where a touch STARTS decides what it is for its whole life.
+                touch_ = hldata::touchHit(hldata::touchLayout(settings.leftHanded), touch.px, touch.py);
+                // USE, MENU, RELOAD and a weapon's slot are presses, not holds: they
+                // happen on the frame the stylus lands on them.
+                usePressed = touch_ == hldata::kTouchUse;
+                menuPressed = touch_ == hldata::kTouchMenu;
+                reloadPressed = touch_ == hldata::kTouchReload;
+                lampPressed = lampPressed || touch_ == hldata::kTouchLamp;
+                if (touch_ >= hldata::kTouchSlot)
+                    weaponPick = touch_ - hldata::kTouchSlot + 1;
                 jumping_ = false;
-                if (weaponPressed)
-                    touch_ = Touch::Weapon;
-                else if (touch.py >= kButtonTop && touch.px >= 256 - kButtonWidth)
-                    touch_ = Touch::Duck;
-                else if (touch.py >= kButtonTop && touch.px >= kUseLeft &&
-                         touch.px < kUseLeft + kButtonWidth)
-                    touch_ = Touch::Use;
-                else
+                if (touch_ == hldata::kTouchAim)
                 {
-                    touch_ = Touch::Aim;
                     // The second of two taps close together, in time and in
                     // place, is a jump.
                     const std::uint32_t now = Global::vblanks();
@@ -67,7 +65,7 @@ namespace hlrt
                     lastTapY_ = touch.py;
                 }
             }
-            else if (touch_ == Touch::Aim)
+            else if (touch_ == hldata::kTouchAim)
             {
                 // The first frame of a touch only set the reference point:
                 // otherwise putting the stylus down would jerk the view by
@@ -82,14 +80,16 @@ namespace hlrt
         else
         {
             touching_ = false;
-            touch_ = Touch::None;
+            touch_ = hldata::kTouchAim;
             jumping_ = false;
         }
 
         // Jumping and crouching are on the touch screen; L is the hand that
-        // holds the weapon. R does nothing yet.
-        jump = jumping_;
-        duck = touch_ == Touch::Duck;
+        // holds the weapon, R its other use (the MP5's launcher; a reload).
+        jump = jumping_ || touch_ == hldata::kTouchJump;
+        duck = touch_ == hldata::kTouchDuck;
+        touchOn = touching_ ? touch_ : hldata::kTouchAim;
         attack = (held & KEY_L) != 0;
+        second = (held & KEY_R) != 0;
     }
 } // namespace hlrt

@@ -35,7 +35,7 @@ arm9 = Arm9Binary(
     # frame went, split between input, the BSP walk and the send to the
     # geometry engine. Off, every one of its entry points is an empty inline
     # (DebugLog.hpp), so the shipped build carries none of it.
-    defines=['NEA_MAXMOD'],
+    defines=['NEA_MAXMOD', 'HL_HW_MATH'],
     libs=['NEA', 'mm9', 'nds9', 'dswifi9d_noip'],
     libdirs=[
         '${BLOCKSDS}/libs/libnds',

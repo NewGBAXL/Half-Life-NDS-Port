@@ -38,7 +38,15 @@ namespace hlds
 {
     inline constexpr int kWorldTexelBudget = 480 * 1024;
     inline constexpr int kPaletteColourBudget = 30000;
-    inline constexpr int kAlphaTexelBudget = 60 * 1024;
+    /// (Of the 64 KB that half holds, twelve are there in every map: eight
+    /// the head-up display's, four the marks shots and blood leave --
+    /// HlUi.hpp.)
+    inline constexpr int kUiTexelBudget = 12 * 1024;
+    inline constexpr int kAlphaTexelBudget = 48 * 1024;
+    /// Of that, what a map's sprites may have between them (they are A3I5
+    /// too: HlSprite.hpp), and the colours kept for their palettes.
+    inline constexpr int kSpriteTexelBudget = 24 * 1024;
+    inline constexpr int kSpriteColourBudget = 32 * 32;
 
     /// Which form each texture is wanted in, by texture lump index. Both can be
     /// set: a '{' texture on a plain wall here and on a grate there.

@@ -36,6 +36,14 @@ namespace hlrt
         /// (where a register cannot be written): the texture's (0: none) and
         /// its palette's.
         const std::uint32_t *bind(unsigned index) const { return binds_ + index * 2; }
+        /// Which texture is shown now where a surface names `index`: itself,
+        /// or -- for one that is more than one picture -- the picture of
+        /// its cycle that is due; and with `switched`, of its other face's
+        /// (a brush whose "frame" is set), if it has one.
+        unsigned shown(unsigned index, bool switched = false) const;
+        /// Once a frame: which picture of every cycle is due (ten a second,
+        /// as the game has them).
+        void frame();
         int count() const { return count_; }
         int missing() const { return missing_; }
 
@@ -58,6 +66,7 @@ namespace hlrt
         std::uint32_t *binds_ = nullptr;
         int count_ = 0;
         int missing_ = 0;
+        std::uint32_t tick_ = 0;
     };
 
     extern TextureCache textureCache;

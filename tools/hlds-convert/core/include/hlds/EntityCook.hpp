@@ -18,6 +18,7 @@
 
 #include "HlLevel.hpp"
 #include "hlds/SoundCook.hpp"
+#include "hlds/TitlesFile.hpp"
 #include "hlds/BrushInfo.hpp"
 #include "hlds/BspFile.hpp"
 #include "hlds/EntityParser.hpp"
@@ -41,9 +42,19 @@ namespace hlds
         std::vector<std::string> sounds;
         std::vector<bool> soundLoops;
         std::vector<hldata::LogicSound> logicSounds; ///< parallel to `records`
+        /// The sprites the map draws, as the game's own paths
+        /// ("sprites/flare1.spr", lower-case), the common ones first; and
+        /// whether each is drawn as light, whatever its file says.
+        std::vector<std::string> sprites;
+        std::vector<bool> spriteLights;
         std::vector<hldata::SentenceRecord> sentences;
         std::vector<std::uint16_t> sentenceWords;
         std::vector<hldata::RoomRecord> rooms;
+        /// What soldiers call out, if the map has any: kSpeechGroups *
+        /// kSpeechLines indices into `sentences` (0xFFFF: none).
+        std::vector<std::uint16_t> speech;
+        /// What the map writes on the screen (their text is in `strings`).
+        std::vector<hldata::MessageRecord> messages;
         /// By entity index: its logic record, or -1.
         std::vector<int> recordOfEntity;
         int names = 0; ///< distinct target names
@@ -80,11 +91,12 @@ namespace hlds
     /// `brushRecordOfEntity` gives, by entity index, the Brush record the
     /// cooker made for that entity, or -1.
     /// `book` is the game's sentences.txt, if it was there to be read: the
-    /// lines the map speaks are looked up in it.
+    /// lines the map speaks are looked up in it. `titles` is its titles.txt,
+    /// likewise: what the map's messages say and how they are shown.
     void cookLogic(const BspFile &bsp, const std::vector<Entity> &entities,
                    const std::vector<int> &brushRecordOfEntity,
                    const std::vector<std::string> &models, LogicCook &out,
-                   const SentenceBook *book = nullptr);
+                   const SentenceBook *book = nullptr, const TitlesBook *titles = nullptr);
 
     /// How far a door or button travels: the engine's formula, from the
     /// direction it moves in, the size of its brush and its "lip".

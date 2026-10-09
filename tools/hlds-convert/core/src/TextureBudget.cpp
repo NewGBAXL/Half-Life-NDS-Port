@@ -1,5 +1,7 @@
 #include "hlds/TextureBudget.hpp"
 
+#include "hlds/TextureFamily.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -81,7 +83,7 @@ namespace hlds
             for (int f = model.firstFace; f < model.firstFace + model.faceCount; ++f)
             {
                 const BspFace &face = bsp.faces[f];
-                const int t = bsp.texInfos[face.texInfo].miptex;
+                const int t = wornTexture(bsp, face);
                 const BspTexture &tex = bsp.textures[t];
                 if (tex.missing || isUndrawnTexture(tex.name) || (!hidden.empty() && hidden[t]))
                     continue;
@@ -89,6 +91,26 @@ namespace hlds
                                    tex.name[0] == '{';
                 (holes ? needs.alpha : needs.opaque)[t] = 1;
                 (holes ? needs.alphaArea : needs.opaqueArea)[t] += faceArea(bsp, face);
+            }
+        }
+        // A texture that is one picture of several needs the others too,
+        // each as much as itself: the rest of its cycle, and its other face.
+        for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+        {
+            if (bsp.textures[t].missing || bsp.textures[t].name.empty() || bsp.textures[t].name[0] != '+')
+                continue;
+            if (!needs.opaque[t] && !needs.alpha[t])
+                continue;
+            const TextureFamily family = textureFamily(bsp, static_cast<int>(t));
+            for (const std::vector<int> *part : {&family.frames, &family.other})
+            {
+                for (int member : *part)
+                {
+                    needs.opaque[member] = needs.opaque[member] || needs.opaque[t];
+                    needs.alpha[member] = needs.alpha[member] || needs.alpha[t];
+                    needs.opaqueArea[member] = std::max(needs.opaqueArea[member], needs.opaqueArea[t]);
+                    needs.alphaArea[member] = std::max(needs.alphaArea[member], needs.alphaArea[t]);
+                }
             }
         }
         return needs;
@@ -170,6 +192,43 @@ namespace hlds
         if (!shrinkToFit(plan.alphaSizes, needs.alphaArea, alphaBudget, plan.alphaTexels, shrunk))
             plan.fits = false;
         plan.shrunk = static_cast<int>(std::count(shrunk.begin(), shrunk.end(), 1));
+        // The pictures of one texture are all one size: the smallest any of
+        // them was given. (One that changed size as it changed would jump.)
+        for (std::vector<TextureSize> *sizes : {&plan.sizes, &plan.alphaSizes})
+        {
+            for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+            {
+                const std::string &name = bsp.textures[t].name;
+                if ((*sizes)[t].width == 0 || name.size() < 2 || name[0] != '+' || name[1] != '0')
+                    continue;
+                const TextureFamily family = textureFamily(bsp, static_cast<int>(t));
+                TextureSize least = (*sizes)[t];
+                for (const std::vector<int> *part : {&family.frames, &family.other})
+                {
+                    for (int member : *part)
+                    {
+                        if ((*sizes)[member].width == 0)
+                            continue;
+                        least.width = std::min(least.width, (*sizes)[member].width);
+                        least.height = std::min(least.height, (*sizes)[member].height);
+                    }
+                }
+                for (const std::vector<int> *part : {&family.frames, &family.other})
+                {
+                    for (int member : *part)
+                    {
+                        if ((*sizes)[member].width != 0)
+                            (*sizes)[member] = least;
+                    }
+                }
+            }
+        }
+        plan.texels = plan.alphaTexels = 0;
+        for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+        {
+            plan.texels += static_cast<int>(plan.sizes[t].width) * plan.sizes[t].height;
+            plan.alphaTexels += static_cast<int>(plan.alphaSizes[t].width) * plan.alphaSizes[t].height;
+        }
 
         // The palette bank is shared: every A3I5 texture takes 32 colours of
         // it, and the 4x4 textures divide what is left. One colour per 16

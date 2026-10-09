@@ -34,6 +34,11 @@
 // same arithmetic the console runs.
 
 #include <cstdint>
+#include <type_traits>
+
+#ifdef HL_HW_MATH
+extern "C" std::uint32_t hlHwSqrt64(std::uint64_t value); // source/HwMath.s
+#endif
 
 // HL_HOT marks the handful of functions that are the inner loops of collision
 // (the hull trace and what it calls). They are inline like everything else
@@ -80,8 +85,17 @@ namespace hldata
 
     /// Integer square root of a 64-bit value, rounded down. Bit by bit, with no
     /// division and no table: the same answer on the host and on the console.
+    /// (Where the console's build says it has one -- HL_HW_MATH -- its own
+    /// square-root unit gives that answer in a fraction of the time.)
     constexpr std::uint32_t isqrt64(std::uint64_t value)
     {
+#ifdef HL_HW_MATH
+        // (Not the very largest numbers, whose root does not fit 31 bits:
+        // none of the game's is one, and the emulator's unit gets those a
+        // unit out, whatever the console's does.)
+        if (!std::is_constant_evaluated() && (value >> 62) == 0)
+            return hlHwSqrt64(value);
+#endif
         std::uint64_t result = 0;
         std::uint64_t bit = std::uint64_t(1) << 62;
         while (bit > value)

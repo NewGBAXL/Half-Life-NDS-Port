@@ -82,10 +82,12 @@ void Global::InitVideo(Video want)
     // texture has a palette of its own. The banks must be said explicitly: in
     // two-pass mode C and D (or D alone, in the DMA mode) are the capture
     // buffers, and "all of them" would hand those to the texture allocator.
-    NEA_TextureSystemReset(256, 256,
-                           video == Video::TwoPass      ? NEA_VRAM_AB
-                           : video == Video::TwoPassDma ? NEA_VRAM_ABC
-                                                        : NEA_VRAM_ABCD);
+    // Single-pass keeps D back as well: it is where the last picture is
+    // captured to and shown from while a map loads (FrameFreeze). Every map
+    // fits without it -- the DMA mode has always had the same three.
+    NEA_TextureSystemReset(256, 256, video == Video::TwoPass ? NEA_VRAM_AB : NEA_VRAM_ABC);
+    if (video == Video::SinglePass)
+        vramSetBankD(VRAM_D_LCD);
 
     // The projection the world is drawn through. NEA rebuilds it every frame
     // from these, so they are set once.
@@ -93,12 +95,8 @@ void Global::InitVideo(Video want)
     NEA_ClippingPlanesSetI(hlrt::Camera::kNearClip, hlrt::Camera::kFarClip);
     NEA_ClearColorSet(RGB15(0, 0, 0), 31, 63);
 
-    // The debug text console. Where it appears is NEA's choice and depends on
-    // the mode: single-pass puts it on a main-engine background, OVER the 3D
-    // picture; two-pass has no main background to spare and puts it on the
-    // touch screen (sub background 3, bank H), where it shares the screen with
-    // the aim pad -- see BottomScreen.
-    NEA_InitConsole();
+    // (No text console: what there is to read is drawn on the touch screen,
+    // in the game's own letters -- ui/TouchCanvas.)
 }
 
 std::size_t Global::heapHeadroom() const

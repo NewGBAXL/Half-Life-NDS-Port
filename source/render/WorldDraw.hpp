@@ -37,6 +37,9 @@
 
 #include "HlLogic.hpp"
 
+#include "HlFog.hpp"
+#include "Settings.hpp"
+
 namespace hlrt
 {
     struct WorldStats
@@ -141,8 +144,9 @@ namespace hlrt
         /// at this pressure (0: nothing is).
         int detailRatio() const
         {
-            static constexpr int kRatio[4] = {0, 48, 32, 20}; // about 2.5, 4 and 6 pixels across
-            return kRatio[pressure_];
+            // (Normally nothing with no pressure, then about 2.5, 4 and 6
+            // pixels across; the player may have it sooner, or never.)
+            return hldata::worldDetailRatio(settings.graphics.worldDetail, pressure_);
         }
         /// Where the fog is whole (whole units), or 0 with no fog.
         int fogDistance() const { return fogOn_ ? fogEnd_ : 0; }
@@ -172,6 +176,18 @@ namespace hlrt
         void finishList();
         void drawBrushes();
         void drawBrush(std::uint32_t index, int polygonId);
+        /// The texture matrix as liquids want it (it is also what slides a
+        /// conveyor's belt, which puts this back when it has done).
+        void sway();
+        /// The lamp's light, projected onto what of the world is in its
+        /// beam (HlLamp.hpp): after everything solid, before what is
+        /// see-through.
+        void lampPass();
+        /// The solid brushes drawn this pass: the lamp's pass lights them
+        /// as it does the world.
+        static constexpr int kMaxLampBrushes = 24;
+        std::uint16_t lampBrushes_[kMaxLampBrushes];
+        int lampBrushCount_ = 0;
         void drawSky();
 
         std::uint16_t *nodeFrame_ = nullptr; ///< vis stamp per node
@@ -198,6 +214,7 @@ namespace hlrt
         /// off. Brought in at once, let out slowly.
         int fogEnd_ = kNoFog;
         bool fogOn_ = false;
+        std::uint16_t behind_ = 0; ///< the colour behind everything, as last set
         int held_ = 0; ///< polygons kept back from the budget by govern()
         int spareQuarters_ = 4; ///< how much of what could be added is (0..4)
         int quickPasses_ = 0;

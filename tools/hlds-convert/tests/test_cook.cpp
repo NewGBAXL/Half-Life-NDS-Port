@@ -63,10 +63,11 @@ namespace
               "six surfaces, one quad each");
         check(v.nodeCount == 6 && v.leafCount == 2 && v.modelCount == 1, "tree sizes");
 
-        // Hull 2 is dropped: 12 of the 18 clip nodes, and its 6 planes.
-        check(v.clipNodeCount == 12 && c.report.droppedClipNodes == 6, "two clip hulls kept");
-        check(v.planeCount == 18 && c.report.droppedPlanes == 6, "unused planes dropped");
-        check(v.models[0].clipStanding == 0 && v.models[0].clipCrouched == 6,
+        // All three of the world's hulls are kept (the third is where
+        // something wide has room): 18 clip nodes, and their planes.
+        check(v.clipNodeCount == 18 && c.report.droppedClipNodes == 0, "the world's three clip hulls kept");
+        check(v.planeCount == 24 && c.report.droppedPlanes == 0, "and their planes");
+        check(v.models[0].clipStanding == 0 && v.models[0].clipCrouched == 6 && v.models[0].clipLarge == 12,
               "hull roots renumbered");
 
         // The standing hull's planes are the walls moved in by 16 and 36.

@@ -86,7 +86,9 @@ namespace hldata
     inline constexpr std::uint8_t kWeaponGlock = 2;
     inline constexpr std::uint8_t kWeaponShotgun = 3;
     inline constexpr std::uint8_t kWeaponGrenade = 4;
-    inline constexpr std::uint8_t kWeaponCount = 5;
+    inline constexpr std::uint8_t kWeaponMp5 = 5;    ///< with its grenade launcher
+    inline constexpr std::uint8_t kWeaponPython = 6; ///< the .357
+    inline constexpr std::uint8_t kWeaponCount = 7;
 
     struct Inventory
     {
@@ -100,6 +102,10 @@ namespace hldata
         std::int16_t ammoBuck = 0;
         std::int16_t armor = 0;       ///< 0..100
         std::int16_t grenades = 0;    ///< 0..10
+        std::int16_t clipMp5 = 0;     ///< rounds in the MP5 (it takes the pistol's 9 mm)
+        std::int16_t clipPython = 0;  ///< ... in the .357
+        std::int16_t ammo357 = 0;     ///< carried besides, 0..36
+        std::int16_t ammoAr = 0;      ///< grenades for the MP5's launcher, 0..10
     };
 
     struct PlayerState
@@ -121,6 +127,17 @@ namespace hldata
         bool duckHeld = false;
         int duckMs = 0;        ///< time since the crouch began
         bool stuck = false;    ///< the last move started inside solid and stayed there
+        int stuckMs = 0;       ///< ... and for how long now
+        /// Set by the move that lands: how fast the player was falling
+        /// (Q12 units a second); 0 otherwise. Whoever hurts for a fall reads
+        /// it.
+        fx landed = 0;
+        /// What has hurt the player since the caller last looked: how much
+        /// in all, and where the last of it came from (`hurtKnown`: it came
+        /// from somewhere).
+        int hurt = 0;
+        fx hurtFrom[3] = {0, 0, 0};
+        bool hurtKnown = false;
         /// The brush entity the last move ran into sideways, as a mover
         /// index; -1 if none. What a box that can be pushed is pushed by.
         std::int16_t touchedMover = -1;
@@ -934,6 +951,40 @@ namespace hldata
                 }
                 return false;
             }
+
+            /// Stuck fast, and for a while: somewhere clear is looked for
+            /// much farther off -- every way, a body's width at a time, out
+            /// to 128 units. Being put a few steps away is a small price
+            /// for not being held in a wall for good (which nothing in the
+            /// game gets anyone out of).
+            bool unstickFar()
+            {
+                static constexpr int kReach[] = {16, 32, 48, 64, 96, 128};
+                for (int reach : kReach)
+                {
+                    // (Up first: most of what one is stuck in is underfoot.)
+                    for (int z = 1; z >= -1; --z)
+                    {
+                        for (int y = -1; y <= 1; ++y)
+                        {
+                            for (int x = -1; x <= 1; ++x)
+                            {
+                                if (x == 0 && y == 0 && z == 0)
+                                    continue;
+                                const fx test[3] = {s.origin[0] + fxFromInt(x * reach), s.origin[1] + fxFromInt(y * reach),
+                                                    s.origin[2] + fxFromInt(z * reach)};
+                                if (positionFree(world, s.ducked, test))
+                                {
+                                    for (int i = 0; i < 3; ++i)
+                                        s.origin[i] = test[i];
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
         };
     } // namespace detail
 
@@ -943,6 +994,20 @@ namespace hldata
                            std::int32_t dt)
     {
         detail::Mover m{state, world, dt};
+        // (A landing is known by the end of the move: in the air before,
+        // on the ground after, and how fast it was coming down.)
+        struct Landing
+        {
+            PlayerState &state;
+            const bool inAir;
+            const fx falling;
+            ~Landing()
+            {
+                state.landed = inAir && state.onGround && state.waterLevel == 0 && !state.onLadder && falling < 0
+                                   ? -falling
+                                   : 0;
+            }
+        } landing{state, !state.onGround, state.velocity[2]};
         state.facingXY[0] = cmd.forwardXY[0];
         state.facingXY[1] = cmd.forwardXY[1];
         const int ms = static_cast<int>((static_cast<std::int64_t>(dt) * 1000) >> kTimeShift);
@@ -951,10 +1016,15 @@ namespace hldata
         state.touchedMover = -1;
         if (!hullPositionFree(m.hull(), state.origin) && !m.unstick())
         {
-            state.stuck = true;
-            state.velocity[0] = state.velocity[1] = state.velocity[2] = 0;
-            return;
+            state.stuckMs += ms;
+            if (state.stuckMs < 500 || !m.unstickFar())
+            {
+                state.stuck = true;
+                state.velocity[0] = state.velocity[1] = state.velocity[2] = 0;
+                return;
+            }
         }
+        state.stuckMs = 0;
 
         m.nudgeOutOfMovers();
         m.categorizePosition();

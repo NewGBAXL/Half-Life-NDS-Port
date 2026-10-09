@@ -44,6 +44,38 @@ namespace hlds
         /// scaled by `scale`.
         float value[6] = {0, 0, 0, 0, 0, 0};
         float scale[6] = {0, 0, 0, 0, 0, 0};
+        /// For each of those six, which of the model's controllers moves it
+        /// (into MdlFile::controllers), or -1.
+        int controller[6] = {-1, -1, -1, -1, -1, -1};
+    };
+
+    /// A bone controller: one of a bone's six values that the game sets by
+    /// hand -- which way a turret points, how far a barnacle's tongue is out.
+    struct MdlController
+    {
+        int bone = 0;
+        int type = 0;    ///< kMdlMotion*: which of the six, and whether it goes round
+        float start = 0; ///< the value at one end of its travel (degrees, or units)
+        float end = 0;
+        int index = 0;   ///< the number the game sets it by; 4 is the mouth
+    };
+    inline constexpr int kMdlMotionX = 0x0001;
+    inline constexpr int kMdlMotionY = 0x0002;
+    inline constexpr int kMdlMotionZ = 0x0004;
+    inline constexpr int kMdlMotionXR = 0x0008;
+    inline constexpr int kMdlMotionYR = 0x0010;
+    inline constexpr int kMdlMotionZR = 0x0020;
+    inline constexpr int kMdlMotionLoops = 0x8000;
+
+    /// A box round part of a bone, in the bone's own space: what a shot is
+    /// tried against. `group` says which part of the body it is (1: the
+    /// head; 10 on a turret: armour).
+    struct MdlHitbox
+    {
+        int bone = 0;
+        int group = 0;
+        float mins[3] = {0, 0, 0};
+        float maxs[3] = {0, 0, 0};
     };
 
     struct MdlEvent
@@ -136,6 +168,17 @@ namespace hlds
     public:
         std::string name; ///< the file's name without directory or extension, lower case
         std::vector<MdlBone> bones;
+        std::vector<MdlController> controllers;
+        std::vector<MdlHitbox> hitboxes;
+        /// Places on bones that things are fixed to or come out of: a
+        /// gun's muzzle, a turret's eye. In order: the game knows them by
+        /// number.
+        struct Attachment
+        {
+            int bone = 0;
+            float at[3] = {0, 0, 0}; ///< in the bone's space
+        };
+        std::vector<Attachment> attachments;
         std::vector<MdlSequence> sequences;
         std::vector<MdlBodyPart> bodyParts;
         std::vector<MdlTexture> textures;
