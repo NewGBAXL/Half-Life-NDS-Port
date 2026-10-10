@@ -990,6 +990,35 @@ namespace hlds
                     record.flags |= kLogicTouch;
                 record.netName = nameId(entity.value("netname"));
             }
+            else if (cls == "func_rot_button")
+            {
+                // A button that turns: a valve's wheel. Pressed, it turns
+                // its `distance` at its `speed` (degrees, and degrees a
+                // second), fires its target when it is round, waits, and
+                // turns back -- the game's CRotButton. Which way round is
+                // by the flags a door on hinges has (64 roll, 128 pitch;
+                // else about the upright), and 2 turns it the other way.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Button);
+                record.flags |= kLogicTurns;
+                record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
+                double distance = numberKey(entity, "distance", 90);
+                if (spawnflags & 2)
+                    distance = -distance;
+                record.move[0] = static_cast<fx>(std::lround(distance * 65536.0 / 360.0));
+                double speed = numberKey(entity, "speed", 40);
+                if (speed <= 0)
+                    speed = 40;
+                record.speed = static_cast<fx>(std::lround(speed * 65536.0 / 360.0));
+                double wait = numberKey(entity, "wait");
+                if (wait == 0)
+                    wait = 1;
+                record.waitMs = millis(wait);
+                if (spawnflags & kButtonToggle)
+                    record.flags |= kLogicToggle;
+                if (spawnflags & kButtonTouchOnly)
+                    record.flags |= kLogicTouch;
+            }
             else if (cls == "func_button")
             {
                 make = true;
@@ -1272,10 +1301,12 @@ namespace hlds
             }
             else if ((cls == "trigger_hurt" || cls == "trigger_push" ||
                       cls == "trigger_teleport") &&
-                     model != nullptr && !(spawnflags & (cls == "trigger_hurt" ? 8 : 2)))
+                     model != nullptr &&
+                     !(spawnflags & (cls == "trigger_hurt" ? 8 : (cls == "trigger_teleport" ? 2 : 0))))
             {
-                // (Flag 8 on a trigger_hurt and 2 on the others: not for the
-                // player.)
+                // (Flag 8 on a trigger_hurt and 2 on a teleport: not for the
+                // player. On a trigger_push 2 is something else: it starts
+                // switched off.)
                 for (int a = 0; a < 3; ++a)
                 {
                     record.mins[a] = static_cast<std::int16_t>(
@@ -1296,6 +1327,8 @@ namespace hlds
                 {
                     make = true;
                     record.kind = static_cast<std::uint8_t>(LogicKind::TriggerPush);
+                    if (spawnflags & 2)
+                        record.flags |= kLogicStartOpen; // starts off: something switches it on
                     double direction[3];
                     moverDirection(entity, direction);
                     double speed = numberKey(entity, "speed");

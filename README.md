@@ -67,6 +67,15 @@ Working:
 - Water: swimming, sinking, jumping out onto a ledge, drowning, slime and
   lava; liquid surfaces sway. The sky, as a box of six pictures behind the
   world.
+  Water need not stand still, nor be a `func_water`: anything made of
+  brushes that can be walked through and whose `skin` says water, slime or
+  lava is that, wherever it is -- a map floods a tunnel by sliding a train
+  of water up it (c1a1b's valve; Lambda Core's coolant). A valve's wheel
+  (`func_rot_button`) is a button that turns: used, it turns its distance,
+  fires what it works when it is round, waits, and turns back. A current
+  (`trigger_push`) may start switched off and be switched on by whatever
+  targets it. Still missing: the wheels that are HELD (`momentary_rot_button`,
+  `momentary_door`: nineteen, in eight maps).
 - Saving, as the game has it. **Eight saves**: AUTOSAVE, which the game
   writes itself at a map's own save points and on arriving in a map; QUICK,
   the pause menu's one-touch save; and six that are the player's to choose

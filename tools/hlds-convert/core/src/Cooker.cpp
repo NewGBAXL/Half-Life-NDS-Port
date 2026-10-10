@@ -741,8 +741,11 @@ namespace hlds
                                                      (info.startsOff ? kBrushStartsOff : 0));
             record.logic = kNoLogic;
             // A func_water is a door whose "skin" says what it is full of
-            // (-3 water, -4 slime, -5 lava).
-            if (info.className == "func_water")
+            // (-3 water, -4 slime, -5 lava) -- and so is anything else made
+            // of brushes that can be walked through and has such a "skin":
+            // the engine takes it for that much water wherever it is, and
+            // maps flood a tunnel with a train of it.
+            if (info.className == "func_water" || !info.solid)
             {
                 const int skin = std::atoi(std::string(entities[info.entity].value("skin")).c_str());
                 if (skin <= kContentsWater && skin >= kContentsLava)

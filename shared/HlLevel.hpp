@@ -34,7 +34,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 25;
+    inline constexpr std::uint16_t kLevelVersion = 26;
 
     enum class Section : std::uint16_t
     {
@@ -524,6 +524,10 @@ namespace hldata
     inline constexpr std::uint16_t kLogicPushables = 4096;
     /// ... and one that the player does not.
     inline constexpr std::uint16_t kLogicNoPlayer = 8192;
+    /// A button that TURNS when it is pressed (a valve's wheel) instead of
+    /// going in: its travel is an angle, as a door on hinges' is -- which
+    /// way round in extra[0], how far in move[0], both as that door has them.
+    inline constexpr std::uint16_t kLogicTurns = 16384;
 
     /// One entity that does something, with everything it needs already worked
     /// out by the converter: names are numbers, times are milliseconds, a

@@ -864,8 +864,10 @@ namespace hldata
                 return;
             const bool up = state.move == MoveState::GoingUp;
 
+            // (A door on hinges; or a button that turns: a valve's wheel.)
             const bool rotating =
-                record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating);
+                record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) ||
+                (record.kind == static_cast<std::uint8_t>(LogicKind::Button) && (record.flags & kLogicTurns));
             // How much of the travel this much time covers, in Q30. For a
             // rotating door the travel is an angle and the speed an angular
             // one, in the same unit, so the same division serves.
@@ -2279,6 +2281,7 @@ namespace hldata
             break;
 
         case LogicKind::TriggerHurt:
+        case LogicKind::TriggerPush:
             // On and off. state.running is "off".
             state.running = useType == kUseOn ? false : (useType == kUseOff ? true : !state.running);
             break;
@@ -2688,7 +2691,8 @@ namespace hldata
                     }
                 }
             }
-            else if (record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating))
+            else if (record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) ||
+                     (record.kind == static_cast<std::uint8_t>(LogicKind::Button) && (record.flags & kLogicTurns)))
             {
                 // It turns where it stands: its base is its place, and its
                 // travel an angle. One that starts open rests TURNED -- that
@@ -2736,8 +2740,11 @@ namespace hldata
             }
             if (record.kind == static_cast<std::uint8_t>(LogicKind::TriggerAuto))
                 state.timer = 100; // a tenth of a second after the map starts
-            if (record.kind == static_cast<std::uint8_t>(LogicKind::TriggerHurt))
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::TriggerHurt) ||
+                record.kind == static_cast<std::uint8_t>(LogicKind::TriggerPush))
             {
+                // (state.running is "off": a place that hurts, or a current,
+                // that something has yet to switch on.)
                 state.running = (record.flags & kLogicStartOpen) != 0;
                 continue;
             }
@@ -2977,7 +2984,7 @@ namespace hldata
                     if (state.phase < 0)
                         state.phase = 0;
                 }
-                else if (kind == LogicKind::TriggerPush && inside)
+                else if (kind == LogicKind::TriggerPush && inside && !state.running)
                 {
                     // Carried along, as far as the world lets them be.
                     const fx by[3] = {

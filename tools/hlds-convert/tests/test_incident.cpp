@@ -3,6 +3,7 @@
 // flicker (the level's LightPatch records), and the microwave's chain of
 // buttons with everything it sets off.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -363,6 +364,111 @@ namespace
         check(fell > 0 && fell < 75, "the floor gone, they fall down the shaft");
         check(gone > 0 && gone < 105, "... and do not live through what is at the bottom");
     }
+    // c1a1b's valve: a wheel that turns when it is used (a func_rot_button)
+    // and then lets the water in -- a train of water that slides up the
+    // tunnels, a gate that rises, a current switched on. (The wheel used to
+    // do nothing; the water, had it moved, was not water; the current was
+    // not in the level at all.)
+    void testValve(const char *dir)
+    {
+        const std::unique_ptr<Game> game = load(dir, "c1a1b");
+        check(game != nullptr, "c1a1b cooks");
+        if (game == nullptr)
+            return;
+        Game &g = *game;
+        const LevelView &v = g.view;
+        int wheel = -1, water = -1, gate = -1, pushes = 0, push = -1;
+        for (std::uint32_t i = 0; i < v.logicCount; ++i)
+        {
+            const LogicRecord &record = v.logic[i];
+            const auto kind = static_cast<LogicKind>(record.kind);
+            if (kind == LogicKind::Button && record.target == nameOf(g, "water_doormm"))
+                wheel = static_cast<int>(i);
+            if (kind == LogicKind::Train && record.name == nameOf(g, "water_door_move3"))
+                water = static_cast<int>(i);
+            if (kind == LogicKind::Door && record.name == nameOf(g, "water_door"))
+                gate = static_cast<int>(i);
+            if (kind == LogicKind::TriggerPush && record.name == nameOf(g, "water_door_current"))
+            {
+                ++pushes;
+                push = static_cast<int>(i);
+            }
+        }
+        check(wheel >= 0 && (v.logic[wheel].flags & kLogicTurns), "the valve's wheel is in the level, as a button that turns");
+        check(water >= 0 && v.logic[water].brush != kNoBrush && v.brushes[v.logic[water].brush].kind == static_cast<std::uint8_t>(static_cast<std::int8_t>(kContentsWater)),
+              "the train the wheel sets moving is water");
+        check(gate >= 0 && pushes == 6, "the gate and the six parts of the current are there");
+        if (wheel < 0 || water < 0 || gate < 0 || push < 0)
+            return;
+        // Stood at the wheel: dry, and the current not yet running.
+        auto stand = [&]()
+        {
+            g.player.origin[0] = fxFromInt(2380);
+            g.player.origin[1] = fxFromInt(-1161);
+            g.player.origin[2] = fxFromInt(-382);
+            for (fx &c : g.player.velocity)
+                c = 0;
+        };
+        stand();
+        for (int n = 0; n < 10; ++n)
+            g.frame();
+        const BrushState &block = g.brushStates[v.logic[water].brush];
+        const BrushState &disc = g.brushStates[v.logic[wheel].brush];
+        const fx waterZ = block.pos[2];
+        check(g.player.waterLevel <= 1 && g.states[push].running, "before: no more than ankle deep, and no current");
+        // USE finds the wheel from there.
+        const fx eye[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2] + g.player.viewHeight};
+        const fx ahead[3] = {kFxOne, 0, 0};
+        check(logicFindUsable(g.logic, eye, ahead) == wheel, "USE, stood before it, is the wheel");
+        logicUse(g.logic, g.player, wheel, -1, kUseToggle);
+        // It turns a quarter in under two seconds, and only then lets go.
+        int turned = -1;
+        for (int n = 0; n < 90 && turned < 0; ++n)
+        {
+            stand();
+            g.frame();
+            if (g.states[wheel].move == MoveState::AtTop)
+                turned = n;
+        }
+        std::uint16_t most = 0;
+        for (int a = 0; a < 3; ++a)
+            most = std::max(most, disc.angles[a]);
+        std::printf("test_incident: the wheel is round %.1f s after it is used, turned %d degrees\n", turned / 30.0,
+                    static_cast<int>(most) * 360 / 65536);
+        check(turned >= 48 && turned <= 60 && most > 16000 && most < 16800, "the wheel turns its quarter in 1.8 seconds");
+        // Then the water comes: up the tunnel, over the player's head.
+        int deep = -1;
+        for (int n = 0; n < 300 && deep < 0; ++n)
+        {
+            stand();
+            g.frame();
+            if (g.player.waterLevel == 3)
+                deep = n;
+        }
+        for (int n = 0; n < 240; ++n)
+        {
+            stand();
+            g.frame();
+        }
+        std::printf("test_incident: the water is over the player's head %.1f s later; it has risen %d units, come %d along\n",
+                    deep / 30.0, fxToInt(block.pos[2] - waterZ), fxToInt(block.pos[0]) - 2676);
+        check(deep > 0, "the water rises over whoever stands at the wheel");
+        check(fxToInt(block.pos[2] - waterZ) == 165 && fxToInt(block.pos[0]) == 1776, "... all the way to the end of its path");
+        check(g.states[gate].move != MoveState::AtBottom, "the gate has risen");
+        check(!g.states[push].running, "the current is running");
+        // ... and carries whoever is in it.
+        const LogicRecord &current = v.logic[push];
+        for (int a = 0; a < 3; ++a)
+            g.player.origin[a] = fxFromInt((current.mins[a] + current.maxs[a]) / 2);
+        const fx before[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2]};
+        for (int n = 0; n < 15; ++n)
+            logicTick(g.logic, g.player, 33);
+        const fx moved[3] = {g.player.origin[0] - before[0], g.player.origin[1] - before[1], 0};
+        const std::int64_t along = static_cast<std::int64_t>(moved[0]) * current.move[0] +
+                                   static_cast<std::int64_t>(moved[1]) * current.move[1];
+        std::printf("test_incident: half a second in the current moves them %d units\n", fxToInt(fxLength(moved)));
+        check(fxLength(moved) > fxFromInt(10) && along > 0, "whoever is in the current is carried the way it runs");
+    }
 } // namespace
 
 int main()
@@ -374,6 +480,7 @@ int main()
         testTramDoor(dir);
         testLift(dir);
         testFallingLift(dir);
+        testValve(dir);
         testLights(dir);
         testMicrowave(dir);
     }
