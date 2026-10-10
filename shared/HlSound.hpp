@@ -274,6 +274,9 @@ namespace hldata
         PythonFire2,
         GrenadeBounce2,
         GrenadeBounce3,
+        PushBox1, ///< a box pushed along a floor (where a map has one to push)
+        PushBox2,
+        PushBox3,
         Count
     };
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -325,7 +328,8 @@ namespace hldata
             "debris/wood3.wav",       "debris/glass1.wav",       "debris/glass2.wav",
             "debris/glass3.wav",      "weapons/dbarrel1.wav",    "weapons/scock1.wav",
             "weapons/reload3.wav",    "weapons/hks1.wav",        "weapons/glauncher2.wav",
-            "weapons/357_shot2.wav",  "weapons/grenade_hit2.wav", "weapons/grenade_hit3.wav"};
+            "weapons/357_shot2.wav",  "weapons/grenade_hit2.wav", "weapons/grenade_hit3.wav",
+            "debris/pushbox1.wav",    "debris/pushbox2.wav",     "debris/pushbox3.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

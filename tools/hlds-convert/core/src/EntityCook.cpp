@@ -2350,6 +2350,9 @@ namespace hlds
         {
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Ladder))
                 use(CommonSound::Ladder1, CommonSound::Ladder4);
+            // (... and the scrape of a box, where there is one to push.)
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Pushable))
+                use(CommonSound::PushBox1, CommonSound::PushBox3);
         }
         // (The newer guns': where the map has them to be held.)
         if (std::find(models.begin(), models.end(), "v_9mmar") != models.end())

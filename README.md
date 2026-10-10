@@ -64,6 +64,19 @@ Working:
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
+- A box that is pushed collides as the size it is. The map's collision
+  knows only shapes a person wide, so a wider box is that shape at each of
+  its corners (and between), and goes as far as the first of them to meet
+  something; where it comes to rest is asked of the map's collision every
+  eight units across it; against other boxes it is box against box. The
+  player and a box are never left in each other: a box that finds the
+  player inside it gets out of them by the shortest way, and if it cannot,
+  they are moved out of it. What moves -- a door, a lift, a train -- pushes
+  a box in its way, or is stopped by it as it is by the player, and carries
+  one that stands on it. Its scrape along the floor is the game's.
+  (`shared/HlLogic.hpp`, `pushableTick`; `test_boxes` shoves every box of
+  four of the game's maps every way and looks.) Not yet: pulling one with
+  USE, and floating.
 - Water: swimming, sinking, jumping out onto a ledge, drowning, slime and
   lava; liquid surfaces sway. The sky, as a box of six pictures behind the
   world.

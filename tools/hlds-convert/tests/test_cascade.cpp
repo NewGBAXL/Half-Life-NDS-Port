@@ -229,6 +229,28 @@ namespace
         std::printf("test_cascade: pushed, the cart is at %d %d when the machine takes it\n",
                     fxToInt((g.movers[cartBrush].mins[0] + g.movers[cartBrush].maxs[0]) / 2),
                     fxToInt((g.movers[cartBrush].mins[1] + g.movers[cartBrush].maxs[1]) / 2));
+        if (!started)
+        {
+            // (What is in its way, for whoever reads this.)
+            fx middle[3];
+            hldata::detail::boxMiddle(g.logic, cartBrush, g.view.logic[cart].extra[3] != 0, middle);
+            for (int dz = 0; dz <= 18; dz += 18)
+            {
+                const fx from[3] = {middle[0], middle[1], middle[2] + fxFromInt(dz)};
+                const fx to[3] = {from[0] + fxFromInt(40), from[1], from[2]};
+                const Trace t = hldata::detail::boxTrace(g.logic, cartBrush, g.view.logic[cart].extra[3] != 0, from, to);
+                std::printf("test_cascade: (raised %d) forward 40: fraction %d/1000, by mover %d, normal %d %d %d, startSolid %d; bounds x %d..%d z %d..%d\n",
+                            dz, static_cast<int>((static_cast<std::int64_t>(t.fraction) * 1000) >> kFractionShift), t.mover,
+                            t.normal[0] >> 4, t.normal[1] >> 4, t.normal[2] >> 4, t.startSolid,
+                            fxToInt(g.movers[cartBrush].mins[0]), fxToInt(g.movers[cartBrush].maxs[0]),
+                            fxToInt(g.movers[cartBrush].mins[2]), fxToInt(g.movers[cartBrush].maxs[2]));
+                if (t.mover >= 0)
+                    std::printf("test_cascade:   that mover: x %d..%d y %d..%d z %d..%d\n", fxToInt(g.movers[t.mover].mins[0]),
+                                fxToInt(g.movers[t.mover].maxs[0]), fxToInt(g.movers[t.mover].mins[1]),
+                                fxToInt(g.movers[t.mover].maxs[1]), fxToInt(g.movers[t.mover].mins[2]),
+                                fxToInt(g.movers[t.mover].maxs[2]));
+            }
+        }
         check(started, "pushed into the beam, the cart starts the cascade");
     }
 

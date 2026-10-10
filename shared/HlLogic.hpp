@@ -257,6 +257,11 @@ namespace hldata
         /// Set when the map asks for the game to be saved: the caller does
         /// it, and clears this.
         bool saveRequested = false;
+        /// The boxes that can be pushed, as record indices: looked up once
+        /// (-1: not yet), for whatever moves and has to ask what is in its
+        /// way (detail::moveBrush).
+        std::int16_t pushables[48] = {};
+        int pushableCount = -1;
 
         /// The ChangeLevel record that has been set off, or -1. The logic only
         /// says so: changing map is the caller's to do, between frames.
@@ -392,9 +397,27 @@ namespace hldata
             w.movers[pusher].solid = wasSolid;
         }
 
+        inline bool boxShove(LogicWorld &w, PlayerState &player, int record, const fx *delta);
+        /// The boxes there are to push, found once.
+        inline void pushableList(LogicWorld &w)
+        {
+            if (w.pushableCount >= 0)
+                return;
+            w.pushableCount = 0;
+            for (int i = 0; i < w.recordCount && w.pushableCount < 48; ++i)
+            {
+                if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::Pushable) && w.records[i].brush != kNoBrush)
+                    w.pushables[w.pushableCount++] = static_cast<std::int16_t>(i);
+            }
+        }
+        inline bool boxInMover(const LogicWorld &w, int record, int mover);
+
         /// Move a brush to `pos`, carrying the player if they stand on it and
-        /// pushing them if it runs into them. False -- with the brush put back
-        /// -- if the player ends up with nowhere to go: it is BLOCKED.
+        /// pushing them if it runs into them -- and likewise the boxes that
+        /// can be pushed: one standing on it goes where it goes, one in its
+        /// way is pushed along. False -- with the brush put back, and the
+        /// player where they were -- if the player or a box ends up with
+        /// nowhere to go: it is BLOCKED.
         inline bool moveBrush(LogicWorld &w, PlayerState &player, int index, const fx *pos)
         {
             fx old[3], delta[3];
@@ -403,22 +426,82 @@ namespace hldata
                 old[a] = w.brushStates[index].pos[a];
                 delta[a] = pos[a] - old[a];
             }
+            const fx stood[3] = {player.origin[0], player.origin[1], player.origin[2]};
             const bool rider = player.onGround && player.groundMover == index;
+            // (Which boxes stand on it, before it moves from under them.)
+            pushableList(w);
+            std::uint64_t riding = 0;
+            const MoverHull &before = w.movers[index];
+            for (int n = 0; n < w.pushableCount && before.solid; ++n)
+            {
+                const int box = w.records[w.pushables[n]].brush;
+                const MoverHull &other = w.movers[box];
+                if (box == index || !other.solid || !w.brushStates[box].active)
+                    continue;
+                const fx gap = other.mins[2] - before.maxs[2];
+                if (gap >= -fxFromInt(1) && gap <= fxFromInt(2) && other.maxs[0] > before.mins[0] + fxFromInt(1) &&
+                    other.mins[0] < before.maxs[0] - fxFromInt(1) && other.maxs[1] > before.mins[1] + fxFromInt(1) &&
+                    other.mins[1] < before.maxs[1] - fxFromInt(1))
+                    riding |= std::uint64_t(1) << n;
+            }
             logicMoveBrushTo(w, index, pos);
             if (!w.movers[index].solid)
                 return true;
+            auto refuse = [&]()
+            {
+                logicMoveBrushTo(w, index, old);
+                for (int a = 0; a < 3; ++a)
+                    player.origin[a] = stood[a];
+                return false;
+            };
             if (rider)
                 pushPlayer(w, player, index, delta);
             if (playerInsideBrush(w, player, index))
             {
                 pushPlayer(w, player, index, delta);
                 if (playerInsideBrush(w, player, index))
+                    return refuse();
+            }
+            // The boxes: carried, pushed, or in the way. (Not when this is
+            // itself a box being shoved by another: one deep is enough.)
+            static int depth = 0;
+            if (depth >= 2)
+                return true;
+            ++depth;
+            bool blocked = false;
+            const MoverHull &mover = w.movers[index];
+            for (int n = 0; n < w.pushableCount && !blocked; ++n)
+            {
+                const int box = w.records[w.pushables[n]].brush;
+                const MoverHull &other = w.movers[box];
+                if (box == index || !other.solid || !w.brushStates[box].active)
+                    continue;
+                // (In its way: within its outer box, and then truly within
+                // IT -- a fence round a box, a lift with rails, has the box
+                // inside its outer box and nowhere near its bars.)
+                auto inside = [&]()
                 {
-                    logicMoveBrushTo(w, index, old);
-                    return false;
+                    const fx slack = fxFromInt(1);
+                    return other.maxs[0] > mover.mins[0] + slack && other.mins[0] < mover.maxs[0] - slack &&
+                           other.maxs[1] > mover.mins[1] + slack && other.mins[1] < mover.maxs[1] - slack &&
+                           other.maxs[2] > mover.mins[2] + slack && other.mins[2] < mover.maxs[2] - slack &&
+                           boxInMover(w, w.pushables[n], index);
+                };
+                if (riding & (std::uint64_t(1) << n))
+                {
+                    // (Up and down it follows its floor by itself.)
+                    const fx along[3] = {delta[0], delta[1], 0};
+                    if (along[0] != 0 || along[1] != 0)
+                        boxShove(w, player, w.pushables[n], along);
+                }
+                else if (inside())
+                {
+                    boxShove(w, player, w.pushables[n], delta);
+                    blocked = inside();
                 }
             }
-            return true;
+            --depth;
+            return blocked ? refuse() : true;
         }
 
         inline bool playerTouchesBox(const PlayerState &player, const fx *mins, const fx *maxs,
@@ -1171,6 +1254,241 @@ namespace hldata
         /// slowed by the floor, pulled down by gravity, stopped by the world.
         /// Its velocity is state.travel; state.bits is whether it rests on
         /// something.
+        /// Where a box's middle is, for its move: the middle of its box as
+        /// it stands -- but as high as the middle of one of the player's
+        /// hulls whose feet are where the box's bottom is (a hull taller
+        /// than the box would otherwise start out sunk in the floor).
+        inline void boxMiddle(const LogicWorld &w, int brush, bool crouched, fx *middle)
+        {
+            const Brush &built = w.brushes[brush];
+            const fx *pos = w.brushStates[brush].pos;
+            for (int a = 0; a < 3; ++a)
+                middle[a] = (fxFromInt(built.mins[a]) + fxFromInt(built.maxs[a])) / 2 + (pos[a] - built.origin[a]);
+            middle[2] = fxFromInt(built.mins[2]) + (pos[2] - built.origin[2]) + kPlayerHalfHeight[crouched ? 1 : 0];
+        }
+
+        /// Whether a box (by its record) is inside the solid of brush
+        /// `mover`, as the box is wide: any of the person-wide shapes it is
+        /// made of (boxTrace) is.
+        inline bool boxInMover(const LogicWorld &w, int record, int mover)
+        {
+            const int brush = w.records[record].brush;
+            const bool crouched = w.records[record].extra[3] != 0;
+            const Brush &built = w.brushes[brush];
+            const MoverHull &hull = w.movers[mover];
+            fx middle[3];
+            boxMiddle(w, brush, crouched, middle);
+            const int over[2] = {built.maxs[0] - built.mins[0] - 32, built.maxs[1] - built.mins[1] - 32};
+            int count[2];
+            for (int a = 0; a < 2; ++a)
+                count[a] = over[a] <= 0 ? 1 : (over[a] + 31) / 32 + 1 > 5 ? 5 : (over[a] + 31) / 32 + 1;
+            for (int i = 0; i < count[0]; ++i)
+            {
+                for (int j = 0; j < count[1]; ++j)
+                {
+                    const fx at[3] = {
+                        middle[0] + (count[0] == 1 ? 0 : fxFromInt(-over[0]) / 2 + fxFromInt(over[0]) * i / (count[0] - 1)),
+                        middle[1] + (count[1] == 1 ? 0 : fxFromInt(-over[1]) / 2 + fxFromInt(over[1]) * j / (count[1] - 1)),
+                        middle[2]};
+                    fx local[3];
+                    toMoverSpace(hull, at, local);
+                    if (!hullPositionFree(crouched ? hull.crouched : hull.standing, local))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// Whether a box with its middle at `middle` is clear of the world's
+        /// solid: the person-wide shape it is moved as, at every eight
+        /// units across it. (What a move ends on is asked this as well as
+        /// being swept: a sweep of its corners can end with something
+        /// between them -- the map's collision juts out a little at the
+        /// point of a slanted wall, and where it does is narrower than a
+        /// person.)
+        inline bool boxFits(const LogicWorld &w, int brush, bool crouched, const fx *middle)
+        {
+            const Brush &built = w.brushes[brush];
+            const int over[2] = {built.maxs[0] - built.mins[0] - 32, built.maxs[1] - built.mins[1] - 32};
+            const Hull &hull = crouched ? w.world->crouched : w.world->standing;
+            for (int x = 0;; x += 8)
+            {
+                const int ox = over[0] <= 0 ? 0 : (x > over[0] ? over[0] : x) - over[0] / 2;
+                for (int y = 0;; y += 8)
+                {
+                    const int oy = over[1] <= 0 ? 0 : (y > over[1] ? over[1] : y) - over[1] / 2;
+                    const fx at[3] = {middle[0] + fxFromInt(ox), middle[1] + fxFromInt(oy), middle[2]};
+                    if (!hullPositionFree(hull, at))
+                        return false;
+                    if (over[1] <= 0 || y >= over[1])
+                        break;
+                }
+                if (over[0] <= 0 || x >= over[0])
+                    break;
+            }
+            return true;
+        }
+
+        /// A box moved from `from` to `to` (its middle: boxMiddle), through
+        /// the world and everything solid in it but itself -- AS WIDE AND AS
+        /// DEEP AS IT IS. The map's collision knows only shapes a person
+        /// wide; so a wider box is that shape at each of its corners (and
+        /// between, for a long one), and goes as far as the first of them
+        /// to meet something. (It used to be one such shape at its middle:
+        /// a crate 64 across went 16 units into every wall, and into
+        /// whatever stood beside it.)
+        /// (`probing`: a look for what is there, not a move -- a corner
+        /// that starts in the world's solid then simply says nothing.)
+        inline Trace boxTrace(LogicWorld &w, int brush, bool crouched, const fx *from, const fx *to, bool probing = false)
+        {
+            const Brush &built = w.brushes[brush];
+            const int over[2] = {built.maxs[0] - built.mins[0] - 32, built.maxs[1] - built.mins[1] - 32};
+            int count[2];
+            for (int a = 0; a < 2; ++a)
+                count[a] = over[a] <= 0 ? 1 : (over[a] + 31) / 32 + 1 > 5 ? 5 : (over[a] + 31) / 32 + 1;
+            const bool was = w.movers[brush].solid;
+            w.movers[brush].solid = false;
+            Trace best;
+            bool any = false, stuck = false;
+            for (int i = 0; i < count[0]; ++i)
+            {
+                for (int j = 0; j < count[1]; ++j)
+                {
+                    const fx off[2] = {count[0] == 1 ? 0 : fxFromInt(-over[0]) / 2 + fxFromInt(over[0]) * i / (count[0] - 1),
+                                       count[1] == 1 ? 0 : fxFromInt(-over[1]) / 2 + fxFromInt(over[1]) * j / (count[1] - 1)};
+                    const fx a[3] = {from[0] + off[0], from[1] + off[1], from[2]};
+                    const fx b[3] = {to[0] + off[0], to[1] + off[1], to[2]};
+                    Trace t = traceAll(*w.world, crouched, a, b);
+                    // A corner that starts in the world's solid (a box the
+                    // map built into a wall; a hair's breadth of rounding)
+                    // may come out of it, and that is all: a move that
+                    // leaves it there goes nowhere.
+                    if (t.startSolid || t.allSolid)
+                    {
+                        stuck = true;
+                        if (probing || hullPositionFree(crouched ? w.world->crouched : w.world->standing, b))
+                            continue;
+                        t = Trace();
+                        t.fraction = 0;
+                        for (int k = 0; k < 3; ++k)
+                            t.endPos[k] = a[k];
+                        const fx along[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+                        const fx far = fxLength(along);
+                        for (int k = 0; k < 3; ++k)
+                            t.normal[k] = far > 0 ? -static_cast<std::int32_t>((static_cast<std::int64_t>(along[k]) << kNormalShift) / far) : 0;
+                    }
+                    if (any && t.fraction >= best.fraction)
+                        continue;
+                    t.endPos[0] -= off[0];
+                    t.endPos[1] -= off[1];
+                    best = t;
+                    any = true;
+                }
+            }
+            w.movers[brush].solid = was;
+            // Against the other boxes, box against box: what is above is
+            // blind to anything a corner has got the least way into (as a
+            // door is to someone it closes on), and two boxes sliding past
+            // each other's corners would then sink into each other. A box
+            // that is already in another may only move out of it.
+            if (any)
+            {
+                pushableList(w);
+                const fx half[3] = {fxFromInt(built.maxs[0] - built.mins[0]) / 2, fxFromInt(built.maxs[1] - built.mins[1]) / 2,
+                                    fxFromInt(built.maxs[2] - built.mins[2]) / 2};
+                const fx centre[3] = {from[0], from[1], from[2] - kPlayerHalfHeight[crouched ? 1 : 0] + half[2]};
+                const fx move[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
+                for (int n = 0; n < w.pushableCount; ++n)
+                {
+                    const int other = w.records[w.pushables[n]].brush;
+                    const MoverHull &hull = w.movers[other];
+                    if (other == brush || !hull.solid || !w.brushStates[other].active)
+                        continue;
+                    // When, along the move, it comes to touch on every
+                    // side at once -- and until when.
+                    std::int64_t enter = -1, leave = kFractionOne;
+                    int axis = -1;
+                    bool apart = false;
+                    fx least = 0;
+                    int leastAxis = -1;
+                    bool in = true;
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const fx lo = hull.mins[k] - half[k] - centre[k], hi = hull.maxs[k] + half[k] - centre[k];
+                        // (How far into it on this side, at the start.)
+                        const fx depth = -lo < hi ? -lo : hi;
+                        if (lo >= 0 || hi <= 0)
+                            in = false;
+                        else if (leastAxis < 0 || depth < least)
+                        {
+                            least = depth;
+                            leastAxis = k;
+                        }
+                        if (move[k] == 0)
+                        {
+                            if (lo >= 0 || hi <= 0)
+                                apart = true;
+                            continue;
+                        }
+                        std::int64_t t0 = (static_cast<std::int64_t>(lo) << kFractionShift) / move[k];
+                        std::int64_t t1 = (static_cast<std::int64_t>(hi) << kFractionShift) / move[k];
+                        if (t0 > t1)
+                        {
+                            const std::int64_t swap = t0;
+                            t0 = t1;
+                            t1 = swap;
+                        }
+                        if (t0 > enter)
+                        {
+                            enter = t0;
+                            axis = k;
+                        }
+                        leave = t1 < leave ? t1 : leave;
+                    }
+                    std::int64_t stop = -1;
+                    int stopAxis = axis;
+                    if (in)
+                    {
+                        // In it already: only out, the short way.
+                        const fx lo = hull.mins[leastAxis] - half[leastAxis] - centre[leastAxis];
+                        const fx hi = hull.maxs[leastAxis] + half[leastAxis] - centre[leastAxis];
+                        const bool outwards = (-lo < hi) ? move[leastAxis] <= 0 : move[leastAxis] >= 0;
+                        const bool sideways = move[leastAxis] == 0;
+                        if (!outwards || (sideways && least > fxFromInt(1)))
+                        {
+                            stop = 0;
+                            stopAxis = leastAxis;
+                        }
+                    }
+                    else if (!apart && axis >= 0 && enter >= 0 && enter < leave && enter < best.fraction)
+                    {
+                        stop = enter;
+                    }
+                    if (stop < 0 || stop >= best.fraction)
+                        continue;
+                    best.fraction = static_cast<std::int32_t>(stop);
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        best.endPos[k] = from[k] + static_cast<fx>((static_cast<std::int64_t>(move[k]) * stop) >> kFractionShift);
+                        best.normal[k] = 0;
+                    }
+                    best.normal[stopAxis] = move[stopAxis] > 0 ? -(1 << kNormalShift) : (1 << kNormalShift);
+                    best.mover = static_cast<std::int16_t>(other);
+                }
+            }
+            if (!any)
+            {
+                // (All of it is in something: it does not move.)
+                best = Trace();
+                best.startSolid = stuck;
+                best.allSolid = stuck;
+                best.fraction = 0;
+                for (int k = 0; k < 3; ++k)
+                    best.endPos[k] = from[k];
+            }
+            return best;
+        }
+
         inline void pushableTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -1183,8 +1501,22 @@ namespace hldata
             // The shove: the player's own speed along the floor, added to the
             // box's, up to the fastest it can go. Only from someone with
             // their feet on the ground, and not from someone standing on it.
+            if (state.base[0] > 0)
+                state.base[0] -= ms; // (until its scrape may be heard again)
             if (player.touchedMover == brush && player.onGround && player.groundMover != brush)
             {
+                // Its scrape along the floor, no oftener than the game has it.
+                if (state.base[0] <= 0 && state.bits != 0 && w.heard != nullptr &&
+                    (player.touchVelocity[0] != 0 || player.touchVelocity[1] != 0))
+                {
+                    state.base[0] = 700;
+                    w.effectSeed = w.effectSeed * 1664525u + 1013904223u;
+                    const MoverHull &hull = w.movers[brush];
+                    const fx from[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2, hull.mins[2]};
+                    const int which = static_cast<int>((w.effectSeed >> 12) % 3);
+                    w.heard->add(which == 0 ? CommonSound::PushBox1 : (which == 1 ? CommonSound::PushBox2 : CommonSound::PushBox3),
+                                 from, 64, kRadiusMedium);
+                }
                 v[0] += player.touchVelocity[0];
                 v[1] += player.touchVelocity[1];
                 const fx flat[3] = {v[0], v[1], 0};
@@ -1213,29 +1545,49 @@ namespace hldata
             }
 
             const bool crouched = record.extra[3] != 0;
-            // The box moves as one of the player's hulls, from its own
-            // middle, through the world AND what else is solid in it -- the
-            // lift it is delivered on, the fence round it, a door -- but not
-            // through itself.
-            auto trace = [&](const fx *from, const fx *to)
-            {
-                const bool was = w.movers[brush].solid;
-                w.movers[brush].solid = false;
-                const Trace t = traceAll(*w.world, crouched, from, to);
-                w.movers[brush].solid = was;
-                return t;
-            };
             const Brush &built = w.brushes[brush];
+            // The box moves as itself, through the world AND what else is
+            // solid in it -- the lift it is delivered on, the fence round
+            // it, a door, another box -- but not through itself.
+            auto trace = [&](const fx *from, const fx *to) { return boxTrace(w, brush, crouched, from, to); };
+
+            // The player is in it (carried into it, set down on it by a
+            // load, stood up into it): one of the two gets out of the other
+            // -- the box, by the shortest way, as far as it can go; and the
+            // player the rest of the way.
+            if (playerInsideBrush(w, player, brush))
+            {
+                const MoverHull &hull = w.movers[brush];
+                const fx half = fxFromInt(16);
+                const fx out[4] = {hull.maxs[0] - (player.origin[0] - half), (player.origin[0] + half) - hull.mins[0],
+                                   hull.maxs[1] - (player.origin[1] - half), (player.origin[1] + half) - hull.mins[1]};
+                int way = 0;
+                for (int k = 1; k < 4; ++k)
+                    way = out[k] < out[way] ? k : way;
+                fx delta[3] = {0, 0, 0};
+                delta[way >> 1] = (way & 1) ? out[way] + fxFromInt(1) : -(out[way] + fxFromInt(1));
+                fx middle[3];
+                boxMiddle(w, brush, crouched, middle);
+                const fx to[3] = {middle[0] + delta[0], middle[1] + delta[1], middle[2]};
+                const Trace gone = trace(middle, to);
+                const fx *at = w.brushStates[brush].pos;
+                const fx went[3] = {gone.endPos[0] - middle[0], gone.endPos[1] - middle[1], 0};
+                const fx there[3] = {at[0] + went[0], at[1] + went[1], at[2]};
+                if (!gone.startSolid)
+                    logicMoveBrushTo(w, brush, there);
+                if (playerInsideBrush(w, player, brush))
+                {
+                    const fx rest[3] = {-(delta[0] - (gone.startSolid ? 0 : went[0])),
+                                        -(delta[1] - (gone.startSolid ? 0 : went[1])), 0};
+                    pushPlayer(w, player, brush, rest);
+                }
+                v[0] = v[1] = 0;
+                state.bits = 0; // (looked at again from here)
+            }
+
             const fx *pos = w.brushStates[brush].pos;
             fx middle[3];
-            for (int a = 0; a < 3; ++a)
-                middle[a] = (fxFromInt(built.mins[a]) + fxFromInt(built.maxs[a])) / 2 +
-                            (pos[a] - built.origin[a]);
-            // ... or rather from where that hull's middle is when its feet
-            // are where the box's bottom is: a hull taller than the box
-            // would otherwise start out sunk in the floor.
-            middle[2] = fxFromInt(built.mins[2]) + (pos[2] - built.origin[2]) +
-                        kPlayerHalfHeight[crouched ? 1 : 0];
+            boxMiddle(w, brush, crouched, middle);
             const fx was[3] = {middle[0], middle[1], middle[2]};
 
             // Is there floor under it? Looked for from a little above where
@@ -1244,7 +1596,7 @@ namespace hldata
             // being found already inside and fallen through.
             const fx under[3] = {middle[0], middle[1], middle[2] - fxFromInt(2)};
             const fx above[3] = {middle[0], middle[1], middle[2] + fxFromInt(8)};
-            Trace floor = trace(above, under);
+            Trace floor = boxTrace(w, brush, crouched, above, under, true);
             if (floor.startSolid)
                 floor = trace(middle, under); // no room above it to look from
             const bool resting = !floor.startSolid && floor.fraction < kFractionOne &&
@@ -1334,13 +1686,46 @@ namespace hldata
                 left = static_cast<std::int32_t>(
                     (static_cast<std::int64_t>(left) * (kFractionOne - tr.fraction)) >> kFractionShift);
             }
+            // (Where it has come to is somewhere it can be -- or, having
+            // been somewhere it could, it stays there.)
+            if (!boxFits(w, brush, crouched, at) && boxFits(w, brush, crouched, was))
+            {
+                v[0] = v[1] = 0;
+                if (v[2] > 0)
+                    v[2] = 0;
+                return;
+            }
             fx moved[3];
             for (int a = 0; a < 3; ++a)
                 moved[a] = pos[a] + (at[a] - was[a]);
             // It carries whoever stands on it, and does not move into the
-            // player: blocked, it stops.
+            // player: blocked, it stops -- and does not go on gathering
+            // speed while it is held up.
             if (!moveBrush(w, player, brush, moved))
-                v[0] = v[1] = 0;
+                v[0] = v[1] = v[2] = 0;
+        }
+
+        /// A box shoved by `delta` by something else that moves (a door, a
+        /// lift, a train it stands on): as far as it can go. True if it
+        /// went anywhere.
+        inline bool boxShove(LogicWorld &w, PlayerState &player, int record, const fx *delta)
+        {
+            const int brush = w.records[record].brush;
+            const bool crouched = w.records[record].extra[3] != 0;
+            fx middle[3];
+            boxMiddle(w, brush, crouched, middle);
+            const fx to[3] = {middle[0] + delta[0], middle[1] + delta[1], middle[2] + delta[2]};
+            const Trace tr = boxTrace(w, brush, crouched, middle, to);
+            if (tr.startSolid || tr.allSolid ||
+                (!boxFits(w, brush, crouched, tr.endPos) && boxFits(w, brush, crouched, middle)))
+                return false;
+            const fx *pos = w.brushStates[brush].pos;
+            const fx moved[3] = {pos[0] + (tr.endPos[0] - middle[0]), pos[1] + (tr.endPos[1] - middle[1]),
+                                 pos[2] + (tr.endPos[2] - middle[2])};
+            if (moved[0] == pos[0] && moved[1] == pos[1] && moved[2] == pos[2])
+                return false;
+            w.states[record].bits = 0; // (its footing is looked at again)
+            return moveBrush(w, player, brush, moved);
         }
     } // namespace detail
 
