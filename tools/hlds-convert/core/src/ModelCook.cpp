@@ -199,7 +199,7 @@ namespace hlds
                 {
                     for (int c = 0; c < 3; ++c)
                     {
-                        source.rgba[i * 4 + c] = texture.palette[texture.pixels[i] * 3 + c];
+                        source.rgba[i * 4 + c] = brightened(texture.palette[texture.pixels[i] * 3 + c]);
                         sum[c] += source.rgba[i * 4 + c];
                     }
                     source.rgba[i * 4 + 3] = 255;
@@ -482,6 +482,15 @@ namespace hlds
         }
     } // namespace
 
+    std::string eventSoundName(std::string path)
+    {
+        for (char &c : path)
+            c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        while (!path.empty() && (path[0] == '*' || path[0] == '/' || path[0] == '#' || path[0] == '@'))
+            path.erase(0, 1);
+        return path.size() > 4 && path.substr(path.size() - 4) == ".wav" ? path : std::string();
+    }
+
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
                    ModelCookReport &report, std::string &error, int skinTexels, bool full)
     {
@@ -737,13 +746,32 @@ namespace hlds
             clip.firstEvent = static_cast<std::uint16_t>(out.events.size());
             for (const MdlEvent &event : seq.events)
             {
-                // 1003: fire the target named in the options. The others are
-                // sounds and things for the monster's own code.
-                if (event.event != 1003 || event.options.empty())
+                // 1003: fire the target named in the options. 1004 and
+                // 5004: a sound, 1008: a sound from the mouth -- all three
+                // name a file. The rest are for the monster's own code.
+                if (event.options.empty())
                     continue;
                 ModelEvent record{};
                 record.frame = static_cast<std::uint16_t>(std::clamp(event.frame, 0, frameCount - 1));
-                record.target = nameHash(lower(event.options).c_str());
+                if (event.event == 1003)
+                {
+                    record.kind = kEventFire;
+                    record.target = nameHash(lower(event.options).c_str());
+                }
+                else if (event.event == 1004 || event.event == 5004 || event.event == 1008)
+                {
+                    const std::string sound = eventSoundName(event.options);
+                    if (sound.empty())
+                        continue;
+                    record.kind = event.event == 1008 ? kEventVoice : kEventSound;
+                    record.target = nameHash(sound.c_str());
+                    if (std::find(out.eventSounds.begin(), out.eventSounds.end(), sound) == out.eventSounds.end())
+                        out.eventSounds.push_back(sound);
+                }
+                else
+                {
+                    continue;
+                }
                 out.events.push_back(record);
             }
             clip.eventCount = static_cast<std::uint16_t>(out.events.size() - clip.firstEvent);

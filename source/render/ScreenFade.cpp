@@ -30,6 +30,10 @@ namespace hlrt
 
     void ScreenFade::curtainDown()
     {
+        // Between two pictures, not part of the way down one: the top of
+        // the old picture over black is a tear, if only for a frame.
+        if (!curtain_)
+            swiWaitForVBlank();
         curtain_ = true;
         wait_ = 0;
         apply();
@@ -40,6 +44,8 @@ namespace hlrt
         wait_ = frames;
         if (frames <= 0)
         {
+            if (curtain_)
+                swiWaitForVBlank(); // (as it came down: between two pictures)
             curtain_ = false;
             apply();
         }

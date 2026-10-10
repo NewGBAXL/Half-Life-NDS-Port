@@ -103,20 +103,30 @@ int main()
         nullptr, error);
     check(failed == 0 && progressCalls == 1, "one map cooked");
     const fs::path data = hlds::Converter::dataDir(root / "card");
-    check(fs::exists(data / "maps" / "boxroom.hlm"), "the level is on the card, lower-case");
+    check(fs::exists(data / "maps" / "boxroom.npac") && !fs::exists(data / "maps" / "boxroom.hlm"),
+          "the map's archive is on the card, lower-case, and no loose level");
+    check(fs::exists(hlds::Converter::dataDir(root / "card-stage") / "maps" / "boxroom.hlm"),
+          "the level itself is in the stage beside the card");
+    {
+        std::vector<std::uint8_t> text;
+        check(hlds::readFile(hlds::Converter::dataDir(root / "card-stage") / "maps" / "boxroom.ent", text, error) &&
+                  std::string(text.begin(), text.end()).find("worldspawn") != std::string::npos,
+              "... with the map's entity text beside it, for the converter's own use");
+    }
 
     std::vector<std::uint8_t> onCard;
     check(hlds::readFile(data / "manifest.bin", onCard, error) &&
               readManifest(onCard.data(), onCard.size(), back) == ManifestError::Ok,
           "and so is a manifest the DS reader accepts");
     check(back.maps.size() == 1 && back.maps[0].name == "boxroom" &&
-              back.maps[0].worstPolygons == 6,
-          "listing the map with its header's figures");
+              back.maps[0].worstPolygons == 6 &&
+              back.maps[0].archiveBytes == fs::file_size(data / "maps" / "boxroom.npac"),
+          "listing the map with its header's figures and its archive's size");
     check(back.startMap == "boxroom", "with no c1a0, the start map is the first there is");
 
     // A second run of a different map must not forget the first; a file that
-    // is not a level must not be listed; a failed map must be counted.
-    write(data / "maps" / "junk.hlm", {1, 2, 3});
+    // is not an archive of a level must not be listed; a failed map must be counted.
+    write(data / "maps" / "junk.npac", {1, 2, 3});
     failed = converter.cookMaps({"second", "missing"}, nullptr, nullptr, nullptr, error);
     check(failed == 1, "a map that does not exist is one failure");
     hlds::readFile(data / "manifest.bin", onCard, error);

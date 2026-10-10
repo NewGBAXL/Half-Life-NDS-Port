@@ -52,9 +52,13 @@ namespace hlrt
         void ui(int which);
         /// The volume settings have changed.
         void applyVolumes();
-        /// The game stands still (the menu): the world, the voice and the
-        /// loops are silent until it goes on. The music and the menu's own
-        /// sounds are not.
+        /// The game stands still (the menu): the world, the voice, the loops
+        /// and the music stop where they are, and go on from there when it
+        /// does. The menu's own sounds are heard meanwhile.
+        ///
+        /// (A DS's sound channel cannot be stopped and taken up again: it
+        /// is slowed to the slowest the hardware has, and silenced. Ten
+        /// seconds of menu cost a sound a quarter of a second.)
         void setPaused(bool paused);
 
         /// On a DSi: the DSP is in use (stereo music, echo).
@@ -108,18 +112,56 @@ namespace hlrt
             std::int16_t radius = 0;
             std::uint8_t shown = 0;   ///< what maxmod was last told: how loud, and where
             std::uint8_t pan = 64;
+            std::uint16_t rate = 1024; ///< how fast it is played (maxmod's unit: 1024 is as recorded)
+            std::uint16_t hz = 11025;  ///< what it was recorded at
         };
+        /// Someone speaking: the words of their line still to come, the one
+        /// in the air, and the next, read off the card while that one is
+        /// said. Two may speak at once.
+        struct Speech
+        {
+            std::uint16_t words[32]; ///< into the level's SentenceWords
+            int count = 0;
+            int at = 0;
+            int volume = 127;
+            int pitch = 100;
+            bool placed = false;
+            hldata::fx pos[3] = {0, 0, 0};
+            std::int16_t radius = 0;
+            Clip clip[2];            ///< read off the card: [cur] in the air, the other the next
+            bool loaded[2] = {false, false}; ///< maxmod has it as a sample
+            int cur = 0;
+            int ahead = -1;          ///< the sound the other one holds, or -1
+            int voice = -1;
+            std::int32_t leftMs = 0;
+            std::uint32_t born = 0;
+            bool busy() const { return leftMs > 0 || at < count; }
+        };
+        static constexpr int kSpeakers = 2;
         static constexpr int kSamples = 1024;
-        static constexpr int kSpeechSample = kSamples - 1;
-        static constexpr int kUiSample = kSamples - 1 - hldata::kUiSoundCount;
-        static constexpr int kMaxSpoken = 24;
+        /// The top of maxmod's numbers: the words being spoken (two a
+        /// speaker), then the menu's sounds.
+        static constexpr int kSpeechSample = kSamples - kSpeakers * 2;
+        static constexpr int kUiSample = kSpeechSample - hldata::kUiSoundCount;
+        static constexpr int kMaxSpoken = 32;
+        static constexpr int kLoops = 8; ///< loops of a place at once, where there are voices
         static constexpr int kStreamSamples = 8192; ///< half a second of music ahead
 
         bool readClip(const char *name, Clip &clip);
         void describe(Clip &clip);
         void place(const hldata::fx *pos, int volume, int radius, int &outVolume, int &outPan) const;
         int start(hldata::SoundLayer layer, int sample, const Clip &clip, int volume, int pan, bool loop,
-                  int tag = -1);
+                  int tag = -1, int pitch = 100);
+        /// Let a voice go without a click: it is taken off the mixer at
+        /// once and brought to silence over a few frames on the channel
+        /// kept back for that (HlMixer.hpp).
+        void retire(int voice);
+        void fadeTick();
+        void killFading();
+        void playLoop(const hldata::SoundEvent &event);
+        void stopLoop(int tag);
+        void releaseWord(Speech &speech, int which);
+        void readAhead(Speech &speech, int index);
         void stop(int voice);
         void playOnce(const hldata::SoundEvent &event);
         void say(const hldata::SoundEvent &event);
@@ -147,19 +189,21 @@ namespace hlrt
         std::uint32_t lastVblank_ = 0;
         int loopsDue_ = 0;
 
-        // The line being spoken: the words still to come, and the one in
-        // the air (read off the card, freed when it is over).
-        std::uint16_t spoken_[kMaxSpoken];
-        int spokenCount_ = 0;
-        int spokenAt_ = 0;
-        int spokenVolume_ = 127;
-        bool spokenPlaced_ = false;
-        hldata::fx spokenPos_[3] = {0, 0, 0};
-        std::int16_t spokenRadius_ = 0;
-        Clip word_;              ///< the word read off the card, if that is where it came from
-        bool wordLoaded_ = false; ///< maxmod has it as its speech sample
-        int wordVoice_ = -1;
-        std::int32_t wordLeftMs_ = 0;
+        /// Voices on their way out: what maxmod knows them by, and how loud
+        /// they still are.
+        struct Fading
+        {
+            std::uint16_t handle = 0;
+            std::uint8_t level = 0;
+        };
+        static constexpr int kFading = 2;
+        Fading fading_[kFading];
+        Speech speech_[kSpeakers];
+        std::uint32_t speechClock_ = 0;
+        /// A bit a logic record: a sound that is switched on but does not go
+        /// round has been played, and is not played again until it has been
+        /// switched off.
+        std::uint32_t *played_ = nullptr;
 
         // The music (a DS's way: a stream of maxmod's).
         std::FILE *music_ = nullptr;

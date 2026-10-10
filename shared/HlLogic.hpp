@@ -28,6 +28,7 @@
 // std-only and inline, like the collision it sits on: the host tests run it.
 
 #include "HlActors.hpp"
+#include "HlLevelReader.hpp"
 #include "HlPlayerMove.hpp"
 #include "HlSound.hpp"
 #include "HlSprite.hpp"
@@ -181,6 +182,26 @@ namespace hldata
         /// then nothing is heard.
         const LogicSound *sounds = nullptr;
         SoundQueue *heard = nullptr;
+        /// The level itself, for what has to be looked up in it (what a
+        /// wall is made of); may be null.
+        const LevelView *level = nullptr;
+        /// The sounds the map's models make in their clips, by the hash of
+        /// their names (the level's ModelSounds, sorted); may be null.
+        const ModelSound *modelSounds = nullptr;
+        int modelSoundCount = 0;
+        /// Until a locked door may say so again (detail::lockedSound).
+        std::int32_t lockSaidMs = 0;
+        /// The doors and buttons that have refused the player and not yet
+        /// worked for them (record index + 1; 0: none). The last few.
+        static constexpr int kRefused = 8;
+        std::uint16_t refused[kRefused] = {};
+        int refusedNext = 0;
+        /// How many of the map's own marks are kept on the walls at once.
+        int marksLimit = 16;
+        /// Until the map's own marks are next looked at (detail::marksNear).
+        std::int32_t marksDueMs = 0;
+        /// ... and the ways between the nodes (detail::linksTick).
+        std::int32_t linksDueMs = 0;
         /// What soldiers call out (Section::Speech), if the map has it.
         const std::uint16_t *speech = nullptr;
         /// Set when the map starts a track of music: its number. The caller
@@ -539,8 +560,181 @@ namespace hldata
         {
             if (w.heard == nullptr || w.sounds == nullptr)
                 return;
+            const LogicRecord &record = w.records[index];
+            // What takes its time over moving is heard for as long as it
+            // does (if its sound is one that goes round), and no longer.
+            const auto kind = static_cast<LogicKind>(record.kind);
+            const bool travels = kind == LogicKind::Door || kind == LogicKind::DoorRotating ||
+                                 kind == LogicKind::Train || kind == LogicKind::PlatRot;
+            if (stopping && travels)
+                w.heard->add(kNoSound, nullptr, 0, 0, kSoundLoopOff, 100, static_cast<std::uint16_t>(index));
             const std::uint16_t sound = stopping ? w.sounds[index].stop : w.sounds[index].move;
             if (sound == kNoSound)
+                return;
+            fx at[3] = {record.move[0], record.move[1], record.move[2]};
+            if (record.brush != kNoBrush)
+            {
+                const MoverHull &hull = w.movers[record.brush];
+                for (int a = 0; a < 3; ++a)
+                    at[a] = (hull.mins[a] + hull.maxs[a]) / 2;
+            }
+            if (!stopping && travels)
+            {
+                w.heard->add(sound, at, 127, kRadiusLarge, kSoundLoopOn, 100, static_cast<std::uint16_t>(index));
+                return;
+            }
+            w.heard->add(sound, at, 127, kRadiusLarge);
+        }
+
+        /// A map's mark (LogicKind::Mark), on whatever is within a hand's
+        /// breadth of where it was put. Put again where it already is, it
+        /// simply stays (HlActors.hpp, decalAdd).
+        inline void markPlace(LogicWorld &w, const LogicRecord &record)
+        {
+            if (w.actors == nullptr || w.world == nullptr)
+                return;
+            static constexpr std::int8_t kWays[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            for (const auto &way : kWays)
+            {
+                const fx from[3] = {record.move[0] - fxFromInt(way[0] * 6), record.move[1] - fxFromInt(way[1] * 6),
+                                    record.move[2] - fxFromInt(way[2] * 6)};
+                const fx to[3] = {record.move[0] + fxFromInt(way[0] * 6), record.move[1] + fxFromInt(way[1] * 6),
+                                  record.move[2] + fxFromInt(way[2] * 6)};
+                fx at[3], normal[3];
+                if (!traceShotWall(*w.world, from, to, at, normal))
+                    continue;
+                const auto picture = static_cast<std::uint8_t>(record.extra[0]);
+                const int family = decalFamily(picture);
+                decalAdd(*w.actors, picture, at, normal, static_cast<int>(record.extra[1]),
+                         family == 8 ? kMarkAlien
+                                     : (family == 5 ? kMarkBlood
+                                                    : (family == 10 ? kMarkSoot
+                                                                    : (picture >= kDecalWallCrack ? kMarkWall : kMarkShot))),
+                         -1, true);
+                return;
+            }
+        }
+
+        /// The marks that were on the map from the start, where the player
+        /// is: the nearest (`marksLimit` of them, within `kMarkSight` units) are
+        /// kept on the walls, out of the same store as the marks shots
+        /// leave; the rest wait until the player comes near. A map may have
+        /// a hundred and more, and the hardware has polygons for a handful.
+        inline constexpr int kMarksNear = 32;  ///< the most (a DS keeps half: LogicWorld::marksLimit)
+        inline constexpr int kMarkSight = 640;
+        inline void marksNear(LogicWorld &w, const PlayerState &player)
+        {
+            int near[kMarksNear];
+            fx nearD[kMarksNear];
+            int count = 0;
+            const int most = w.marksLimit < 1 ? 1 : (w.marksLimit > kMarksNear ? kMarksNear : w.marksLimit);
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                const LogicRecord &record = w.records[i];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::Mark) || !(record.flags & kLogicStartOpen) ||
+                    w.states[i].dead)
+                    continue;
+                const fx d[3] = {record.move[0] - player.origin[0], record.move[1] - player.origin[1],
+                                 record.move[2] - player.origin[2]};
+                const fx distance = fxLength(d);
+                if (distance > fxFromInt(kMarkSight))
+                    continue;
+                int at = count < most ? count : most - 1;
+                if (count >= most && distance >= nearD[at])
+                    continue;
+                while (at > 0 && nearD[at - 1] > distance)
+                {
+                    near[at] = near[at - 1];
+                    nearD[at] = nearD[at - 1];
+                    --at;
+                }
+                near[at] = i;
+                nearD[at] = distance;
+                if (count < most)
+                    ++count;
+            }
+            for (int n = 0; n < count; ++n)
+                markPlace(w, w.records[near[n]]);
+        }
+
+        /// The ways between the path nodes, as they are now: a link that
+        /// passes through a door is open, or shut (and opens for whoever
+        /// opens doors), or no way at all (locked; or something that has to
+        /// be broken and has not been). And the doors those who walk have
+        /// asked for are opened.
+        inline void doorActivate(LogicWorld &w, const PlayerState &player, int index);
+        inline void linksTick(LogicWorld &w, const PlayerState &player)
+        {
+            if (w.actors == nullptr)
+                return;
+            ActorWorld &a = *w.actors;
+            // Which record has each brush (few hundred of each at most).
+            constexpr int kBrushes = 1024;
+            std::int16_t recordOf[kBrushes];
+            const int brushes = w.brushCount < kBrushes ? w.brushCount : kBrushes;
+            for (int b = 0; b < brushes; ++b)
+                recordOf[b] = -1;
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                if (w.records[i].brush < brushes && recordOf[w.records[i].brush] < 0)
+                    recordOf[w.records[i].brush] = static_cast<std::int16_t>(i);
+            }
+            for (int n = 0; n < a.doorsWanted; ++n)
+            {
+                const int brush = a.doorWanted[n];
+                const int index = brush < brushes ? recordOf[brush] : -1;
+                if (index < 0 || w.states[index].dead || w.states[index].move != MoveState::AtBottom)
+                    continue;
+                const auto kind = static_cast<LogicKind>(w.records[index].kind);
+                if (kind == LogicKind::Door || kind == LogicKind::DoorRotating)
+                    doorActivate(w, player, index);
+            }
+            a.doorsWanted = 0;
+            if (a.linkShut == nullptr || a.links == nullptr)
+                return;
+            for (int l = 0; l < a.linkCount; ++l)
+            {
+                const int brush = a.links[l].brush;
+                std::uint8_t shut = kLinkOpen;
+                const int index = brush < brushes ? recordOf[brush] : -1;
+                if (brush != kNoBrush && index >= 0 && !w.states[index].dead)
+                {
+                    const LogicRecord &record = w.records[index];
+                    const auto kind = static_cast<LogicKind>(record.kind);
+                    if (kind == LogicKind::Door || kind == LogicKind::DoorRotating)
+                    {
+                        const MoveState move = w.states[index].move;
+                        // (One that works by being walked up to or used, and
+                        // is not held shut by a master: that opens. One that
+                        // waits for a button somewhere does not.)
+                        if (move == MoveState::AtTop || move == MoveState::GoingUp)
+                            shut = kLinkOpen;
+                        else if (logicMasterAllows(w, index) &&
+                                 (record.name == 0 || (record.flags & (kLogicUseOnly | kLogicTouch))))
+                            shut = kLinkDoor;
+                        else
+                            shut = kLinkNoWay;
+                    }
+                    else
+                    {
+                        // Something to be broken first, or a wall that is
+                        // there for now.
+                        shut = (w.movers != nullptr && w.movers[brush].solid) ? kLinkNoWay : kLinkOpen;
+                    }
+                }
+                a.linkShut[l] = shut;
+            }
+        }
+
+        /// What a door or a button that will not work for the player says
+        /// for itself: its locked sound and its line, and not again for a
+        /// couple of seconds however often it is tried.
+        inline void lockedSound(LogicWorld &w, int index)
+        {
+            if (w.heard == nullptr || w.sounds == nullptr || w.lockSaidMs > 0)
+                return;
+            const LogicSound &sound = w.sounds[index];
+            if (sound.locked == kNoSound && sound.lockedLine == kNoSound)
                 return;
             const LogicRecord &record = w.records[index];
             fx at[3] = {record.move[0], record.move[1], record.move[2]};
@@ -550,7 +744,51 @@ namespace hldata
                 for (int a = 0; a < 3; ++a)
                     at[a] = (hull.mins[a] + hull.maxs[a]) / 2;
             }
-            w.heard->add(sound, at, 127, kRadiusLarge);
+            w.heard->add(sound.locked, at, 127, kRadiusLarge);
+            if (sound.lockedLine != kNoSound)
+                w.heard->add(sound.lockedLine, nullptr, 127, kRadiusEverywhere, kSoundSentence);
+            w.lockSaidMs = 2000;
+        }
+
+        /// It has refused the player: remembered, so that the day it works
+        /// for them it can say so (unlockedSound).
+        inline void lockRefused(LogicWorld &w, int index)
+        {
+            for (const std::uint16_t known : w.refused)
+            {
+                if (known == index + 1)
+                    return;
+            }
+            w.refused[w.refusedNext++ % LogicWorld::kRefused] = static_cast<std::uint16_t>(index + 1);
+        }
+
+        /// A door or a button works for the player: if it had refused them
+        /// before, its unlocked sound and line, once.
+        inline void unlockedSound(LogicWorld &w, int index)
+        {
+            bool had = false;
+            for (std::uint16_t &known : w.refused)
+            {
+                if (known == index + 1)
+                {
+                    known = 0;
+                    had = true;
+                }
+            }
+            if (!had || w.heard == nullptr || w.sounds == nullptr)
+                return;
+            const LogicSound &sound = w.sounds[index];
+            const LogicRecord &record = w.records[index];
+            fx at[3] = {record.move[0], record.move[1], record.move[2]};
+            if (record.brush != kNoBrush)
+            {
+                const MoverHull &hull = w.movers[record.brush];
+                for (int a = 0; a < 3; ++a)
+                    at[a] = (hull.mins[a] + hull.maxs[a]) / 2;
+            }
+            w.heard->add(sound.unlocked, at, 127, kRadiusLarge);
+            if (sound.unlockedLine != kNoSound)
+                w.heard->add(sound.unlockedLine, nullptr, 127, kRadiusEverywhere, kSoundSentence);
         }
 
         inline void moverStart(LogicWorld &w, int index, MoveState direction)
@@ -699,7 +937,12 @@ namespace hldata
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
             if (!logicMasterAllows(w, index))
+            {
+                lockedSound(w, index);
+                lockRefused(w, index);
                 return;
+            }
+            unlockedSound(w, index);
             if (record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) &&
                 state.move == MoveState::AtBottom &&
                 !(record.flags & (kLogicOneWay | kLogicStartOpen)) && record.brush != kNoBrush)
@@ -1484,7 +1727,13 @@ namespace hldata
             for (int i = 0; i < w.actors->count; ++i)
             {
                 const ActorState &actor = w.actors->states[i];
-                if (!actor.active || (actor.script >= 0 && actor.script != index))
+                // (Nor one of the people who has been killed: the dead
+                // play no scenes. 5 and up: HlMonsters.hpp, kAiDying.)
+                if (!actor.active || (actor.script >= 0 && actor.script != index) ||
+                    ((actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+                      actor.kind == static_cast<std::uint8_t>(ActorKind::Guard) ||
+                      actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter)) &&
+                     actor.ai >= 5))
                     continue;
                 if (record.extra[0] != 0)
                 {
@@ -1779,23 +2028,57 @@ namespace hldata
                     continue;
                 const std::uint32_t before = actorAdvance(*w.actors, actor, ms);
                 const ModelView *model = actorModel(*w.actors, actor);
-                if (model != nullptr && actor.clip >= 0 && actor.scriptPhase == kActorPlaying &&
-                    w.nameHashes != nullptr)
+                if (model != nullptr && actor.clip >= 0)
                 {
                     const ModelClip &clip = model->clips[actor.clip];
+                    // (A clip that goes round has come back to its start.)
+                    const bool wrapped = actor.frame < before;
                     for (int e = 0; e < clip.eventCount; ++e)
                     {
                         const ModelEvent &event = model->events[clip.firstEvent + e];
                         const std::uint32_t at = static_cast<std::uint32_t>(event.frame) << 8;
-                        // Passed this tick -- or the clip began on it.
-                        if (!((before < at && at <= actor.frame) || (at == 0 && before == 0 && actor.frame > 0)))
+                        // Passed this tick -- or the clip began on it, or
+                        // went round past it.
+                        const bool passed = wrapped ? (at > before || at <= actor.frame)
+                                                    : ((before < at && at <= actor.frame) ||
+                                                       (at == 0 && before == 0 && actor.frame > 0));
+                        if (!passed)
                             continue;
-                        for (int n = 1; n < w.nameCount; ++n)
+                        if (event.kind == kEventFire)
                         {
-                            if (w.nameHashes[n] == event.target)
-                                logicFire(w, player, static_cast<std::uint16_t>(n), actor.script,
-                                          kUseToggle, 0);
+                            // (Only in a scene: it is the scene's target.)
+                            if (actor.scriptPhase != kActorPlaying || w.nameHashes == nullptr)
+                                continue;
+                            for (int n = 1; n < w.nameCount; ++n)
+                            {
+                                if (w.nameHashes[n] == event.target)
+                                    logicFire(w, player, static_cast<std::uint16_t>(n), actor.script,
+                                              kUseToggle, 0);
+                            }
+                            continue;
                         }
+                        // A sound of its own: a footstep in its walk, a
+                        // word in its scene. From where it is -- its mouth,
+                        // for what it says.
+                        if (w.heard == nullptr || w.modelSounds == nullptr)
+                            continue;
+                        int low = 0, high = w.modelSoundCount - 1, found = -1;
+                        while (low <= high && found < 0)
+                        {
+                            const int middle = (low + high) / 2;
+                            if (w.modelSounds[middle].hash == event.target)
+                                found = middle;
+                            else if (w.modelSounds[middle].hash < event.target)
+                                low = middle + 1;
+                            else
+                                high = middle - 1;
+                        }
+                        if (found < 0)
+                            continue;
+                        const bool voice = event.kind == kEventVoice;
+                        const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(voice ? 60 : 4)};
+                        w.heard->add(w.modelSounds[found].sound, from, voice ? 127 : 80,
+                                     voice ? kRadiusLarge : kRadiusMedium);
                     }
                 }
                 actorPlaceBox(*w.actors, i);
@@ -1972,7 +2255,15 @@ namespace hldata
                 break;
             }
             if (logicMasterAllows(w, index))
+            {
+                detail::unlockedSound(w, index);
                 detail::moverStart(w, index, MoveState::GoingUp);
+            }
+            else
+            {
+                detail::lockedSound(w, index);
+                detail::lockRefused(w, index);
+            }
             break;
 
         case LogicKind::Breakable:
@@ -2160,12 +2451,32 @@ namespace hldata
             {
                 state.running = useType == kUseToggle ? !state.running : useType != kUseOff;
             }
+            else if (w.heard != nullptr && useType != kUseOff && record.extra[3] != 0 && record.netName != 0 &&
+                     w.actors != nullptr)
+            {
+                // A line with a speaker: from where they stand, if they are
+                // there to say it; from everywhere, as before, if not.
+                const fx *from = nullptr;
+                fx mouth[3];
+                for (int i = 0; i < w.actors->count && from == nullptr; ++i)
+                {
+                    const ActorState &actor = w.actors->states[i];
+                    if (!actor.active || actor.name != record.netName)
+                        continue;
+                    mouth[0] = actor.pos[0];
+                    mouth[1] = actor.pos[1];
+                    mouth[2] = actor.pos[2] + fxFromInt(60);
+                    from = mouth;
+                }
+                w.heard->add(static_cast<std::uint16_t>(record.extra[0]), from, static_cast<int>(record.extra[2]),
+                             from != nullptr ? kRadiusLarge : kRadiusEverywhere, kSoundSentence, record.pad);
+            }
             else if (w.heard != nullptr && useType != kUseOff)
             {
                 w.heard->add(static_cast<std::uint16_t>(record.extra[0]),
                              record.extra[1] == 0 ? nullptr : record.move,
                              static_cast<int>(record.extra[2]), static_cast<int>(record.extra[1]),
-                             record.extra[3] != 0 ? kSoundSentence : std::uint8_t(0));
+                             record.extra[3] != 0 ? kSoundSentence : std::uint8_t(0), record.pad);
             }
             // (A scripted_sentence's target fires as the line starts.)
             if (record.target != 0 || record.killTarget != 0)
@@ -2254,26 +2565,7 @@ namespace hldata
             break;
 
         case LogicKind::Mark:
-            // Its mark, on whatever is within a hand's breadth of it.
-            if (w.actors != nullptr && w.world != nullptr)
-            {
-                static constexpr std::int8_t kWays[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-                for (const auto &way : kWays)
-                {
-                    const fx from[3] = {record.move[0] - fxFromInt(way[0] * 6), record.move[1] - fxFromInt(way[1] * 6),
-                                        record.move[2] - fxFromInt(way[2] * 6)};
-                    const fx to[3] = {record.move[0] + fxFromInt(way[0] * 6), record.move[1] + fxFromInt(way[1] * 6),
-                                      record.move[2] + fxFromInt(way[2] * 6)};
-                    fx at[3], normal[3];
-                    if (!traceShotWall(*w.world, from, to, at, normal))
-                        continue;
-                    const auto picture = static_cast<std::uint8_t>(record.extra[0]);
-                    const int family = decalFamily(picture);
-                    decalAdd(*w.actors, picture, at, normal, static_cast<int>(record.extra[1]),
-                             family == 8 ? kMarkAlien : (family == 5 ? kMarkBlood : (family == 10 ? kMarkSoot : kMarkShot)));
-                    break;
-                }
-            }
+            detail::markPlace(w, record);
             break;
 
         case LogicKind::Pendulum:
@@ -2518,6 +2810,17 @@ namespace hldata
     /// Advance everything by `ms` milliseconds.
     inline void logicTick(LogicWorld &w, PlayerState &player, int ms)
     {
+        w.lockSaidMs = w.lockSaidMs > ms ? w.lockSaidMs - ms : 0;
+        if ((w.marksDueMs -= ms) <= 0)
+        {
+            w.marksDueMs = 500;
+            detail::marksNear(w, player);
+        }
+        if ((w.linksDueMs -= ms) <= 0)
+        {
+            w.linksDueMs = 250;
+            detail::linksTick(w, player);
+        }
         // 1. Fires that have come due. A fire can queue more with no delay, so
         //    go round until nothing is due.
         for (LogicEvent &event : w.events)

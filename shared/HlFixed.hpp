@@ -189,6 +189,13 @@ namespace hldata
     {
         return static_cast<std::uint16_t>((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10));
     }
+    /// The same to the nearest of the 32, not the one below: for light,
+    /// where the one below is a shade darker over a whole wall.
+    constexpr std::uint16_t rgb555Near(int r, int g, int b)
+    {
+        const int r5 = (r * 31 + 127) / 255, g5 = (g * 31 + 127) / 255, b5 = (b * 31 + 127) / 255;
+        return static_cast<std::uint16_t>(r5 | (g5 << 5) | (b5 << 10));
+    }
     /// The direction of (x, y) as an angle in turns (65536 to the circle;
     /// 0 along +x, a quarter turn along +y). Good to a tenth of a degree,
     /// which is what steering a train along its track needs; (0, 0) gives 0.

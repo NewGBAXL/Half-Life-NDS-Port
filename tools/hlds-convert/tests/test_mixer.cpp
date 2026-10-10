@@ -43,7 +43,7 @@ int main()
         mixer.start(v, SoundLayer::Player, 10, 1000);
         play(mixer, SoundLayer::Player, 10);
         play(mixer, SoundLayer::Player, 10);
-        check(mixer.count(SoundLayer::Player) == 3 && mixer.count(SoundLayer::World) == 12,
+        check(mixer.count(SoundLayer::Player) == 3 && mixer.count(SoundLayer::World) == Mixer::kVoices - 3,
               "... as often as it takes to have its share");
         // At its share, with the world still over: it has only its own.
         const int own = mixer.take(SoundLayer::Player, 5);
@@ -51,12 +51,14 @@ int main()
         const int louder = mixer.take(SoundLayer::Player, 60);
         check(louder >= 0 && mixer.voices[louder].layer == SoundLayer::Player,
               "... and a louder one takes the place of its own quietest, nobody else's");
-        // A spoken line and the menu get theirs too; ambience its four.
-        check(play(mixer, SoundLayer::Voice, 1) >= 0 && play(mixer, SoundLayer::Ui, 1) >= 0, "the voice and the menu have their one each");
-        for (int n = 0; n < 4; ++n)
+        // Two spoken lines and the menu get theirs too; ambience its three.
+        check(play(mixer, SoundLayer::Voice, 1) >= 0 && play(mixer, SoundLayer::Voice, 1) >= 0 &&
+                  play(mixer, SoundLayer::Ui, 1) >= 0,
+              "two voices may speak at once, and the menu has its one");
+        for (int n = 0; n < 3; ++n)
             play(mixer, SoundLayer::Ambience, 20);
-        check(mixer.count(SoundLayer::Ambience) == 4 && mixer.count(SoundLayer::World) == 6 &&
-                  mixer.count(SoundLayer::Player) == 3,
+        check(mixer.count(SoundLayer::Ambience) == 3 && mixer.count(SoundLayer::World) == 4 &&
+                  mixer.count(SoundLayer::Player) == 3 && mixer.count(SoundLayer::Voice) == 2,
               "with every layer wanting all it can have, each has exactly its share");
         // Now nobody is over: the world's own quietest gives way to louder.
         int quietest = 127;
@@ -74,9 +76,24 @@ int main()
         // A new line cuts in on the last, however loud that was.
         Mixer mixer;
         for (int n = 0; n < Mixer::kVoices; ++n)
-            play(mixer, n == 0 ? SoundLayer::Voice : SoundLayer::World, 100);
+            play(mixer, n < 2 ? SoundLayer::Voice : SoundLayer::World, 100);
         const int v = mixer.take(SoundLayer::Voice, 1);
-        check(v >= 0 && mixer.voices[v].layer == SoundLayer::Voice, "a new line takes the voice from the last");
+        check(v >= 0 && mixer.voices[v].layer == SoundLayer::Voice,
+              "with two speaking, a new line takes the voice from one of them");
+        // When the hardware itself has no room: what matters least of all.
+        const int least = mixer.weakest();
+        check(least >= 0 && mixer.voices[least].layer == SoundLayer::World,
+              "what gives way to the hardware is of the layer that gives way first");
+        Mixer menu;
+        play(menu, SoundLayer::Ui, 1);
+        check(menu.weakest() < 0, "... and never the menu's");
+        // The game standing still: only the menu's sounds run their time.
+        Mixer still;
+        play(still, SoundLayer::World, 50, 100);
+        play(still, SoundLayer::Ui, 50, 100);
+        still.tick(5000, true);
+        check(still.count(SoundLayer::World) == 1 && still.count(SoundLayer::Ui) == 0,
+              "while the game stands still a sound of its own does not run out");
     }
     {
         // Among equals the oldest goes; what has run its time is free.
@@ -90,17 +107,18 @@ int main()
         for (int n = 0; n < 3; ++n)
             mixer.start(mixer.take(SoundLayer::Player, 1), SoundLayer::Player, 1, 5000);
         mixer.start(mixer.take(SoundLayer::Voice, 1), SoundLayer::Voice, 1, 5000);
+        mixer.start(mixer.take(SoundLayer::Voice, 1), SoundLayer::Voice, 1, 5000);
         mixer.start(mixer.take(SoundLayer::Ui, 1), SoundLayer::Ui, 1, 5000);
-        for (int n = 0; n < 4; ++n)
+        for (int n = 0; n < 3; ++n)
             mixer.start(mixer.take(SoundLayer::Ambience, 1), SoundLayer::Ambience, 1, -1);
-        check(mixer.count(SoundLayer::World) == 6, "(the world is back to its six)");
+        check(mixer.count(SoundLayer::World) == 4, "(the world is back to its four)");
         const std::uint32_t ended = mixer.tick(150);
         int gone = 0;
         for (int v = 0; v < Mixer::kVoices; ++v)
             gone += (ended >> v) & 1;
-        check(gone <= 1 && mixer.count(SoundLayer::Ambience) == 4, "a sound that has run its time is over; a loop goes on");
+        check(gone <= 1 && mixer.count(SoundLayer::Ambience) == 3, "a sound that has run its time is over; a loop goes on");
         mixer.tick(100000);
-        check(mixer.count(SoundLayer::World) == 0 && mixer.count(SoundLayer::Ambience) == 4,
+        check(mixer.count(SoundLayer::World) == 0 && mixer.count(SoundLayer::Ambience) == 3,
               "... however long: only stopping it stops it");
     }
     {

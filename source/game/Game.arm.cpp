@@ -1,5 +1,7 @@
 #include "game/Game.hpp"
 
+#include "HlMaterial.hpp"
+
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -37,6 +39,9 @@ namespace hlrt
 
     void Game::destroy()
     {
+        std::free(linkShut_);
+        linkShut_ = nullptr;
+        actors.linkShut = nullptr;
         std::free(brushStates_);
         std::free(movers_);
         std::free(states_);
@@ -55,8 +60,8 @@ namespace hlrt
         world = MoveWorld();
         logic = LogicWorld();
         topText.clear();
-        // (A map is come into with the lamp out and full: it is not kept.)
-        lamp = LampState();
+        // (The lamp comes along as it is, as in the game: alight or out,
+        // with what is left in it.)
     }
 
     bool Game::create()
@@ -140,7 +145,7 @@ namespace hlrt
         actors.gibLimit = isDSiMode() ? kMaxGibs : kMaxGibs / 2;
         actors.shotLimit = isDSiMode() ? kMaxProjectiles : kMaxProjectiles / 2;
         actors.effectLimit = isDSiMode() ? kMaxEffects : kMaxEffects / 2;
-        actors.decalLimit = isDSiMode() ? kMaxDecals : 24;
+        actors.decalLimit = isDSiMode() ? kMaxDecals : 32;
         actors.pieceLimit = isDSiMode() ? kMaxPieces : 24;
         // (... and keeps them longer: the small things half as long again,
         // the marks twice.)
@@ -157,6 +162,10 @@ namespace hlrt
         logic.nameCount = static_cast<int>(view.nameCount);
         logic.sounds = view.logicSoundCount != 0 ? view.logicSounds : nullptr;
         logic.heard = &heard;
+        logic.marksLimit = isDSiMode() ? 32 : 16;
+        logic.level = &view;
+        logic.modelSounds = view.modelSoundCount != 0 ? view.modelSounds : nullptr;
+        logic.modelSoundCount = static_cast<int>(view.modelSoundCount);
         heard.count = 0;
         logic.cornerState = cornerState_;
         logic.cornerCount = static_cast<int>(view.cornerCount);
@@ -165,8 +174,14 @@ namespace hlrt
         logicInit(logic);
         actorsInit(actors, view.actors, static_cast<int>(view.actorCount), view.nameHashes, world);
         actors.nodes = view.pathNodes;
-        actors.next = view.pathNext;
+        actors.links = view.pathLinks;
         actors.nodeCount = static_cast<int>(view.pathNodeCount);
+        actors.linkCount = static_cast<int>(view.pathLinkCount);
+        // (How each way between two nodes is just now: the logic keeps it.)
+        std::free(linkShut_);
+        linkShut_ = static_cast<std::uint8_t *>(std::calloc(view.pathLinkCount + 1, 1));
+        actors.linkShut = linkShut_;
+        actors.doorsWanted = 0;
         weapon_ = WeaponState();
         held = ActorState();
         inHand_ = -1;
@@ -334,6 +349,8 @@ namespace hlrt
         save.clipPython = inv.clipPython;
         save.ammo357 = inv.ammo357;
         save.ammoAr = inv.ammoAr;
+        save.lampOn = lamp.on ? 1 : 0;
+        save.lampCharge = lamp.charge;
         for (int i = 0; i < globals.count; ++i)
         {
             save.globalHash.push_back(globals.hash[i]);
@@ -394,6 +411,8 @@ namespace hlrt
         inv.clipPython = within(save.clipPython, 6);
         inv.ammo357 = within(save.ammo357, 36);
         inv.ammoAr = within(save.ammoAr, 10);
+        lamp.on = save.lampOn != 0;
+        lamp.charge = save.lampCharge < 0 ? 0 : (save.lampCharge > kLampFull ? kLampFull : save.lampCharge);
         if (inv.grenades == 0)
             inv.have &= static_cast<std::uint8_t>(~(1u << kWeaponGrenade));
         camera.yaw = save.yaw;
@@ -448,6 +467,8 @@ namespace hlrt
                 const int target = logicFindUsable(logic, eye, camera.forward);
                 if (target >= 0)
                     logicUse(logic, player.state, target, -1, kUseSet);
+                else
+                    personUse(logic, eye, camera.forward); // (a scientist or a guard: follow, or stay)
             }
         }
         // What fights, what lies about, and what is in hand.
@@ -496,63 +517,38 @@ namespace hlrt
             lampLit = false;
             if (lamp.on && !player.noclip)
             {
-                // Where it points: what the middle of the view falls on.
-                // The lamp itself is carried a little to the right of the
-                // eyes and below them, and shines at that point: so what is
-                // near is lit a little off the view's middle, and what is
-                // far in it.
+                // Where it shines: on what the middle of the view meets --
+                // and with nothing within its reach, on nothing.
                 const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                    player.state.origin[2] + player.state.viewHeight};
                 fx end[3], at[3], normal[3];
                 for (int a = 0; a < 3; ++a)
                     end[a] = eye[a] + camera.forward[a] * kLampReach;
-                int distance = kLampReach;
                 if (traceShotWall(world, eye, end, at, normal))
                 {
                     std::int64_t along = 0;
                     for (int a = 0; a < 3; ++a)
                         along += static_cast<std::int64_t>(at[a] - eye[a]) * camera.forward[a];
-                    distance = static_cast<int>(along >> 24);
-                    distance = distance < 16 ? 16 : (distance > kLampReach ? kLampReach : distance);
-                }
-                LampBeam &beam = lampBeam;
-                fx axis[3];
-                for (int a = 0; a < 3; ++a)
-                {
-                    beam.from[a] = eye[a] + camera.right[a] * 7 - camera.up[a] * 9;
-                    axis[a] = eye[a] + camera.forward[a] * distance - beam.from[a];
-                }
-                const fx length = fxLength(axis);
-                if (length > 0)
-                {
+                    int distance = static_cast<int>(along >> 24);
+                    distance = distance < 8 ? 8 : distance;
+                    LampBeam &beam = lampBeam;
                     for (int a = 0; a < 3; ++a)
-                        beam.axis[a] = static_cast<fx>((static_cast<std::int64_t>(axis[a]) << 12) / length);
-                    // Across it: the view's right, squared up to the beam,
-                    // and what is square to both.
-                    std::int32_t lean = 0;
-                    for (int a = 0; a < 3; ++a)
-                        lean += camera.right[a] * beam.axis[a];
-                    lean >>= 12;
-                    fx across[3];
-                    for (int a = 0; a < 3; ++a)
-                        across[a] = camera.right[a] - ((beam.axis[a] * lean) >> 12);
-                    const fx wide = fxLength(across);
-                    if (wide > 0)
                     {
-                        for (int a = 0; a < 3; ++a)
-                            beam.u[a] = static_cast<fx>((static_cast<std::int64_t>(across[a]) << 12) / wide);
-                        beam.v[0] = (beam.axis[1] * beam.u[2] - beam.axis[2] * beam.u[1]) >> 12;
-                        beam.v[1] = (beam.axis[2] * beam.u[0] - beam.axis[0] * beam.u[2]) >> 12;
-                        beam.v[2] = (beam.axis[0] * beam.u[1] - beam.axis[1] * beam.u[0]) >> 12;
-                        beam.radius = lampRadius(distance);
-                        beam.reach = distance + beam.radius * 2 < kLampReach ? distance + beam.radius * 2 : kLampReach;
-                        beam.strength = lampStrength(distance);
-                        lampLit = beam.strength > 0;
+                        beam.from[a] = eye[a];
+                        beam.axis[a] = camera.forward[a];
+                        beam.u[a] = camera.right[a];
+                        beam.v[a] = camera.up[a];
                     }
+                    beam.radius = lampRadius(distance);
+                    beam.near = distance - beam.radius;
+                    beam.reach = distance + beam.radius;
+                    beam.strength = lampStrength(distance);
+                    lampDistance = distance;
+                    lampLit = beam.strength > 0;
                 }
             }
             bottomScreen.setLamp(suit, lamp.on, lampPercent(lamp));
-            hudDraw.setLamp(lamp.on, lampPercent(lamp));
+            hudDraw.setLamp(lamp.on, lampPercent(lamp), suit);
             hudDraw.setHurt(player.view.flash, player.view.pain);
         }
         if (!player.noclip)
@@ -631,19 +627,22 @@ namespace hlrt
                 takeInHand();
             if (held.active)
             {
-                const bool crowbar = inHand_ == kWeaponCrowbar;
-                if (did & kWeaponSecondary)
+                // What the weapon's own code says the hand does (the
+                // crowbar's swings, its being put away); else by what was
+                // done.
+                if (weapon_.anim != nullptr)
+                    actorPlay(actors, held, nameHash(weapon_.anim), true);
+                else if (did & kWeaponSecondary)
                     actorPlay(actors, held, nameHash("grenade"), true);
                 else if (did & kWeaponFired)
                     actorPlay(actors, held,
-                              nameHash(crowbar ? ((did & kWeaponHit) ? "attack1" : "attack1miss")
-                                               : (inHand_ == kWeaponGrenade
-                                                      ? "throw1"
-                                                      : (inHand_ == kWeaponPython ? "fire1" : "shoot"))),
+                              nameHash(inHand_ == kWeaponGrenade ? "throw1"
+                                                                 : (inHand_ == kWeaponPython ? "fire1" : "shoot")),
                               true);
                 else if (did & kWeaponReload)
                     actorPlay(actors, held, nameHash("reload"), true);
             }
+            weapon_.anim = nullptr;
             actors.got = 0;
         }
         const fx stoodAt[3] = {player.state.origin[0], player.state.origin[1], player.state.origin[2]};
@@ -651,20 +650,55 @@ namespace hlrt
         // Their own footsteps, and what a blow sounds like from inside.
         if (!player.noclip)
         {
-            for (int n = playerFootsteps(player.state, stoodAt); n > 0; --n)
-                heard.add(static_cast<std::uint16_t>(static_cast<int>(CommonSound::Step1) +
-                                                     (stepCount_++ & 3)),
-                          nullptr, 70, 0);
+            // (A footstep, a rung, a slosh or a wade: HlPlayerMove.hpp.)
+            const StepsHeard steps = playerSteps(player.state, stoodAt);
+            static constexpr CommonSound kFirst[] = {CommonSound::Step1, CommonSound::Ladder1, CommonSound::Slosh1,
+                                                     CommonSound::Wade1};
+            CommonSound first = kFirst[static_cast<int>(steps.kind)];
+            if (steps.count > 0 && steps.kind == StepKind::Floor)
+            {
+                // What the floor is made of (looked for once a step, not
+                // once a frame: HlMaterial.hpp).
+                const fx feet[3] = {player.state.origin[0], player.state.origin[1],
+                                    player.state.origin[2] - (player.state.ducked ? kCrouchedFeet : kStandingFeet)};
+                const int on = player.state.groundMover;
+                switch (floorMaterial(level.view, feet, on, on >= 0 ? logic.brushStates[on].pos : nullptr))
+                {
+                case Material::Metal: first = CommonSound::Metal1; break;
+                case Material::Dirt:  first = CommonSound::Dirt1; break;
+                case Material::Vent:  first = CommonSound::Duct1; break;
+                case Material::Grate: first = CommonSound::Grate1; break;
+                case Material::Tile:  first = CommonSound::Tile1; break;
+                case Material::Slosh: first = CommonSound::Slosh1; break;
+                default: break;
+                }
+                // (A map cooked without that step has the plain one.)
+                if (static_cast<std::uint32_t>(first) >= level.view.soundCount ||
+                    level.view.sounds[static_cast<int>(first)].name[0] == '\0')
+                    first = CommonSound::Step1;
+            }
+            for (int n = steps.count; n > 0; --n)
+                heard.add(static_cast<std::uint16_t>(static_cast<int>(first) + (stepCount_++ & 3)), nullptr,
+                          steps.kind == StepKind::Floor ? 70 : 90, 0);
+            // Into the water to the waist, or out of it: heard.
+            const bool deep = player.state.waterLevel >= 2;
+            if (deep != wasDeep_)
+                heard.add(static_cast<std::uint16_t>(static_cast<int>(CommonSound::Wade1) + (stepCount_++ & 3)),
+                          nullptr, 110, 0);
+            wasDeep_ = deep;
             if (player.state.health < lastHealth_ && player.state.health > 0)
                 heard.add(CommonSound::Pain, nullptr, 110);
         }
         lastHealth_ = player.state.health;
-        // What is held: its clip moves on, and a swing that is over goes back
-        // to being held still.
+        // What is held: its clip moves on, and a shot or a reload that is over
+        // goes back to being held still.
         if (held.active)
         {
             actorAdvance(actors, held, (vblanks * 1000 + 30) / 60);
-            if (held.once && held.finished)
+            // (The crowbar has no way of being held still but as its last
+            // swing left it, or its being taken out: the game never plays
+            // it another.)
+            if (held.once && held.finished && inHand_ != kWeaponCrowbar)
                 actorRest(held);
         }
         {

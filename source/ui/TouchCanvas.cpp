@@ -57,7 +57,7 @@ namespace hlrt
             return;
         for (int n = 0; n < hldata::kFontCount; ++n)
         {
-            std::FILE *file = std::fopen(global.dataPath(hldata::kFontFiles[n]).c_str(), "rb");
+            std::FILE *file = std::fopen(global.commonPath(hldata::kFontFiles[n]).c_str(), "rb");
             if (file == nullptr)
                 continue;
             std::fseek(file, 0, SEEK_END);

@@ -29,6 +29,9 @@ namespace hlrt
         /// how many may be on this machine (setLimit): what there is time to
         /// pose, not what there is room to draw.
         static constexpr int kMaxDrawn = 12;
+        int cutOf(int kind) const { return cutClass_[kind & 3]; }
+        int grown() const { return grown_; }
+        bool strained() const { return strained_; }
         void setLimit(int limit) { limit_ = limit < 1 ? 1 : (limit > kMaxDrawn ? kMaxDrawn : limit); }
         int limit() const { return limit_; }
 
@@ -91,6 +94,13 @@ namespace hlrt
         std::uint8_t gibOrder_[hldata::kMaxGibs] = {};
         int gibFound_ = 0;
         int cut_ = 0;
+        /// ... by what they were (HlDrawPlan.hpp's kDraw*); how far the
+        /// models went over their share for an enemy's sake; and whether
+        /// one had to be made room for at all, at which the frame's
+        /// effects give way.
+        int cutClass_[4] = {};
+        int grown_ = 0;
+        bool strained_ = false;
         bool heldDrawn_ = false;
     };
 

@@ -46,10 +46,15 @@ add_library(hlds_convert_core STATIC
     core/src/GxStream.cpp
     core/src/LevelWriter.cpp
     core/src/LightBake.cpp
+    core/src/Lz77.cpp
     core/src/MdlFile.cpp
     core/src/ModelCook.cpp
     core/src/ModelMesh.cpp
+    core/src/NodGraph.cpp
+    core/src/NpacWriter.cpp
+    core/src/Pack.cpp
     core/src/MapStats.cpp
+    core/src/Materials.cpp
     core/src/MeshOptimize.cpp
     core/src/PathNodes.cpp
     core/src/SoundCook.cpp
@@ -114,6 +119,7 @@ if(HLDS_BUILD_TESTS)
             test_lod
             test_titles
             test_view
+            test_drawplan
             test_families
             test_incident
             test_mixer
@@ -123,6 +129,9 @@ if(HLDS_BUILD_TESTS)
             test_sprite
             test_effects
             test_manifest
+            test_npac
+            test_graph
+            test_pack
             test_mdl
             test_mesh
             test_movers
@@ -134,6 +143,12 @@ if(HLDS_BUILD_TESTS)
         target_link_libraries(${test_name} PRIVATE hlds_convert_core)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endforeach()
+
+    # The DSi's DSP program (teak/, assembly) run in an emulated DSP and held
+    # against its model, sample for sample (tools/dspsim). Skipped where the
+    # emulator or the Teak toolchain is not there: the script says which.
+    add_test(NAME dspsim COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../dspsim/run.sh)
+    set_tests_properties(dspsim PROPERTIES SKIP_RETURN_CODE 2 ENVIRONMENT "DSPSIM_BUDGET=25")
 
     # Not a test: writes a synthetic map with one brush of each kind in front
     # of the player, for looking at on the console (tests/make_test_map.cpp).

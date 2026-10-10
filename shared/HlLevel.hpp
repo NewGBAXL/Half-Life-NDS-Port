@@ -25,6 +25,7 @@
 //
 // Formats named in comments (Q12, Q30, ...) are defined in HlFixed.hpp.
 
+#include <array>
 #include <cstdint>
 
 #include "HlFixed.hpp"
@@ -33,7 +34,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 21;
+    inline constexpr std::uint16_t kLevelVersion = 25;
 
     enum class Section : std::uint16_t
     {
@@ -49,7 +50,7 @@ namespace hldata
         ClipNodes,  ///< ClipNode: hulls 1 (standing) and 3 (crouched), and the world's 2 (large)
         Textures,   ///< TextureRef
         Entities,   ///< EntityRecord
-        EntityText, ///< u8: the original entity lump, for the converter's own use
+        EntityText, ///< u8: empty (the entity lump was here; it is the converter's, and stays on the PC)
         LightPatch, ///< LightPatch: the vertex colours that lights which change change
         Brushes,    ///< Brush: the map's brush entities (doors, grates, glass...)
         BrushLeaves, ///< u16: the world leaves each brush touches, grouped per brush
@@ -62,11 +63,11 @@ namespace hldata
         ModelRefs,  ///< ModelRef: the models the map's actors are made of
         Actors,     ///< ActorRecord: the people and props that are models
         PathNodes,  ///< PathNode: where something that walks can stand (info_node)
-        PathNext,   ///< u8, nodes * nodes: [from * n + to] = the node to go to next, 255 = no way
+        PathNext,   ///< PathLink: the ways on from each node, grouped per node
         Sounds,     ///< SoundRef: the sounds the map plays (HlSound.hpp); the common ones first
         LogicSounds, ///< LogicSound, parallel to Logic: what each record sounds like
         Sentences,  ///< SentenceRecord: the spoken lines the map has
-        SentenceWords, ///< u16: indices into Sounds, grouped per sentence
+        SentenceWords, ///< SentenceWord: grouped per sentence
         Rooms,      ///< RoomRecord: what the map's rooms sound like (env_sound)
         Sprites,    ///< SpriteRef: the sprites the map draws (HlSprite.hpp); the common ones first
         /// u16, kSpeechGroups * kSpeechLines of them (or none): for each
@@ -74,6 +75,7 @@ namespace hldata
         /// where there are fewer.
         Speech,
         Messages,   ///< MessageRecord: what the map writes on the screen (env_message)
+        ModelSounds, ///< ModelSound: the sounds the map's models make as they move, by name
         Count
     };
     inline constexpr int kSectionCount = static_cast<int>(Section::Count);
@@ -553,6 +555,8 @@ namespace hldata
         std::int16_t mins[3];     ///< a trigger's volume, world, whole units
         std::int16_t maxs[3];
         std::uint16_t damage;     ///< what a blocked door does to what blocks it
+        /// For an Ambient: how fast its sound is played, in percent of how
+        /// it was recorded (0: as it was).
         std::uint16_t pad;
         /// For a trigger_auto or a multisource: the hash of a global state
         /// that has to be ON for it to work; 0 = none.
@@ -806,20 +810,56 @@ namespace hldata
     inline constexpr std::uint16_t kNoSprite = 0xFFFF;
 
     /// What a logic record sounds like: indices into Sounds, 0xFFFF for
-    /// none. A door's or a button's moving and stopping; what something that
-    /// breaks sounds like breaking (in `move`).
+    /// none. A door's or a button's moving and stopping (a moving sound
+    /// that goes round is heard for as long as the thing moves); what
+    /// something that breaks sounds like breaking (in `move`); what
+    /// something that turns hums like (in `move`). And what a door or a
+    /// button that will not work for the player answers with: a sound, and
+    /// a spoken line (into Sentences).
     struct LogicSound
     {
         std::uint16_t move;
         std::uint16_t stop;
+        std::uint16_t locked;
+        std::uint16_t lockedLine;
+        /// ... and with what, when it works for them after having refused.
+        std::uint16_t unlocked;
+        std::uint16_t unlockedLine;
     };
-    /// A spoken line: `wordCount` sounds from SentenceWords, one after
-    /// another.
+    static_assert(sizeof(LogicSound) == 12);
+    /// A spoken line: `wordCount` words from SentenceWords, one after
+    /// another, at the line's `volume`.
     struct SentenceRecord
     {
         std::uint16_t firstWord;
         std::uint8_t wordCount;
         std::uint8_t volume; ///< 0..127
+        std::uint8_t pitch;  ///< (not used: each word has its own)
+        std::uint8_t pad[3];
+    };
+    static_assert(sizeof(SentenceRecord) == 8);
+    /// One word of a line, as the game's sentences.txt has it said: which
+    /// sound, how fast (percent; 0: as recorded), how loud (percent of the
+    /// line's), and where it is cut off (percent of its length).
+    struct SentenceWord
+    {
+        std::uint16_t sound; ///< into Sounds
+        std::uint8_t pitch;
+        std::uint8_t volume;
+        std::uint8_t end;
+        std::uint8_t pad[3];
+    };
+    static_assert(sizeof(SentenceWord) == 8);
+
+    /// A sound one of the map's models makes in one of its clips (a
+    /// footstep in a walk, a line in a scene): the hash of its name, which
+    /// is what the model's event knows it by (HlModel.hpp), and where it is
+    /// in Sounds. Sorted by hash.
+    struct ModelSound
+    {
+        std::uint32_t hash;
+        std::uint16_t sound;
+        std::uint16_t pad;
     };
 
     /// A place with a sound of its own: within `radius` units of `origin`,
@@ -834,13 +874,43 @@ namespace hldata
     };
 
     /// Where something that walks can stand, as the map's author marked it:
-    /// its feet, in the world.
+    /// its feet, in the world -- and the ways on from there (`linkCount` of
+    /// PathLinks from `firstLink`).
     struct PathNode
     {
         fx pos[3];
+        std::uint16_t firstLink;
+        std::uint8_t linkCount;
+        std::uint8_t flags; ///< kPathNode*
     };
+    static_assert(sizeof(PathNode) == 16);
+    inline constexpr std::uint8_t kPathNodeWater = 1; ///< under water
     inline constexpr std::uint8_t kNoPathNode = 255;
     inline constexpr int kMaxPathNodes = 254;
+    /// A way from one node to another: who can take it (by size), how long
+    /// it is, and the brush that stands in it -- a door, which may be shut
+    /// or locked just now, or something that has to be broken first.
+    ///
+    /// Where the game came with its own graph of a map
+    /// (maps/graphs/<map>.nod) the links are that graph's, each tried once
+    /// with the walk the console really makes; otherwise they are worked
+    /// out. There is no table of ways from each node to each: the console
+    /// finds its way when it needs one, over the links as they are at that
+    /// moment (HlWalk.hpp, pathStep).
+    struct PathLink
+    {
+        std::uint8_t to;
+        std::uint8_t flags;   ///< kPathLink*
+        std::uint16_t length; ///< whole units
+        std::uint16_t brush;  ///< into Brushes, or kNoBrush
+        std::uint16_t pad;
+    };
+    static_assert(sizeof(PathLink) == 8);
+    inline constexpr std::uint8_t kPathLinkSmall = 1; ///< for what is 24 units across (a headcrab)
+    inline constexpr std::uint8_t kPathLinkHuman = 2; ///< for a person
+    inline constexpr std::uint8_t kPathLinkLarge = 4; ///< for what is 64 across (a bullsquid)
+    /// One way only: off a ledge, down to the node below.
+    inline constexpr std::uint8_t kPathLinkDrop = 8;
 
     /// A person or a prop that is a model: where it starts and as what.
     struct ActorRecord
@@ -980,15 +1050,16 @@ namespace hldata
         case Section::ModelRefs:  return sizeof(ModelRef);
         case Section::Actors:     return sizeof(ActorRecord);
         case Section::PathNodes:  return sizeof(PathNode);
-        case Section::PathNext:   return 1;
+        case Section::PathNext:   return sizeof(PathLink);
         case Section::Sounds:     return sizeof(SoundRef);
         case Section::LogicSounds: return sizeof(LogicSound);
         case Section::Sentences:  return sizeof(SentenceRecord);
-        case Section::SentenceWords: return 2;
+        case Section::SentenceWords: return sizeof(SentenceWord);
         case Section::Rooms:      return sizeof(RoomRecord);
         case Section::Sprites:    return sizeof(SpriteRef);
         case Section::Speech:     return 2;
         case Section::Messages:   return sizeof(MessageRecord);
+        case Section::ModelSounds: return sizeof(ModelSound);
         default:                  return 0;
         }
     }
@@ -996,19 +1067,58 @@ namespace hldata
     inline constexpr std::uint32_t kLevelDataStart =
         sizeof(LevelHeader) + kSectionCount * sizeof(SectionDir);
 
-    /// CRC-32 (the zlib polynomial), bit by bit: a level is checked once per
-    /// load, and a table would cost a kilobyte of the DS's memory for that.
+    // ---- On the card -------------------------------------------------------
+    //
+    // A map is one archive, maps/<map>.npac (Nitro Engine Advanced's NPAC,
+    // mounted as a drive), holding everything the map loads in the order it
+    // loads it: the level, then tex/, spr/, mdl/ and snd/. The level itself is
+    // in pieces, "level.0", "level.1"...: the first is the header and the
+    // section directory, which is all that has to be read to know what a map
+    // is; the rest follow in pieces of kLevelPieceBytes, each compressed on
+    // its own. A compressed member is inflated whole as it is opened, and a
+    // DS has not the memory to do that to a whole level beside the level.
+    inline constexpr std::uint32_t kLevelPieceBytes = 256 * 1024;
+
+    /// How many pieces a level of `fileSize` bytes is in, the first included.
+    constexpr std::uint32_t levelPieces(std::uint32_t fileSize)
+    {
+        return fileSize <= kLevelDataStart
+                   ? 1
+                   : 1 + (fileSize - kLevelDataStart + kLevelPieceBytes - 1) / kLevelPieceBytes;
+    }
+    /// Where piece `piece` begins in the level, and how long it is.
+    constexpr std::uint32_t levelPieceStart(std::uint32_t piece)
+    {
+        return piece == 0 ? 0 : kLevelDataStart + (piece - 1) * kLevelPieceBytes;
+    }
+    constexpr std::uint32_t levelPieceBytes(std::uint32_t fileSize, std::uint32_t piece)
+    {
+        const std::uint32_t start = levelPieceStart(piece);
+        const std::uint32_t end = piece == 0 ? kLevelDataStart : start + kLevelPieceBytes;
+        return start >= fileSize ? 0 : (end < fileSize ? end : fileSize) - start;
+    }
+
+    /// CRC-32 (the zlib polynomial), a byte at a time through a table. The
+    /// table is a kilobyte of the DS's memory; going bit by bit instead made
+    /// the check of a level a large part of loading it.
+    inline constexpr std::array<std::uint32_t, 256> kCrcTable = []
+    {
+        std::array<std::uint32_t, 256> table{};
+        for (std::uint32_t i = 0; i < 256; ++i)
+        {
+            std::uint32_t crc = i;
+            for (int bit = 0; bit < 8; ++bit)
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+            table[i] = crc;
+        }
+        return table;
+    }();
+
     constexpr std::uint32_t crc32(const std::uint8_t *data, std::uint32_t size)
     {
         std::uint32_t crc = 0xFFFFFFFFu;
         for (std::uint32_t i = 0; i < size; ++i)
-        {
-            crc ^= data[i];
-            for (int bit = 0; bit < 8; ++bit)
-            {
-                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-            }
-        }
+            crc = (crc >> 8) ^ kCrcTable[(crc ^ data[i]) & 0xFF];
         return ~crc;
     }
 } // namespace hldata

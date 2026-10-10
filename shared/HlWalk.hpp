@@ -195,9 +195,12 @@ namespace hldata
     // ------------------------------------------------------------ marks
 
     inline constexpr std::uint16_t kMarkShot = 3 | 3 << 5 | 3 << 10;    ///< a hole: nearly black
-    inline constexpr std::uint16_t kMarkBlood = 17 | 1 << 5 | 1 << 10;
+    inline constexpr std::uint16_t kMarkBlood = 15 | 2 << 5 | 2 << 10; ///< dried dark, as the game's is on a wall
     inline constexpr std::uint16_t kMarkAlien = 21 | 22 << 5 | 3 << 10;
     inline constexpr std::uint16_t kMarkSoot = 2 | 2 << 5 | 2 << 10;
+    /// A wall's own cracks and dents (the map's): thin and faint in the
+    /// game, which a picture this small cannot be -- so not black either.
+    inline constexpr std::uint16_t kMarkWall = 11 | 11 << 5 | 10 << 10;
     inline constexpr std::uint16_t kMarkCrack = 26 | 28 << 5 | 29 << 10; ///< glass, cracked: pale
 
     /// Specks off the wall at `at`, which faces `normal`: `count` of them,
@@ -237,7 +240,7 @@ namespace hldata
         else
         {
             a.seed = a.seed * 1664525u + 1013904223u;
-            decalAdd(a, static_cast<std::uint8_t>(kDecalShot + ((a.seed >> 9) % kDecalShots)), at, normal, 7, kMarkShot);
+            decalAdd(a, static_cast<std::uint8_t>(kDecalShot + ((a.seed >> 9) % kDecalShots)), at, normal, 8, kMarkShot);
             specksAdd(a, at, normal, 3, static_cast<std::uint16_t>(15 | 15 << 5 | 14 << 10));
         }
         return true;
@@ -258,7 +261,7 @@ namespace hldata
             return false;
         const std::uint8_t picture = alien ? ((a.seed >> 14) & 1 ? kDecalAlien : kDecalAlien2)
                                            : static_cast<std::uint8_t>(kDecalBlood + ((a.seed >> 14) % kDecalBloods));
-        decalAdd(a, picture, at, normal, (much ? 22 : 14) + static_cast<int>((a.seed >> 18) % 6), alien ? kMarkAlien : kMarkBlood);
+        decalAdd(a, picture, at, normal, (much ? 24 : 18) + static_cast<int>((a.seed >> 18) % 4), alien ? kMarkAlien : kMarkBlood);
         return true;
     }
 
@@ -467,7 +470,8 @@ namespace hldata
 
     /// The path node to make for from `feet`: the nearest that can be seen
     /// from there, of the three nearest; -1 if there is none.
-    inline int pathNearest(const ActorWorld &a, const MoveWorld &world, const fx *feet)
+    inline int pathNearest(const ActorWorld &a, const MoveWorld &world, const fx *feet, int hull = -1,
+                           int index = -1)
     {
         int best[3] = {-1, -1, -1};
         fx bestD[3] = {0, 0, 0};
@@ -494,17 +498,130 @@ namespace hldata
                 break;
             }
         }
+        // One that can be WALKED to from there, for whoever is asking as
+        // something that walks (a node across a rail can be seen and not
+        // reached); failing that, one that can be seen.
         const fx eye[3] = {feet[0], feet[1], feet[2] + fxFromInt(20)};
+        int seen = -1;
         for (int k = 0; k < 3; ++k)
         {
             if (best[k] < 0)
                 break;
             const fx *p = a.nodes[best[k]].pos;
             const fx to[3] = {p[0], p[1], p[2] + fxFromInt(20)};
-            if (lineClear(world, eye, to))
+            if (!lineClear(world, eye, to))
+                continue;
+            if (hull < 0)
                 return best[k];
+            const fx d[3] = {p[0] - feet[0], p[1] - feet[1], 0};
+            if (walkClear(world, &a, index, hull, feet, p, fxToInt(fxLength(d)) / 16 + 4))
+                return best[k];
+            seen = seen < 0 ? best[k] : seen;
+        }
+        return seen;
+    }
+
+    /// Who opens a door that is in their way: people, soldiers, and the
+    /// monsters that have hands for it (the game's own list).
+    inline bool opensDoors(std::uint8_t kind)
+    {
+        switch (static_cast<ActorKind>(kind))
+        {
+        case ActorKind::Scientist:
+        case ActorKind::Guard:
+        case ActorKind::Gman:
+        case ActorKind::Generic:
+        case ActorKind::Grunt:
+        case ActorKind::Zombie:
+        case ActorKind::Slave:
+        case ActorKind::Bullsquid:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    /// The link from node `from` to node `to`, or -1.
+    inline int pathLinkBetween(const ActorWorld &a, int from, int to)
+    {
+        const PathNode &node = a.nodes[from];
+        for (int l = node.firstLink; l < node.firstLink + node.linkCount && l < a.linkCount; ++l)
+        {
+            if (a.links[l].to == to)
+                return l;
         }
         return -1;
+    }
+
+    /// The node to go to next on the shortest way from node `from` to node
+    /// `to`, for something that takes links marked `size` (a kPathLink*) and
+    /// does or does not open doors: found now, over the links as they are
+    /// now. kNoPathNode if there is no way; `to` itself if they are joined.
+    ///
+    /// (Every node's distance from `from`, nearest first, until `to` is
+    /// reached: at most 254 nodes, a kilobyte on the stack. A shut door
+    /// counts as a little further than it is.)
+    inline std::uint8_t pathStep(const ActorWorld &a, int from, int to, std::uint8_t size, bool opens)
+    {
+        if (from < 0 || to < 0 || from >= a.nodeCount || to >= a.nodeCount || a.links == nullptr)
+            return kNoPathNode;
+        if (from == to)
+            return static_cast<std::uint8_t>(to);
+        std::uint16_t far[kMaxPathNodes];
+        std::uint8_t before[kMaxPathNodes];
+        std::uint8_t done[kMaxPathNodes];
+        for (int n = 0; n < a.nodeCount; ++n)
+        {
+            far[n] = 0xFFFF;
+            before[n] = kNoPathNode;
+            done[n] = 0;
+        }
+        far[from] = 0;
+        for (;;)
+        {
+            int at = -1;
+            for (int n = 0; n < a.nodeCount; ++n)
+            {
+                if (!done[n] && far[n] != 0xFFFF && (at < 0 || far[n] < far[at]))
+                    at = n;
+            }
+            if (at < 0)
+                return kNoPathNode;
+            if (at == to)
+                break;
+            done[at] = 1;
+            const PathNode &node = a.nodes[at];
+            for (int l = node.firstLink; l < node.firstLink + node.linkCount && l < a.linkCount; ++l)
+            {
+                const PathLink &link = a.links[l];
+                if (!(link.flags & size) || done[link.to])
+                    continue;
+                const std::uint8_t shut = a.linkShut != nullptr ? a.linkShut[l] : kLinkOpen;
+                if (shut == kLinkNoWay || (shut == kLinkDoor && !opens))
+                    continue;
+                const std::uint32_t through = far[at] + link.length + (shut == kLinkDoor ? 128u : 0u) + 1u;
+                if (through < far[link.to])
+                {
+                    far[link.to] = static_cast<std::uint16_t>(through > 0xFFFE ? 0xFFFE : through);
+                    before[link.to] = static_cast<std::uint8_t>(at);
+                }
+            }
+        }
+        // Back along the way found, to its first step.
+        int step = to;
+        for (int guard = 0; guard < kMaxPathNodes && before[step] != from; ++guard)
+        {
+            if (before[step] == kNoPathNode)
+                return kNoPathNode;
+            step = before[step];
+        }
+        return static_cast<std::uint8_t>(step);
+    }
+
+    /// Which links something of that size takes.
+    inline std::uint8_t pathSizeOf(int hull)
+    {
+        return hull == kWalkCrouched ? kPathLinkSmall : (hull == kWalkLarge ? kPathLinkLarge : kPathLinkHuman);
     }
 
     // ------------------------------------------------------------- going somewhere
@@ -567,14 +684,24 @@ namespace hldata
             {
                 if (actor.fromNode >= 0)
                 {
-                    const std::uint8_t next = a.next[actor.fromNode * a.nodeCount + theirs];
+                    const bool opens = opensDoors(actor.kind);
+                    const std::uint8_t next = pathStep(a, actor.fromNode, theirs, pathSizeOf(small), opens);
                     // (At the last node and still not there: no nearer by
                     // nodes.)
                     actor.goalNode = (next == kNoPathNode || next == actor.fromNode) ? -1 : next;
+                    // A shut door on the way: it is asked for, and walked
+                    // up to while it opens.
+                    if (actor.goalNode >= 0 && a.linkShut != nullptr)
+                    {
+                        const int link = pathLinkBetween(a, actor.fromNode, actor.goalNode);
+                        if (link >= 0 && a.linkShut[link] == kLinkDoor && a.links[link].brush != kNoBrush &&
+                            a.doorsWanted < 4)
+                            a.doorWanted[a.doorsWanted++] = a.links[link].brush;
+                    }
                 }
                 else
                 {
-                    actor.goalNode = static_cast<std::int16_t>(pathNearest(a, world, actor.pos));
+                    actor.goalNode = static_cast<std::int16_t>(pathNearest(a, world, actor.pos, small, index));
                 }
             }
             if (actor.goalNode < 0)

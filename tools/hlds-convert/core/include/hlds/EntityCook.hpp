@@ -48,7 +48,7 @@ namespace hlds
         std::vector<std::string> sprites;
         std::vector<bool> spriteLights;
         std::vector<hldata::SentenceRecord> sentences;
-        std::vector<std::uint16_t> sentenceWords;
+        std::vector<hldata::SentenceWord> sentenceWords;
         std::vector<hldata::RoomRecord> rooms;
         /// What soldiers call out, if the map has any: kSpeechGroups *
         /// kSpeechLines indices into `sentences` (0xFFFF: none).

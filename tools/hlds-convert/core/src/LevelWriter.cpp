@@ -40,7 +40,10 @@ namespace hlds
             blobOf(level.clipNodes),
             blobOf(level.textures),
             blobOf(level.entities),
-            Blob{level.entityText.data(), level.entityText.size(), level.entityText.size()},
+            // (The map's entity text is the converter's own, and stays in
+            // the stage beside the level, <map>.ent: the console has no
+            // use for it, and used to carry it in memory all the same.)
+            Blob{nullptr, 0, 0},
             blobOf(level.lightPatches),
             blobOf(level.brushes),
             blobOf(level.brushLeaves),
@@ -53,7 +56,7 @@ namespace hlds
             blobOf(level.modelRefs),
             blobOf(level.actors),
             blobOf(level.pathNodes),
-            blobOf(level.pathNext),
+            blobOf(level.pathLinks),
             blobOf(level.sounds),
             blobOf(level.logicSounds),
             blobOf(level.sentences),
@@ -62,6 +65,7 @@ namespace hlds
             blobOf(level.sprites),
             blobOf(level.speech),
             blobOf(level.messages),
+            blobOf(level.modelSounds),
         };
 
         SectionDir dir[kSectionCount];

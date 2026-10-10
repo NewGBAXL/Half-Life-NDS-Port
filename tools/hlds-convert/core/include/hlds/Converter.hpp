@@ -27,9 +27,16 @@ namespace hlds
     {
         std::filesystem::path gameDir;  ///< the game's "valve" folder
         std::filesystem::path cardRoot; ///< the root of the SD card
+        /// Where the converter keeps its own files -- levels, textures,
+        /// models and sounds one by one, which the card's archives are then
+        /// made from, and which the next run finds again instead of making.
+        /// Empty: a folder beside the card's, named after it ("<card>-stage").
+        std::filesystem::path stageRoot;
+        bool compress = true; ///< LZ77 inside the archives, where it pays (NpacWriter.hpp)
         std::filesystem::path ptexconv; ///< empty: look for it
         bool textures = true;
-        double lightGamma = LightBake::kDefaultGamma;
+        double lightScale = LightBake::kDefaultScale;
+        double lightPower = LightBake::kDefaultPower;
         bool guardedMerges = true; ///< CookOptions::guardedMerges
         std::string startMap; ///< empty: keep the manifest's, or the default
     };
@@ -76,6 +83,15 @@ namespace hlds
         int spriteTexelKb = 0; ///< what their atlases take of texture memory
         int spritesMissing = 0;
         int musicTracks = 0;  ///< tracks of music the map starts
+        int pathNodes = 0;     ///< where what walks may stand
+        int pathLinks = 0;     ///< ... and the ways between
+        int pathDoorLinks = 0; ///< of them, through a door or something that breaks
+        int pathRefused = 0;   ///< links of the game's graph the console's walk could not make
+        int pathDrops = 0;     ///< ways down added
+        bool pathFromGraph = false; ///< from the game's own graph (maps/graphs)
+        int archiveKb = 0;    ///< the map's archive on the card
+        int archiveRawKb = 0; ///< what is in it, inflated
+        int archiveMembers = 0;
     };
 
     /// What was cooked for the card as a whole (UiCook.hpp).
@@ -115,8 +131,16 @@ namespace hlds
         /// What the last cookMaps made of that.
         const CommonResult &common() const { return common_; }
 
-        /// Cook one map and its textures. Does not touch the manifest.
+        /// The stage's data folder, laid out as the card's used to be.
+        std::filesystem::path stageDir() const;
+
+        /// Cook one map and its textures into the stage. Does not make its
+        /// archive, nor touch the manifest: cookMaps does both.
         MapResult cookMap(const std::string &name);
+
+        /// Make the card's archives again from what is in the stage, cooking
+        /// nothing, and write the manifest. Returns the number that failed.
+        int packAll(const std::function<void(const MapResult &)> &done, std::string &error);
 
         /// Cook several maps and then write the manifest, which lists every
         /// map cooked now or by an earlier run that is still on the card.
@@ -129,6 +153,8 @@ namespace hlds
 
     private:
         bool findMap(const std::string &name, std::filesystem::path &out) const;
+        void packInto(MapResult &result) const;
+        bool writeManifest(std::string &error) const;
 
         ConvertOptions options_;
         CommonResult common_;

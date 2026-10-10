@@ -14,13 +14,13 @@ namespace hlds
         constexpr int kLightStartOff = 1; // spawnflag on light, light_spot
     } // namespace
 
-    LightBake::LightBake(const BspFile &bsp, const std::vector<Entity> &entities, double gamma)
+    LightBake::LightBake(const BspFile &bsp, const std::vector<Entity> &entities, double scale, double power)
         : bsp_(bsp), styleOff_(256, 0)
     {
         for (int i = 0; i < 256; ++i)
         {
             gammaTable_[i] = static_cast<std::uint8_t>(
-                std::lround(255.0 * std::pow(i / 255.0, 1.0 / gamma)));
+                std::min(255L, std::lround(255.0 * scale * std::pow(i / 255.0, power))));
         }
 
         // A switchable style is off only if EVERY light using it starts off:

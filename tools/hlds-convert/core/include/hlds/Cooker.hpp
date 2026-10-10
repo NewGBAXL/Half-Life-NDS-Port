@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "hlds/PathNodes.hpp"
 #include "hlds/SoundCook.hpp"
 #include "hlds/BspFile.hpp"
 #include "hlds/LevelWriter.hpp"
@@ -26,7 +27,8 @@ namespace hlds
 {
     struct CookOptions
     {
-        double lightGamma = LightBake::kDefaultGamma;
+        double lightScale = LightBake::kDefaultScale;
+        double lightPower = LightBake::kDefaultPower;
         /// Merge faces and drop mid-edge vertices where that provably changes
         /// nothing visible (MeshOptimize.hpp). Off leaves every vertex of the
         /// map in place and only shares them between neighbouring faces.
@@ -37,6 +39,15 @@ namespace hlds
         /// The models that were cooked for this map (ModelNeed::name): the
         /// actors made of them are in the level, the rest are left out.
         std::vector<std::string> models;
+        /// The game's own graph of the map's nodes (NodGraph.hpp); may be
+        /// null, and then the ways between them are worked out.
+        const NodGraph *nodGraph = nullptr;
+        /// What the game's textures are made of (Materials.hpp); may be
+        /// null, and then everything is concrete.
+        const struct MaterialBook *materials = nullptr;
+        /// The sounds those models make in their clips
+        /// (CookedModel::eventSounds).
+        std::vector<std::string> modelSounds;
         /// Which of `models` is the one the player holds; empty for none.
         std::string viewModel;
         /// The game's sentences.txt, parsed; null if it was not read.
@@ -48,6 +59,7 @@ namespace hlds
     struct CookReport
     {
         std::vector<std::string> warnings;
+        PathReport paths; ///< the nodes and the ways between them
         int surfaces = 0;
         int polygons = 0;      ///< every surface of the map
         int vertices = 0;

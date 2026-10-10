@@ -27,7 +27,9 @@ namespace hlrt
         bool frozen() const { return frozen_; }
 
     private:
+        void hideSprites();
         bool frozen_ = false;
+        unsigned long sprites_ = 0; ///< the sprite layer's bit, if it was on
         bool layered_ = false; ///< single-pass: the capture is on a layer of its own
         unsigned long savedControl_ = 0;
         unsigned short savedBg0_ = 0;

@@ -310,6 +310,9 @@ namespace hldata
             }
             int best = -1;
             fx bestD = fxFromInt(kGruntCoverRadius);
+            // (Somewhere he can GET to: the node he is at, and a way from
+            // it. A wall away is hidden, and no use.)
+            const int mineNode = pathNearest(a, world, me.pos, kWalkStanding, index);
             for (int n = 0; n < a.nodeCount; ++n)
             {
                 const fx *p = a.nodes[n].pos;
@@ -322,6 +325,9 @@ namespace hldata
                     continue;
                 const fx eye[3] = {p[0], p[1], p[2] + fxFromInt(50)};
                 if (lineClear(world, threat, eye))
+                    continue;
+                if (mineNode >= 0 && n != mineNode &&
+                    pathStep(a, mineNode, n, kPathLinkHuman, true) == kNoPathNode)
                     continue;
                 best = n;
                 bestD = far;
@@ -574,7 +580,13 @@ namespace hldata
                     a.got |= kGotHurt;
                 }
                 if (struck >= 0)
+                {
                     monsterHurt(w, struck, shotgun ? kGruntPellet : kGruntRound, true);
+                    fx mins[3], maxs[3];
+                    targetBox(a.states[struck], mins, maxs);
+                    const fx at[3] = {a.states[struck].pos[0], a.states[struck].pos[1], (mins[2] + maxs[2]) / 2};
+                    bleed(w, struck, at, nullptr, a.states[struck].ai >= kAiDying || !a.states[struck].active);
+                }
                 if (n == 0)
                 {
                     fx land[3];

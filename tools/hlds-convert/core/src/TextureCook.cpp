@@ -158,6 +158,7 @@ namespace hlds
                 job.name = tex.name;
                 job.path = path;
                 job.image = resample(toRgba(source, a3i5), size.width, size.height, a3i5);
+                brighten(job.image);
                 job.colours = colours;
                 job.format = a3i5 ? TextureFormat::A3I5 : TextureFormat::Tex4x4;
                 job.flags = (keyed ? hldata::kTextureColourKey : 0u) |

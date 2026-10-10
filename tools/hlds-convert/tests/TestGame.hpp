@@ -14,6 +14,7 @@
 #include "HlMonsters.hpp"
 #include "HlTransition.hpp"
 #include "TestBspBuilder.hpp"
+#include "hlds/NodGraph.hpp"
 #include "hlds/Cooker.hpp"
 #include "hlds/EntityCook.hpp"
 #include "hlds/EntityParser.hpp"
@@ -42,6 +43,10 @@ namespace hldstest
         std::vector<ModelView> modelViews;
         std::vector<ActorState> actorStates;
         std::vector<SolidBox> actorBoxes;
+        std::vector<std::uint8_t> linkShut; ///< ActorWorld::linkShut
+        /// The game's own graph of the map's nodes, if the test read one
+        /// before finish(): the ways between them are then taken from it.
+        hlds::NodGraph nodGraph;
         ActorWorld actors;
         LogicWorld logic;
         PlayerState player;
@@ -165,6 +170,8 @@ namespace hldstest
             book = parseSentences(text);
         }
         cookOptions.sentences = modelsFrom != nullptr ? &book : nullptr;
+        if (!g.nodGraph.nodes.empty())
+            cookOptions.nodGraph = &g.nodGraph;
         // ... and what it writes on the screen.
         static TitlesBook titles;
         if (modelsFrom != nullptr && titles.titles.empty())
@@ -227,6 +234,9 @@ namespace hldstest
         g.logic.globals = globals;
         g.logic.sounds = v.logicSoundCount != 0 ? v.logicSounds : nullptr;
         g.logic.heard = &g.heard;
+        g.logic.level = &v;
+        g.logic.modelSounds = v.modelSoundCount != 0 ? v.modelSounds : nullptr;
+        g.logic.modelSoundCount = static_cast<int>(v.modelSoundCount);
         g.timesHeard.assign(v.soundCount + 1, 0);
         g.logic.cornerState = g.cornerState.data();
         g.logic.cornerCount = static_cast<int>(v.cornerCount);
@@ -241,8 +251,11 @@ namespace hldstest
         g.move.boxes = g.actorBoxes.data();
         g.move.boxCount = static_cast<int>(g.actorBoxes.size());
         g.actors.nodes = v.pathNodes;
-        g.actors.next = v.pathNext;
+        g.actors.links = v.pathLinks;
         g.actors.nodeCount = static_cast<int>(v.pathNodeCount);
+        g.actors.linkCount = static_cast<int>(v.pathLinkCount);
+        g.linkShut.assign(v.pathLinkCount + 1, 0);
+        g.actors.linkShut = g.linkShut.data();
         g.logic.actors = &g.actors;
         g.logic.nameHashes = v.nameHashes;
         g.logic.sprites = v.sprites;

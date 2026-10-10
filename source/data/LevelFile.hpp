@@ -2,10 +2,11 @@
 
 // The cooked level in memory.
 //
-// A level is one file and one heap block: load() reads the whole .hlm with a
-// single fread and hands the bytes to LevelView::open (shared/HlLevelReader.hpp),
-// which checks them and points into them. Nothing is parsed or copied after
-// that, and unload() is one free.
+// A level is one heap block: load() reads its pieces out of the map's archive
+// (HlLevel.hpp: "level.0", "level.1"...), one after another into their places,
+// and hands the bytes to LevelView::open (shared/HlLevelReader.hpp), which
+// checks them and points into them. Nothing is parsed or copied after that,
+// and unload() is one free.
 //
 // Only one level is ever loaded; `level` is it.
 
@@ -20,16 +21,21 @@ namespace hlrt
     public:
         hldata::LevelView view;
 
-        /// Replace the loaded level. On failure nothing is loaded and `error`
-        /// holds a line fit to show the player.
-        bool load(const std::string &path, std::string &error);
+        /// Replace the loaded level with the one in the archive that is
+        /// mounted (Global::mountMap). On failure nothing is loaded and
+        /// `error` holds a line fit to show the player.
+        bool load(std::string &error);
         void unload();
 
-        /// Read just a level's header, without loading it. False if the file
-        /// is not there or is not a level of this version; the full load is
-        /// what reports why.
-        static bool peekHeader(const std::string &path, hldata::LevelHeader &header);
+        /// Read just a level's header out of map `name`'s archive, without
+        /// loading it or disturbing the map that is mounted. False if the
+        /// archive is not there or is not of a level of this version; the
+        /// full load is what reports why.
+        static bool peekHeader(const std::string &name, hldata::LevelHeader &header);
         bool loaded() const { return block_ != nullptr; }
+        /// How long the last load spent checking what it read (a build that
+        /// measures only: HLDS_PROFILE).
+        std::uint32_t checkMs = 0;
         std::size_t sizeBytes() const { return size_; }
 
         Level() = default;

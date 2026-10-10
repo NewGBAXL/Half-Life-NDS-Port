@@ -2,6 +2,7 @@
 #include "hlds/SoundCook.hpp"
 #include "hlds/PathNodes.hpp"
 #include "hlds/Cooker.hpp"
+#include "hlds/Materials.hpp"
 
 #include "hlds/TextureFamily.hpp"
 
@@ -180,7 +181,7 @@ namespace hlds
         level.visLeafCount = static_cast<std::uint16_t>(bsp.visLeafCount());
 
         PlaneTable planes(bsp);
-        const LightBake light(bsp, entities, options.lightGamma);
+        const LightBake light(bsp, entities, options.lightScale, options.lightPower);
 
         const std::vector<BrushInfo> brushes = analyseBrushes(bsp, entities);
         const std::vector<const BrushInfo *> brushOwner = brushOfModel(bsp, brushes);
@@ -211,6 +212,9 @@ namespace hlds
             // The game's own rule for what is drawn as liquid: the name.
             if (!src.name.empty() && (src.name[0] == '!' || src.name.rfind("water", 0) == 0))
                 ref.flags |= kTextureLiquid;
+            // What it is made of, for the sound of a step on it.
+            if (options.materials != nullptr)
+                ref.flags |= static_cast<std::uint32_t>(options.materials->of(src.name)) << kTextureMaterialShift;
             ref.frames = 1;
             ref.other = kNoTexture;
             level.textures.push_back(ref);
@@ -343,7 +347,7 @@ namespace hlds
                     // Blended and coloured brushes are not lit: the engine
                     // draws them at full brightness, or in their own colour.
                     const Rgb c = fullBright ? Rgb{255, 255, 255} : light.sample(face, p.s, p.t);
-                    p.colour = flatColour ? brush->colour : rgb555(c.r, c.g, c.b);
+                    p.colour = flatColour ? brush->colour : rgb555Near(c.r, c.g, c.b);
                 }
                 const FaceCost baseline = faceCost(face.edgeCount);
                 ++report.faces;
@@ -470,7 +474,7 @@ namespace hlds
                                         steady |= 1u << layer;
                                 }
                                 const Rgb base = light.sampleLayers(*best, bestS, bestT, steady);
-                                const std::uint16_t baseColour = rgb555(base.r, base.g, base.b);
+                                const std::uint16_t baseColour = rgb555Near(base.r, base.g, base.b);
                                 // (The word is filled in once the vertices
                                 // are packed: its number in order, for now.)
                                 patches.push_back(LightPatch{static_cast<std::uint32_t>(order.size()), baseColour, kPatchBase, 0});
@@ -480,7 +484,7 @@ namespace hlds
                                     if (!(moving & (1u << layer)) || best->styles[layer] >= kLightStyles)
                                         continue;
                                     const Rgb with = light.sampleLayers(*best, bestS, bestT, steady | (1u << layer));
-                                    const std::uint16_t lit = rgb555(with.r, with.g, with.b);
+                                    const std::uint16_t lit = rgb555Near(with.r, with.g, with.b);
                                     const int more[3] = {std::max(0, (lit & 31) - (baseColour & 31)),
                                                          std::max(0, ((lit >> 5) & 31) - ((baseColour >> 5) & 31)),
                                                          std::max(0, ((lit >> 10) & 31) - ((baseColour >> 10) & 31))};
@@ -815,6 +819,73 @@ namespace hlds
             // Each sound under the name it has at the usual rate; whoever
             // cooks the files may change that (a map short of room has some
             // at half the rate, and the name says so).
+            // The steps of what the map has no floor of are not carried:
+            // a map of concrete and metal has no use for the sound of dirt.
+            {
+                std::uint32_t made = 0;
+                for (const TextureRef &texture : level.textures)
+                    made |= 1u << static_cast<int>(textureMaterial(texture.flags));
+                static constexpr struct
+                {
+                    Material material;
+                    Material also; ///< (glass and computers sound alike)
+                    CommonSound first;
+                    int count;
+                } kSteps[] = {{Material::Metal, Material::Metal, CommonSound::Metal1, 4},
+                              {Material::Dirt, Material::Dirt, CommonSound::Dirt1, 4},
+                              {Material::Vent, Material::Vent, CommonSound::Duct1, 4},
+                              {Material::Grate, Material::Grate, CommonSound::Grate1, 4},
+                              {Material::Tile, Material::Tile, CommonSound::Tile1, 4},
+                              {Material::Wood, Material::Wood, CommonSound::WoodHit1, 3},
+                              {Material::Glass, Material::Computer, CommonSound::GlassHit1, 3}};
+                for (const auto &step : kSteps)
+                {
+                    if (made & ((1u << static_cast<int>(step.material)) | (1u << static_cast<int>(step.also))))
+                        continue;
+                    for (int k = 0; k < step.count; ++k)
+                    {
+                        const std::size_t index = static_cast<std::size_t>(step.first) + k;
+                        if (index < logic.sounds.size())
+                            logic.sounds[index].clear();
+                    }
+                }
+            }
+            // The sounds the map's models make as they move: each where it
+            // already is in the list (a common one this map had no other
+            // use for is given back its place), or added to it.
+            for (const std::string &path : options.modelSounds)
+            {
+                std::size_t index = logic.sounds.size();
+                for (int c = 0; c < static_cast<int>(CommonSound::Count); ++c)
+                {
+                    if (path == commonSoundPath(static_cast<CommonSound>(c)) &&
+                        static_cast<std::size_t>(c) < logic.sounds.size())
+                    {
+                        index = static_cast<std::size_t>(c);
+                        logic.sounds[index] = path;
+                        break;
+                    }
+                }
+                for (std::size_t n = static_cast<std::size_t>(CommonSound::Count);
+                     index == logic.sounds.size() && n < logic.sounds.size(); ++n)
+                {
+                    if (logic.sounds[n] == path && !logic.soundLoops[n])
+                        index = n;
+                }
+                if (index == logic.sounds.size())
+                {
+                    if (index >= 1000)
+                        continue; // (the console numbers its sounds below that)
+                    logic.sounds.push_back(path);
+                    logic.soundLoops.push_back(false);
+                }
+                ModelSound record{};
+                record.hash = nameHash(path.c_str());
+                record.sound = static_cast<std::uint16_t>(index);
+                level.modelSounds.push_back(record);
+            }
+            std::sort(level.modelSounds.begin(), level.modelSounds.end(),
+                      [](const ModelSound &a, const ModelSound &b) { return a.hash < b.hash; });
             for (std::size_t n = 0; n < logic.sounds.size(); ++n)
             {
                 SoundRef ref{};
@@ -954,7 +1025,7 @@ namespace hlds
         level.planes = std::move(planes.planes);
         level.planeTypes = std::move(planes.types);
         // (Now that the planes are the level's: the walk test reads them.)
-        cookPathNodes(entities, level);
+        report.paths = cookPathNodes(entities, level, options.nodGraph);
         report.droppedPlanes = static_cast<int>(bsp.planes.size() - level.planes.size());
 
         cookEntities(entities, level);

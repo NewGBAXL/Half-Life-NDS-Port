@@ -37,7 +37,7 @@
 namespace hldata
 {
     inline constexpr char kModelMagic[4] = {'H', 'L', 'M', 'D'};
-    inline constexpr std::uint16_t kModelVersion = 4;
+    inline constexpr std::uint16_t kModelVersion = 5;
     /// A model comes at up to this many levels of detail: 0 the finest the
     /// file has, each after it of fewer triangles. A level's error is how
     /// far it is from the model as the game has it, in sixteenths of a
@@ -163,12 +163,19 @@ namespace hldata
         std::int16_t v[3];
     };
 
+    /// Something that happens as a clip passes a frame of it.
     struct ModelEvent
     {
         std::uint16_t frame;
-        std::uint16_t pad;
-        std::uint32_t target; ///< nameHash of a name to fire
+        std::uint16_t kind;   ///< kEvent*
+        /// kEventFire: nameHash of a name to fire. The other two: nameHash
+        /// of a sound's name as the game has it ("common/npc_step1.wav"),
+        /// which the level says how to find (Section::ModelSounds).
+        std::uint32_t target;
     };
+    inline constexpr std::uint16_t kEventFire = 0;  ///< the game's 1003: only in a scripted scene
+    inline constexpr std::uint16_t kEventSound = 1; ///< 1004, 5004: a sound from where the actor is
+    inline constexpr std::uint16_t kEventVoice = 2; ///< 1008: ... from its mouth
 
     /// A bone controller: something about a bone that the game sets, on top
     /// of what the clip being played has -- which way a turret's gun points,

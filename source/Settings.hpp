@@ -17,8 +17,8 @@ public:
     bool debugReadout = false;
     /// The stylus is in the left hand: the touch screen is mirrored.
     bool leftHanded = false;
-    /// The view bobs and leans with a walk.
-    bool viewBob = true;
+    /// The view bobs and leans with a walk (off unless asked for).
+    bool viewBob = false;
     /// The fog, and how much detail is given up for speed (HlFog.hpp).
     hldata::GraphicsSettings graphics;
 

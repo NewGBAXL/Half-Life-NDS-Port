@@ -12,6 +12,8 @@
 #include "HlLevelReader.hpp"
 #include "TestBspBuilder.hpp"
 #include "hlds/Cooker.hpp"
+#include "hlds/Materials.hpp"
+#include "HlMaterial.hpp"
 #include "hlds/GxStream.hpp"
 
 using namespace hlds;
@@ -35,7 +37,8 @@ namespace
         std::string error;
         CookedLevel level;
         CookOptions options;
-        options.lightGamma = gamma;
+        options.lightScale = gamma;
+        options.lightPower = 1.0;
         options.guardedMerges = guarded;
         c.ok = bsp.parse(buildBoxRoom(room), error) &&
                cookLevel(bsp, options, {}, level, c.report, error) &&
@@ -96,8 +99,7 @@ namespace
                       static_cast<std::uint16_t>(EntityClass::InfoPlayerStart) &&
                   v.entities[1].origin[2] == fxFromInt(40) && v.entities[1].angles[1] == 16384,
               "the player start: origin in Q12, yaw 90 degrees in turns");
-        check(std::string(v.entityText, v.entityTextSize).find("worldspawn") != std::string::npos,
-              "entity text kept");
+        check(v.entityTextSize == 0, "the level the console loads carries no entity text");
 
         // Every surface: decodes, is a quad on its plane, faces INTO the room
         // counter-clockwise, and carries its own wall's light.
@@ -151,7 +153,7 @@ namespace
             // 40 + 30 * face. Surfaces are re-ordered, so find it by value.
             const int grey = (q[0].colour & 31) << 3;
             const int face = (grey - 40 + 8) / 30; // 5-bit colour loses the low bits
-            check(face >= 0 && face < 6 && rgb555(40 + 30 * face, 40 + 30 * face, 40 + 30 * face) ==
+            check(face >= 0 && face < 6 && rgb555Near(40 + 30 * face, 40 + 30 * face, 40 + 30 * face) ==
                                                q[0].colour,
                   "vertex colour is one wall's grey in RGB555");
             if (face >= 0 && face < 6)
@@ -224,8 +226,52 @@ namespace
     }
 } // namespace
 
+/// What the floor is made of, from the game's list, found under the feet.
+void testMaterials()
+{
+    const MaterialBook book = parseMaterials("// a comment\n"
+                                             "M TESTWALL\n"
+                                             "G grate_under_twelve_letters\n"
+                                             "t TILEFLOOR\n"
+                                             "M tilefloor\n");
+    check(book.of("testwall") == Material::Metal && book.of("TestWall") == Material::Metal,
+          "a texture is found in the list whatever its case");
+    check(book.of("-0testwall") == Material::Metal && book.of("+Atestwall") == Material::Metal &&
+              book.of("{testwall") == Material::Metal && book.of("-0~testwall") == Material::Metal,
+          "... without the marks the game puts in front of a name");
+    check(book.of("grate_under_twelve") == Material::Grate && book.of("grate_under_") == Material::Grate,
+          "... by its first twelve letters");
+    check(book.of("tilefloor") == Material::Tile, "the first of two lines for a name stands");
+    check(book.of("something") == Material::Concrete, "what the list does not name is concrete");
+
+    Cooked c;
+    BspFile bsp;
+    std::string error;
+    CookedLevel level;
+    CookOptions options;
+    options.lightScale = 1.0;
+    options.lightPower = 1.0;
+    options.materials = &book;
+    c.ok = bsp.parse(buildBoxRoom(BoxRoom()), error) && cookLevel(bsp, options, {}, level, c.report, error) &&
+           writeLevel(level, c.bytes, error) &&
+           c.view.open(c.bytes.data(), static_cast<std::uint32_t>(c.bytes.size())) == LevelError::Ok;
+    check(c.ok && textureMaterial(c.view.textures[0].flags) == Material::Metal,
+          "a cooked texture carries what it is made of");
+    if (!c.ok)
+        return;
+    // Standing on the room's floor: metal underfoot; the same feet half
+    // way up the room have nothing near under them, which is concrete.
+    const int floor = c.view.header->mins[2], top = c.view.header->maxs[2];
+    const fx feet[3] = {fxFromInt(10), fxFromInt(-20), fxFromInt(floor)};
+    check(floorMaterial(c.view, feet, -1) == Material::Metal, "the floor under the feet is found, and what it is made of");
+    const fx air[3] = {fxFromInt(10), fxFromInt(-20), fxFromInt((floor + top) / 2)};
+    check(floorMaterial(c.view, air, -1) == Material::Concrete, "with no floor near under them, the plain step");
+    check(levelLeafAt(c.view, feet) >= 0, "(the feet are in a leaf)");
+}
+
 int main()
 {
+    testMaterials();
     testBoxRoom();
     testDroppedFaces();
     testTooLarge();

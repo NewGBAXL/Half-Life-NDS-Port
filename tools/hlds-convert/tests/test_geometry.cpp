@@ -346,7 +346,7 @@ namespace
         parseEntities(bsp.entities, ents, error);
 
         // Gamma 1 so that expected values are the lightmap's own.
-        const LightBake flatLight(bsp, ents, 1.0);
+        const LightBake flatLight(bsp, ents, 1.0, 1.0);
         const BspFace &wall = bsp.faces[0]; // the x = -128 wall; s is y, t is z
         const LightExtents e = flatLight.extents(wall);
         check(e.minS == -8 && e.width == 17 && e.minT == 0 && e.height == 9,
@@ -368,9 +368,12 @@ namespace
         check(flatLight.sample(wall, -120, 0).r == 5, "half way between two samples");
         check(flatLight.sample(wall, -500, -500).r == 0, "outside the lightmap clamps");
 
-        const LightBake curved(bsp, ents, 1.8);
-        check(curved.sample(wall, 128, 128).r > 168, "gamma brightens mid tones");
-        check(curved.sample(wall, -128, 0).r == 0, "and leaves black black");
+        const LightBake scaled(bsp, ents);
+        // (168 of 255 to the power 0.8, a third stronger: 241.)
+        check(scaled.sample(wall, 128, 128).r == 241, "the game's curve: lifted, and a third stronger");
+        check(scaled.sample(wall, -120, 0).r == 14 && scaled.sample(wall, -128, 0).r == 0, "from black, which stays black");
+        const LightBake strong(bsp, ents, 2.0, 1.0);
+        check(strong.sample(wall, 128, 128).r == 255, "and no more than full");
 
         // A second layer on a switchable style: counted when the light starts
         // on, not when it starts off.
@@ -381,13 +384,13 @@ namespace
         bsp.lighting.insert(bsp.lighting.end(), layer, 100); // style 40
         styled.styles[1] = 40;
         parseEntities("{\"classname\" \"light\" \"style\" \"40\" \"spawnflags\" \"1\"}", ents, error);
-        check(LightBake(bsp, ents, 1.0).sample(styled, 0, 0).r == 20, "a light that starts off");
+        check(LightBake(bsp, ents, 1.0, 1.0).sample(styled, 0, 0).r == 20, "a light that starts off");
         parseEntities("{\"classname\" \"light\" \"style\" \"40\"}", ents, error);
-        check(LightBake(bsp, ents, 1.0).sample(styled, 0, 0).r == 120, "a light that starts on");
+        check(LightBake(bsp, ents, 1.0, 1.0).sample(styled, 0, 0).r == 120, "a light that starts on");
         parseEntities("{\"classname\" \"light\" \"style\" \"40\" \"spawnflags\" \"1\"}"
                       "{\"classname\" \"light_spot\" \"style\" \"40\"}",
                       ents, error);
-        check(LightBake(bsp, ents, 1.0).sample(styled, 0, 0).r == 120,
+        check(LightBake(bsp, ents, 1.0, 1.0).sample(styled, 0, 0).r == 120,
               "a style shared with a lit light is on");
 
         styled.lightOfs = -1;

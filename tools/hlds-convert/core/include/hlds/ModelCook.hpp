@@ -58,6 +58,10 @@ namespace hlds
         std::vector<hldata::ModelTrack> tracks;
         std::vector<hldata::ModelKey> keys;
         std::vector<hldata::ModelEvent> events;
+        /// The sounds its kept clips make (the game's names, lower-case,
+        /// without the mark in front that says how to stream them): not
+        /// written with the model -- the level says where each is.
+        std::vector<std::string> eventSounds;
         std::vector<hldata::ModelController> controllers;
         std::vector<hldata::ModelControlAxis> controlAxes;
         std::vector<hldata::ModelHitbox> hitboxes;
@@ -99,6 +103,9 @@ namespace hlds
     /// smallest is 32 x 32).
     /// `full`: with the model as the game has it as its finest level, above
     /// the thinned ones (where it was thinned at all) -- a DSi's file.
+    /// A sound's name as an event has it, as the level knows it.
+    std::string eventSoundName(std::string path);
+
     bool cookModel(const MdlFile &mdl, const std::vector<std::string> &clipNames, CookedModel &out,
                    ModelCookReport &report, std::string &error, int skinTexels = kModelSkinTexels,
                    bool full = false);

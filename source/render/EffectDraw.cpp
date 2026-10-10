@@ -1,3 +1,4 @@
+#include "render/ModelDraw.hpp"
 #include "render/EffectDraw.hpp"
 
 #include <nds.h>
@@ -404,7 +405,8 @@ namespace hlrt
     /// nearer, the heavier the frame is.
     bool EffectDraw::pieceSeen(const Piece &piece) const
     {
-        const int pressure = worldDraw.pressure();
+        // (An enemy that had to be made room for counts as a step more.)
+        const int pressure = worldDraw.pressure() + (modelDraw.strained() ? 1 : 0);
         if (piece.kind == kPieceSpeck && pressure > 0)
             return false;
         const std::int32_t d[3] = {fxToInt(piece.pos[0] - camera.pos[0]), fxToInt(piece.pos[1] - camera.pos[1]),
@@ -582,13 +584,41 @@ namespace hlrt
         // No more of them than this much of the screen between them (in
         // pixels, about a quarter of it): see-through things one on
         // another are what the hardware runs out of time on.
-        constexpr int kMostArea = 12000;
+        // (Half of both when an enemy has had to be made room for this
+        // frame: the stains give way before it does.)
+        const int tight = modelDraw.strained() ? 1 : 0;
+        const int kMostArea = (isDSiMode() ? 22000 : 14000) >> tight;
+        const int most = (isDSiMode() ? kDecalPolygons : kDecalPolygons / 2) >> tight;
         const BrushState *brushes = game.brushStates();
         int drawn = 0, area = 0;
         bool bound = false;
-        for (Decal &decal : a.decals)
+        // The nearest first: when not all of them are drawn, it is the far
+        // ones that are not.
+        std::uint8_t order[kMaxDecals];
+        std::int32_t away[kMaxDecals];
+        int listed = 0;
+        for (int i = 0; i < kMaxDecals; ++i)
         {
-            if (!decal.active || drawn >= (isDSiMode() ? kDecalPolygons : kDecalPolygons / 2) || area > kMostArea)
+            const Decal &one = a.decals[i];
+            if (!one.active)
+                continue;
+            const std::int32_t dx = fxToInt(one.at[0] - camera.pos[0]), dy = fxToInt(one.at[1] - camera.pos[1]),
+                               dz = fxToInt(one.at[2] - camera.pos[2]);
+            const std::int32_t far = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) + (dz < 0 ? -dz : dz);
+            int at = listed++;
+            while (at > 0 && away[at - 1] > far)
+            {
+                order[at] = order[at - 1];
+                away[at] = away[at - 1];
+                --at;
+            }
+            order[at] = static_cast<std::uint8_t>(i);
+            away[at] = far;
+        }
+        for (int next = 0; next < listed; ++next)
+        {
+            Decal &decal = a.decals[order[next]];
+            if (!decal.active || drawn >= most || area > kMostArea)
                 continue;
             fx at[3] = {decal.at[0], decal.at[1], decal.at[2]};
             if (decal.brush >= 0)
@@ -902,8 +932,13 @@ namespace hlrt
             break;
         case kEffectBlood:
             if (const SpriteRef *ref =
-                    sprite(CommonSprite::Blood, 31, effect.size ? RGB15(24, 26, 4) : RGB15(22, 2, 2)))
-                picture(*ref, (ref->frames * gone) / 32, effect.a, camera.right, camera.up, 10, 10);
+                    sprite(CommonSprite::Blood, 31, effect.size ? RGB15(24, 26, 4) : RGB15(31, 3, 3)))
+            {
+                // (The red a little larger: the sprite is grey, and red
+                // through grey is a third as bright as yellow through it.)
+                const int half = effect.size ? 10 : 13;
+                picture(*ref, (ref->frames * gone) / 32, effect.a, camera.right, camera.up, half, half);
+            }
             break;
         case kEffectSprite:
             if (const SpriteRef *ref = sprite(effect.sprite, 31, effect.colour))

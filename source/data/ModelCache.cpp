@@ -64,7 +64,7 @@ namespace hlrt
                 materials_[i] != nullptr)
                 continue;
             const std::string skin =
-                global.dataPath("mdl/") +
+                global.mapPath("mdl/") +
                 hldata::modelSkinFile(level.view.modelRefs[i].name, views_[i].header->atlasWidth,
                                       views_[i].header->atlasHeight);
             if (!TextureCache::loadFile(skin.c_str(), false, views_[i].header->atlasWidth,
@@ -73,7 +73,7 @@ namespace hlrt
         }
     }
 
-    bool ModelCache::create(const char *map)
+    bool ModelCache::create()
     {
         destroy();
         const int count = static_cast<int>(level.view.modelRefCount);
@@ -91,12 +91,12 @@ namespace hlrt
         {
             new (&views_[i]) hldata::ModelView();
             const char *name = level.view.modelRefs[i].name;
-            const std::string path = global.dataPath("mdl/") + map + "/" + name + ".hmd";
+            const std::string path = global.mapPath("mdl/") + name + ".hmd";
             // A DSi has the memory for the file with the game's own mesh as
             // its finest level, where the converter made one.
             std::FILE *file = nullptr;
             if (global.isDSi)
-                file = std::fopen((global.dataPath("mdl/") + map + "/" + name + ".dsi.hmd").c_str(), "rb");
+                file = std::fopen((global.mapPath("mdl/") + name + ".dsi.hmd").c_str(), "rb");
             if (file == nullptr)
                 file = std::fopen(path.c_str(), "rb");
             if (file == nullptr)

@@ -23,12 +23,22 @@ namespace hlrt
             pixels[i] |= 0x8000;
     }
 
+    // What is written on the screen (TopText's sprites) is in the capture
+    // already: left on as well, it would be there twice, and twice as
+    // bright.
+    void FrameFreeze::hideSprites()
+    {
+        sprites_ = REG_DISPCNT & DISPLAY_SPR_ACTIVE;
+        REG_DISPCNT &= ~DISPLAY_SPR_ACTIVE;
+    }
+
     bool FrameFreeze::freeze()
     {
         if (frozen_)
             return true;
         frozen_ = true;
         layered_ = false;
+        sprites_ = 0;
         if (global.video == Global::Video::TwoPassDma)
             return true; // (what is shown is a finished picture already)
 
@@ -72,6 +82,7 @@ namespace hlrt
             }
             REG_BG0CNT = (REG_BG0CNT & ~3) | BG_PRIORITY(1);
             REG_BG2CNT = (REG_BG2CNT & ~3) | BG_PRIORITY(0);
+            hideSprites();
             return true; // (the next pass drawn sets all of this again)
         }
 
@@ -80,8 +91,8 @@ namespace hlrt
         vramSetBankD(VRAM_D_LCD);
         capture(3);
 
-        // Shown as a layer in front of the 3D one, which is left as it is
-        // behind it.
+        // Shown as a layer in place of the 3D one, which is switched off
+        // behind it: what it would draw is about to lose its textures.
         savedControl_ = REG_DISPCNT;
         savedBg0_ = REG_BG0CNT;
         vramSetBankD(VRAM_D_MAIN_BG_0x06000000);
@@ -93,7 +104,8 @@ namespace hlrt
         REG_BG2X = 0;
         REG_BG2Y = 0;
         REG_BG0CNT = (savedBg0_ & ~3) | BG_PRIORITY(1);
-        REG_DISPCNT = (savedControl_ & ~7ul) | 5ul | DISPLAY_BG2_ACTIVE;
+        REG_DISPCNT = ((savedControl_ & ~7ul) | 5ul | DISPLAY_BG2_ACTIVE) &
+                      ~static_cast<unsigned long>(DISPLAY_BG0_ACTIVE | DISPLAY_SPR_ACTIVE);
         layered_ = true;
         return true;
     }
@@ -103,6 +115,8 @@ namespace hlrt
         if (!frozen_)
             return;
         frozen_ = false;
+        REG_DISPCNT |= sprites_;
+        sprites_ = 0;
         if (!layered_)
             return;
         layered_ = false;

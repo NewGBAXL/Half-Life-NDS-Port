@@ -30,7 +30,7 @@
 namespace hldata
 {
     inline constexpr char kTextureMagic[4] = {'H', 'L', 'T', 'X'};
-    inline constexpr std::uint16_t kTextureVersion = 2;
+    inline constexpr std::uint16_t kTextureVersion = 3;
 
     // TextureHeader::flags, and TextureRef::flags in a level.
     inline constexpr std::uint32_t kTextureColourKey = 1; ///< cooked from a '{' texture
@@ -43,6 +43,61 @@ namespace hldata
     /// A conveyor's belt: its coordinates go through the texture matrix
     /// too, which slides them along at the belt's speed.
     inline constexpr std::uint32_t kTextureScroll = 16;
+    /// What it is made of, for how a step on it sounds: bits 8..11 hold a
+    /// Material (the game's sound/materials.txt, by the texture's name).
+    inline constexpr int kTextureMaterialShift = 8;
+    inline constexpr std::uint32_t kTextureMaterialMask = 0xFu << kTextureMaterialShift;
+    enum class Material : std::uint8_t
+    {
+        Concrete, ///< and whatever the game's list does not name
+        Metal,
+        Dirt,
+        Vent,
+        Grate,
+        Tile,
+        Slosh,
+        Wood,     ///< (these three sound as concrete underfoot, as in the game)
+        Computer,
+        Glass,
+        Count
+    };
+    inline Material textureMaterial(std::uint32_t flags)
+    {
+        const std::uint32_t m = (flags & kTextureMaterialMask) >> kTextureMaterialShift;
+        return m < static_cast<std::uint32_t>(Material::Count) ? static_cast<Material>(m) : Material::Concrete;
+    }
+    /// The letter the game's list has for each, and back.
+    inline Material materialOfLetter(char letter)
+    {
+        switch (letter)
+        {
+        case 'M': return Material::Metal;
+        case 'D': return Material::Dirt;
+        case 'V': return Material::Vent;
+        case 'G': return Material::Grate;
+        case 'T': return Material::Tile;
+        case 'S': return Material::Slosh;
+        case 'W': return Material::Wood;
+        case 'P': return Material::Computer;
+        case 'Y': return Material::Glass;
+        default:  return Material::Concrete;
+        }
+    }
+    /// A texture's name as the game looks it up in its list: without the
+    /// two characters of a "-0" or "+0" in front, without one of { ! ~ or a
+    /// space after that, twelve characters at most, in lower case. `out`
+    /// holds 13.
+    inline void materialKey(const char *name, char *out)
+    {
+        if (name[0] == '-' || name[0] == '+')
+            name += name[1] != '\0' ? 2 : 1;
+        if (name[0] == '{' || name[0] == '!' || name[0] == '~' || name[0] == ' ')
+            ++name;
+        int n = 0;
+        for (; n < 12 && name[n] != '\0'; ++n)
+            out[n] = name[n] >= 'A' && name[n] <= 'Z' ? static_cast<char>(name[n] + 32) : name[n];
+        out[n] = '\0';
+    }
     inline constexpr int kSkySide = 128; ///< texels along each side of a sky picture
     inline constexpr int kA3I5Colours = 32;
 

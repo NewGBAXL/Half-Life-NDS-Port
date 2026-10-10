@@ -468,7 +468,7 @@ namespace hlrt
             facing = (back ? facing : -facing) >> 12; // Q12: 4096 met head-on
             if (facing <= 0)
                 return true;
-            if (polygons + surface.polygons > HudDraw::kLampPolygons ||
+            if (polygons + surface.polygons > (HudDraw::kLampPolygons >> (modelDraw.strained() ? 1 : 0)) ||
                 stats_.polygons + surface.polygons > polygonBudget() ||
                 stats_.vertices + surface.vertices > vertexBudget())
                 return false;
@@ -478,8 +478,10 @@ namespace hlrt
             alpha = alpha < 1 ? 1 : (alpha > 30 ? 30 : alpha);
             NEA_PolyFormat(alpha, kLampId, static_cast<NEA_LightEnum>(0), kCull,
                            static_cast<NEA_OtherFormatEnum>(static_cast<int>(polygonMode()) | kDepthEqual));
+            // In the wall's own colour at full light, not in a colour of
+            // the lamp's: what is seen is the wall, brighter.
             lampStream(view.gxStream + surface.gxOfs, surface.gxWords, texCoord,
-                       [](std::uint32_t word) { GFX_FIFO = word; });
+                       [](std::uint32_t word) { GFX_FIFO = word; }, textureCache.tint(surface.texture));
             polygons += surface.polygons;
             stats_.polygons += surface.polygons;
             stats_.vertices += surface.vertices;

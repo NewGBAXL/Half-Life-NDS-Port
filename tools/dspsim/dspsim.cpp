@@ -106,7 +106,7 @@ namespace
 
     /// A stereo tune as the music ring holds it: blocks, each a mark, the
     /// decoders' states at its start, and its samples.
-    std::vector<uint16_t> makeMusic(int blocks)
+    std::vector<uint16_t> makeMusic(int blocks, double loud = 9000.0)
     {
         std::vector<uint16_t> words;
         hlDspInit();
@@ -126,7 +126,7 @@ namespace
                     for (int c = 0; c < 2; c++)
                     {
                         const double hz = c == 0 ? 440.0 : 660.0;
-                        const int want = (int)std::lround(std::sin(at * 2.0 * M_PI * hz / 23802.0) * 9000.0);
+                        const int want = (int)std::lround(std::sin(at * 2.0 * M_PI * hz / 23802.0) * loud);
                         const int step = hlStepTable[hlIndex[c]];
                         int delta = want - hlValue[c], code = 0;
                         if (delta < 0)
@@ -229,15 +229,21 @@ int main(int argc, char **argv)
     std::printf("dspsim: ping answered; music ring at %04X, echo ring at %04X\n", musicAt, sendAt);
 
     // The scene. A hall; a burst of noise to echo in it; then a tune.
-    const uint16_t feedback = 27000, room2 = (uint16_t)((40 << 8) | 100);
+    // (DSPSIM_SCENE=loud: everything as loud as it goes, a room that hardly
+    // dies away -- so that what holds a sum within sixteen bits is gone
+    // through, which a quiet scene never reaches.)
+    const char *scene = std::getenv("DSPSIM_SCENE");
+    const bool loudScene = scene != nullptr && std::string(scene) == "loud";
+    const uint16_t feedback = loudScene ? 32600 : 27000;
+    const uint16_t room2 = loudScene ? (uint16_t)((10 << 8) | 255) : (uint16_t)((40 << 8) | 100);
     std::vector<int16_t> burst(600);
     uint32_t seed = 99;
     for (int16_t &s : burst)
     {
         seed = seed * 1664525u + 1013904223u;
-        s = (int16_t)((int)(seed >> 17) - 16384);
+        s = loudScene ? (int16_t)((seed >> 16) & 1 ? 32767 : -32768) : (int16_t)((int)(seed >> 17) - 16384);
     }
-    const std::vector<uint16_t> music = makeMusic(3); // three blocks: 3087 words
+    const std::vector<uint16_t> music = makeMusic(3, loudScene ? 31000.0 : 9000.0); // three blocks: 3087 words
 
     uint16_t roomTick, sendTick, musicTick;
     command(HL_DSP_CMD_ROOM, feedback, room2, roomTick);
@@ -376,6 +382,82 @@ int main(int argc, char **argv)
                 "%ld the same, %ld different; loudest %d\n",
                 same + differ, a, b, same, differ, loudest);
     (void)perTick;
+    // The commands that ask: the loudest sample sent to echo is the
+    // model's; nothing is called wrong; and a block of music that does not
+    // begin with its mark is -- the music stopped, and said to be.
+    {
+        uint16_t ignored;
+        const uint16_t heardMost = command(HL_DSP_CMD_HEARD, 0, 0, ignored);
+        const uint16_t again = command(HL_DSP_CMD_HEARD, 0, 0, ignored);
+        const uint16_t well = command(HL_DSP_CMD_STATUS, 0, 0, ignored);
+        t.DataWrite(musicAt, 0x1234, true);
+        command(HL_DSP_CMD_MUSIC_START, 64, 0, ignored);
+        run(400000);
+        const uint16_t ill = command(HL_DSP_CMD_STATUS, 0, 0, ignored);
+        // (Stopped: the program's own word for it, read out of its memory.)
+        const int onAt = symbol("hlMusicOn");
+        const bool silent = onAt < 0 || t.DataRead((uint16_t)onAt, true) == 0;
+        command(HL_DSP_CMD_MUSIC_STOP, 0, 0, ignored);
+        std::printf("dspsim: loudest sent to echo %u (model %u), then %u; status %04X, after a bad block %04X%s\n", heardMost,
+                    hlHeard, again, well, ill, silent ? "" : ", and the music NOT stopped");
+        if (heardMost != hlHeard || again != 0 || (well & HL_DSP_FAULT) != 0 || (ill & HL_DSP_FAULT) == 0 ||
+            !silent)
+        {
+            std::printf("dspsim: FAIL: the commands' answers\n");
+            return 1;
+        }
+    }
+    // How much of the processor the program uses, with everything going: a
+    // tune and a room with something echoing in it. The main loop works a
+    // pair out whenever the ring to the speakers has room for one, and only
+    // then: so it is at work exactly while that ring is not full, which is
+    // looked at after every step. (A step is what teakra counts: one
+    // instruction, near enough -- the chip's own cycles are not modelled.
+    // It is a measure to hold one program against another, and against the
+    // 2815 or so steps there are to a pair.)
+    {
+        const int readAt = symbol("hlOutRead"), writeAt = symbol("hlOutWrite");
+        uint16_t ignored;
+        command(HL_DSP_CMD_ROOM, feedback, room2, ignored);
+        for (size_t i = 0; i < burst.size(); i++)
+            t.DataWrite((uint16_t)(sendAt + i), (uint16_t)burst[i], true);
+        command(HL_DSP_CMD_SEND_FED, 0, 0, ignored); // (once round: all of the ring is to echo)
+        for (size_t i = 0; i < music.size(); i++)
+            t.DataWrite((uint16_t)(musicAt + i), music[i], true);
+        if (tune)
+            command(HL_DSP_CMD_MUSIC_START, (uint16_t)music.size(), 0, ignored);
+        run(200000);
+        if (readAt >= 0 && writeAt >= 0)
+        {
+            const size_t pairsBefore = heard.size() / 2;
+            const unsigned steps = 3000000;
+            unsigned busy = 0;
+            for (unsigned n = 0; n < steps; n++)
+            {
+                run(1);
+                const uint16_t read = t.DataRead((uint16_t)readAt, true), write = t.DataRead((uint16_t)writeAt, true);
+                uint16_t next = (uint16_t)(write + 2);
+                if (next >= HL_DSP_OUT_WORDS)
+                    next = 0;
+                busy += next != read ? 1 : 0;
+            }
+            const size_t pairs = heard.size() / 2 - pairsBefore;
+            const double load = 100.0 * busy / steps;
+            std::printf("dspsim: load %.1f%% -- %.0f steps a pair at work, of %.0f between two pairs\n", load,
+                        pairs ? (double)busy / pairs : 0.0, pairs ? (double)steps / pairs : 0.0);
+            // (DSPSIM_BUDGET=<percent>: more than this is a failure.)
+            const char *budget = std::getenv("DSPSIM_BUDGET");
+            if (budget != nullptr && load > std::atof(budget))
+            {
+                std::printf("dspsim: FAIL: over the budget of %s%%\n", budget);
+                return 1;
+            }
+        }
+        else
+        {
+            std::printf("dspsim: load not measured (the program has no hlOutRead/hlOutWrite)\n");
+        }
+    }
     std::printf("dspsim: commands took effect before ticks %u (room), %u (echo), %u (music)\n", roomTick, sendTick, musicTick);
     if (differ != 0)
     {

@@ -51,7 +51,7 @@ namespace hlrt
             if (ref.frames == 0)
                 continue;
             const std::string path =
-                global.dataPath("spr/") + hldata::spriteFile(ref.name, ref.width, ref.height);
+                global.mapPath("spr/") + hldata::spriteFile(ref.name, ref.width, ref.height);
             TextureCache::loadFile(path.c_str(), false, ref.width, ref.height, 1, materials_[i], palettes_[i]);
         }
         return true;

@@ -159,7 +159,8 @@ namespace
         const CookedSound loop = encodeSound(wav, 11025, true);
         check(loop.loopWord == (4 + 4000 / 2) / 4 && loop.samples % 8 == 0, "a loop starts at its cue point");
         wav.loopStart = -1;
-        check(encodeSound(wav, 11025, true).loopWord == 1, "... or at its start, if it has none");
+        check(encodeSound(wav, 11025, true).loopWord == hldata::kSoundNoLoop,
+              "... and does not go round at all if it has none: it is played through, as the game plays it");
 
         // The file round trip, and a damaged file.
         const std::vector<std::uint8_t> file = packSound(loop, 1234);
@@ -369,9 +370,36 @@ namespace
         check(gm != nullptr && gm->words.size() == 2 && gm->words[1] == "scientist/c1a0_sci_gm.wav",
               "the folder said with the first word holds for the line");
         const Sentence *hello = book.find("HELLO");
-        check(hello != nullptr && hello->words.size() == 5 && hello->words[0] == "vox/hello.wav" &&
-                  hello->words[2] == "vox/is.wav" && hello->words[4] == "vox/test.wav",
-              "the announcer's words: no folder, brackets and commas dropped");
+        check(hello != nullptr && hello->words.size() == 7 && hello->words[0] == "vox/hello.wav" &&
+                  hello->words[1] == "vox/_comma.wav" && hello->words[3] == "vox/is.wav" &&
+                  hello->words[5] == "vox/test.wav" && hello->words[6] == "vox/_period.wav",
+              "the announcer's words: no folder, and its commas and full stops are pauses");
+        check(hello != nullptr && hello->said.size() == 7 && hello->said[2].end == 95 && hello->said[2].pitch == 100 &&
+                  hello->said[3].pitch == 120 && hello->said[4].pitch == 100,
+              "a word's own marks are its own: cut short, said higher, and the next word as it was");
+        // The game's own lines, as they are written.
+        const SentenceBook real = parseSentences(
+            "HG_GREN3 hgrunt/(p110 t40) clik(p120) get!(e78) down!(t30) clik\n"
+            "HEV_MED0 fvox/(p140) boop, boop, boop, (p100) innsufficient_medical\n"
+            "FAR_WAR11 ambience/(v60) distantmortar1 distantmortar1, distantmortar2\n"
+            "HG_GREN0 hgrunt/clik(p120) grenade! clik\n"
+            "SC_X scientist/hello, there\n");
+        const Sentence *gren = real.find("HG_GREN3");
+        check(gren != nullptr && gren->words.size() == 4 && gren->words[0] == "hgrunt/clik.wav" &&
+                  gren->words[1] == "hgrunt/get!.wav" && gren->said[0].pitch == 120 && gren->said[1].pitch == 110 &&
+                  gren->said[1].end == 78 && gren->said[3].pitch == 110,
+              "brackets by themselves hold for the words after; a word's own override them for it alone");
+        const Sentence *med = real.find("HEV_MED0");
+        check(med != nullptr && med->words.size() == 7 && med->said[0].pitch == 140 && med->said[4].pitch == 140 &&
+                  med->said[6].pitch == 100 && med->words[1] == "fvox/_comma.wav",
+              "the standing pitch changes part of the way through a line");
+        const Sentence *war = real.find("FAR_WAR11");
+        check(war != nullptr && war->said[0].volume == 60 && war->said.back().volume == 60, "volume holds likewise");
+        const Sentence *gren0 = real.find("HG_GREN0");
+        check(gren0 != nullptr && gren0->said[0].pitch == 120 && gren0->said[1].pitch == 100,
+              "one word's pitch is not the line's");
+        const Sentence *sci = real.find("SC_X");
+        check(sci != nullptr && sci->words[1] == "scientist/_comma.wav", "a folder's own pause, where it has one");
         check(book.find("EMPTY") == nullptr && book.find("NOPE") == nullptr,
               "a line with no words is no line");
     }

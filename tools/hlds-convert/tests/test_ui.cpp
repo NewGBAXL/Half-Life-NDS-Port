@@ -203,7 +203,7 @@ namespace
         check(!readSettings(bytes.data(), bytes.size(), untouched) && untouched.volume[kVolumeMusic] == 8,
               "a volume out of range is not believed");
         bytes = writeSettings(SettingsData());
-        bytes[4] = 6; // (the version before this one)
+        bytes[4] = 7; // (the version before this one)
         check(!readSettings(bytes.data(), bytes.size(), untouched) && untouched.leftHanded == 0,
               "nor a file of the version before: the defaults stand");
         SettingsData left;
@@ -211,14 +211,19 @@ namespace
         bytes = writeSettings(left);
         check(readSettings(bytes.data(), bytes.size(), back) && back.leftHanded == 1 && SettingsData().leftHanded == 0,
               "which hand holds the stylus is kept: the right, unless it is said");
+        SettingsData bobbing;
+        bobbing.viewBob = 1;
+        bytes = writeSettings(bobbing);
+        check(SettingsData().viewBob == 0 && readSettings(bytes.data(), bytes.size(), back) && back.viewBob == 1,
+              "the view does not bob unless it is asked to, and the asking is kept");
     }
 
     /// The lamp's rules: the game's.
     void testLamp()
     {
         LampState lamp;
-        check(!lamp.on && lampPercent(lamp) == 100 && !lampToggle(lamp, false) && !lamp.on,
-              "the lamp starts out and full, and without the suit there is none to light");
+        check(!lamp.on && lampPercent(lamp) == 99 && !lampToggle(lamp, false) && !lamp.on,
+              "the lamp starts out with the game's 99, and without the suit there is none to light");
         check(lampToggle(lamp, true) && lamp.on, "with the suit it lights");
         int ms = 0;
         bool wentOut = false;
@@ -229,23 +234,31 @@ namespace
         }
         check(wentOut && !lamp.on && lampPercent(lamp) == 0 && ms > 110000 && ms < 130000,
               "alight it lasts about two minutes, and goes out by itself");
-        check(!lampToggle(lamp, true) && !lamp.on, "with nothing in it, it will not light");
+        check(lampToggle(lamp, true) && lamp.on && lampTick(lamp, 33) && !lamp.on,
+              "with nothing in it, it lights as the game's does -- and is out again at once");
         for (ms = 0; ms < 1000; ms += 33)
             lampTick(lamp, 33);
         check(lampToggle(lamp, true) && lamp.on && lampToggle(lamp, true) && !lamp.on,
-              "a second later there is enough to light it; the switch puts it out as well");
+              "a second later there is something in it; the switch puts it out as well");
         for (ms = 0; lampPercent(lamp) < 100 && ms < 60000; ms += 33)
             lampTick(lamp, 33);
         check(ms > 15000 && ms < 25000 && lampPercent(lamp) == 100, "out, it is full again in about twenty seconds");
-        // The light where it lands: wider and fainter the farther off,
-        // nothing at its reach.
-        check(lampRadius(60) < lampRadius(500) && lampStrength(60) > lampStrength(500) && lampStrength(500) >= 1 &&
-                  lampStrength(0) <= 31 && lampStrength(kLampReach) == 0,
-              "the lamp's light is wider and fainter the farther off it lands, and ends at its reach");
+        // The light where it lands: the game's -- the same size however far
+        // off, as bright as it gets out to five hundred units, fainter
+        // beyond, nothing past its reach.
+        check(lampRadius(60) == kLampRadius && lampRadius(1500) == kLampRadius && kLampRadius == 80,
+              "the lamp's light is eighty units across its half at any distance");
+        check(lampStrength(60) == lampStrength(500) && lampStrength(1000) < lampStrength(500) &&
+                  lampStrength(1000) * 3 <= lampStrength(500) && lampStrength(1900) >= 1 && lampStrength(kLampReach) == 0,
+              "as bright at five hundred units as at sixty, a quarter of that at a thousand, nothing at its reach");
+        check(lampOn(200, 0, 200) > lampOn(200, 40, 200) && lampOn(200, 40, 200) > 0 && lampOn(200, 80, 200) == 0 &&
+                  lampOn(100, 0, 200) == 0 && lampOn(150, 0, 200) > 0,
+              "on whoever stands in it: by how near its middle, and not at all outside it");
         // The beam: along +X from the origin, a hundred units long.
         LampBeam beam;
         beam.axis[0] = beam.u[1] = beam.v[2] = kFxOne;
         beam.radius = 30;
+        beam.near = 0;
         beam.reach = 100;
         const std::int32_t inIt[3] = {50, 10, 0}, beside[3] = {50, 60, 0}, big[3] = {50, 60, 0}, behind[3] = {-40, 0, 0},
                            beyond[3] = {150, 0, 0};
@@ -288,9 +301,10 @@ namespace
                       out[4] == 0x00100020 && out[5] == 0x0030 && out[6] == stream[6] && out[7] == 0x0ABCDEF0,
                   "the light's pass sends a surface's vertices as they are, white, with the projection's coordinate");
         }
-        check(lampOn(100, 0) > lampOn(400, 0) && lampOn(100, 0) > lampOn(100, 30) && lampOn(100, 200) == 0 &&
-                  lampOn(-10, 0) == 0 && lampOn(kLampReach + 1, 0) == 0 && lampOn(60, 0) <= 31,
-              "what stands in the beam is lit by how near it is, and how near the beam's middle");
+        check(lampOn(100, 0, 100) > lampOn(1200, 0, 1200) && lampOn(100, 0, 100) > lampOn(100, 30, 100) &&
+                  lampOn(100, 200, 100) == 0 && lampOn(-10, 0, 100) == 0 && lampOn(kLampReach + 1, 0, kLampReach + 1) == 0 &&
+                  lampOn(60, 0, 60) <= 31,
+              "what the view meets is lit where it stands: less far off, less away from the light's middle");
     }
 
     /// The player's say about the picture (HlFog.hpp): kept, checked, and

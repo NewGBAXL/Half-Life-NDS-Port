@@ -134,9 +134,10 @@ namespace hldata
     // pictures say how dark each pixel is: here that is how solid, and the
     // colour is whatever the mark is drawn in.
 
-    inline constexpr int kDecalAtlasSize = 64;
-    inline constexpr int kDecalCell = 16;
-    inline constexpr const char *kDecalAtlasFile = "ui/decals.64x64.htx";
+    inline constexpr int kDecalAtlasWidth = 256;
+    inline constexpr int kDecalAtlasSize = 64; ///< its height
+    inline constexpr int kDecalCell = 32;
+    inline constexpr const char *kDecalAtlasFile = "ui/decals.256x64.htx";
     inline constexpr std::uint8_t kDecalShot = 0;    ///< ... and the three after: a bullet's hole
     inline constexpr std::uint8_t kDecalShots = 4;
     inline constexpr std::uint8_t kDecalDent = 4;    ///< a blow's
@@ -144,23 +145,43 @@ namespace hldata
     inline constexpr std::uint8_t kDecalBloods = 3;
     inline constexpr std::uint8_t kDecalAlien = 8;   ///< an alien's blood (and 13)
     inline constexpr std::uint8_t kDecalCrack = 9;   ///< glass, shot and not yet broken
+    inline constexpr std::uint8_t kDecalScorch = 10; ///< a blast's
     inline constexpr std::uint8_t kDecalSpit = 12;
     inline constexpr std::uint8_t kDecalAlien2 = 13;
-    inline constexpr std::uint8_t kDecalScorch = 10; ///< four cells: a blast's
-    inline constexpr std::uint8_t kDecalCount = 16;
-    /// Where a mark's picture is in the texture.
+    /// More of the game's, as the maps' own marks need them: a hand's
+    /// print, two pools, two more splashes, and what a wall looks like
+    /// cracked and dented.
+    inline constexpr std::uint8_t kDecalHand = 16;
+    inline constexpr std::uint8_t kDecalPool = 17;   ///< ... and the one after
+    inline constexpr std::uint8_t kDecalSplash = 19; ///< {blood6
+    inline constexpr std::uint8_t kDecalSplash2 = 20; ///< {blood4
+    inline constexpr std::uint8_t kDecalWallCrack = 21;
+    inline constexpr std::uint8_t kDecalWallDent = 22;
+    inline constexpr std::uint8_t kDecalCount = 23;
+    /// Where a mark's picture is in the texture: sixteen cells of 32, the
+    /// first shared out among the five small ones (three holes -- the
+    /// fourth hole is the first again -- and the dent).
     inline constexpr UiRect decalRect(std::uint8_t which)
     {
-        if (which == kDecalScorch)
-            return UiRect{32, 32, 32, 32};
-        return UiRect{static_cast<std::uint8_t>((which & 3) * kDecalCell), static_cast<std::uint8_t>((which >> 2) * kDecalCell),
+        constexpr std::int8_t kCellOf[kDecalCount] = {-1, -2, -3, -1, -4, 2,  3,  4, 5, 7, 8, -1,
+                                                      1,  6,  -1, -1, 9,  10, 11, 12, 13, 14, 15};
+        const int cell = which < kDecalCount ? kCellOf[which] : -1;
+        if (cell < 0)
+        {
+            // (A quarter of the first cell.)
+            const int quarter = -cell - 1;
+            return UiRect{static_cast<std::uint8_t>((quarter & 1) * 16), static_cast<std::uint8_t>((quarter >> 1) * 16), 16,
+                          16};
+        }
+        return UiRect{static_cast<std::uint8_t>((cell & 7) * kDecalCell), static_cast<std::uint8_t>((cell >> 3) * kDecalCell),
                       kDecalCell, kDecalCell};
     }
     /// The game's name for each (in its decals.wad), for the converter;
-    /// null for the cells the scorch covers.
+    /// null for those that have no picture of their own.
     inline constexpr const char *const kDecalSources[kDecalCount] = {
-        "{shot1", "{shot2", "{shot3", "{shot4", "{bigshot1", "{blood1", "{blood2", "{blood3",
-        "{yblood1", "{break1", "{scorch1", nullptr, "{spit1", "{yblood2", nullptr, nullptr};
+        "{shot1",  "{shot2",     "{shot3",     nullptr,      "{bigshot1", "{blood1", "{blood2", "{blood3",
+        "{yblood1", "{break1",   "{scorch1",   nullptr,      "{spit1",    "{yblood2", nullptr,  nullptr,
+        "{bloodhand2", "{bigblood1", "{bigblood2", "{blood6", "{blood4",  "{crack2", "{dent1"};
 
     // ------------------------------------------------------------- weapon icons
     //

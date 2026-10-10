@@ -49,14 +49,15 @@ namespace hlds
         std::vector<hldata::ModelRef> modelRefs;
         std::vector<hldata::ActorRecord> actors;
         std::vector<hldata::PathNode> pathNodes;
-        std::vector<std::uint8_t> pathNext;
+        std::vector<hldata::PathLink> pathLinks;
         std::vector<hldata::SoundRef> sounds;
         std::vector<hldata::LogicSound> logicSounds;
         std::vector<hldata::SentenceRecord> sentences;
-        std::vector<std::uint16_t> sentenceWords;
+        std::vector<hldata::SentenceWord> sentenceWords;
         std::vector<hldata::RoomRecord> rooms;
         std::vector<std::uint16_t> speech;
         std::vector<hldata::MessageRecord> messages;
+        std::vector<hldata::ModelSound> modelSounds;
         std::vector<hldata::LightPatch> lightPatches;
         std::vector<hldata::SpriteRef> sprites;
         /// Not written: the game's path of each of `sprites`, and whether it

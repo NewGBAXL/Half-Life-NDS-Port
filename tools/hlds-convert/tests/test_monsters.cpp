@@ -753,43 +753,39 @@ namespace
         if (!game)
             return;
         const int n = static_cast<int>(game->view.pathNodeCount);
+        const ActorWorld &a = game->actors;
         int joined = 0, ways = 0;
-        for (int a = 0; a < n; ++a)
-        {
-            for (int b = 0; b < n; ++b)
-            {
-                if (a == b)
-                    continue;
-                const std::uint8_t next = game->view.pathNext[a * n + b];
-                ways += next != kNoPathNode;
-                joined += next == b;
-            }
-        }
-        std::printf("test_monsters: c1a1 has %d nodes, %d links, %d of %d pairs joined (%d bytes)\n",
-                    n, joined / 2, ways, n * (n - 1), n * n);
-        check(n >= 15, "c1a1's path nodes are cooked");
-        check(joined >= n, "... and joined to one another");
-        // Following the table from anywhere to anywhere it says there is a
+        // Following the search from anywhere to anywhere it says there is a
         // way gets there, by links only.
         bool arrives = true;
-        for (int a = 0; a < n && arrives; ++a)
+        for (int from = 0; from < n; ++from)
         {
-            for (int b = 0; b < n && arrives; ++b)
+            for (int to = 0; to < n; ++to)
             {
-                if (game->view.pathNext[a * n + b] == kNoPathNode)
+                if (from == to)
                     continue;
-                int at = a, hops = 0;
-                while (at != b && hops++ <= n)
+                const std::uint8_t next = pathStep(a, from, to, kPathLinkHuman, true);
+                ways += next != kNoPathNode;
+                joined += next == to && pathLinkBetween(a, from, to) >= 0;
+                if (next == kNoPathNode)
+                    continue;
+                int at = from, hops = 0;
+                while (at != to && hops++ <= n)
                 {
-                    const int next = game->view.pathNext[at * n + b];
-                    if (next == kNoPathNode || game->view.pathNext[at * n + next] != next)
+                    const int step = pathStep(a, at, to, kPathLinkHuman, true);
+                    if (step == kNoPathNode || pathLinkBetween(a, at, step) < 0)
                         break;
-                    at = next;
+                    at = step;
                 }
-                arrives = at == b;
+                arrives = arrives && at == to;
             }
         }
-        check(arrives, "... and the table's ways all arrive");
+        std::printf("test_monsters: c1a1 has %d nodes, %d links, %d of %d pairs joined (%d bytes)\n", n,
+                    static_cast<int>(game->view.pathLinkCount), ways, n * (n - 1),
+                    static_cast<int>(game->view.pathLinkCount * sizeof(PathLink)));
+        check(n >= 15, "c1a1's path nodes are cooked");
+        check(joined >= n, "... and joined to one another");
+        check(arrives, "... and the ways found all arrive");
     }
 
     void testHeadcrab(const char *dir, int vblanks)
@@ -899,9 +895,9 @@ namespace
             for (int b = 0; b < n && node < 0; ++b)
             {
                 int hops = 0, at = mine;
-                while (at != b && g.actors.next[at * n + b] != kNoPathNode && hops < n)
+                while (at != b && pathStep(g.actors, at, b, kPathLinkSmall, false) != kNoPathNode && hops < n)
                 {
-                    at = g.actors.next[at * n + b];
+                    at = pathStep(g.actors, at, b, kPathLinkSmall, false);
                     ++hops;
                 }
                 const fx eye[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(20)};
@@ -986,12 +982,18 @@ namespace
               "the zombie walks up and hits, for what a zombie's blow is worth");
         check(g.times(CommonSound::ZombieAttack) >= 1 && g.times(CommonSound::ClawStrike) >= 1,
               "... and its swing and its blow are heard");
-        // The crowbar: five blows of ten for its fifty.
+        // The crowbar, with the button held: a whole blow of ten and then
+        // halves, as the game has it -- nine for its fifty; and the hand's
+        // two swings that land turn about.
         g.player.health = 100;
         g.player.inv.have = 1u << kWeaponCrowbar;
         g.player.inv.current = kWeaponCrowbar;
         WeaponState weapon;
-        int blows = 0;
+        int blows = 0, swings = 0;
+        bool turnAbout = true;
+        std::string lastClip;
+        g.drain();
+        std::fill(g.timesHeard.begin(), g.timesHeard.end(), 0);
         for (int n = 0; n < 900 && actor.ai < kAiDying; ++n)
         {
             tick(g, 2);
@@ -1008,9 +1010,93 @@ namespace
             const fx right[3] = {to[1], -to[0], 0}, up[3] = {0, 0, kFxOne};
             const std::uint32_t did =
                 weaponsTick(g.logic, g.player, weapon, eye, to, right, up, true, false, 33);
-            blows += (did & kWeaponHit) ? 1 : 0;
+            if (did & kWeaponHit)
+            {
+                ++blows;
+                const std::string clip = weapon.anim != nullptr ? weapon.anim : "";
+                turnAbout = turnAbout && (clip == "attack2hit" || clip == "attack3hit") && clip != lastClip;
+                lastClip = clip;
+            }
+            if (did & kWeaponFired)
+                ++swings;
+            weapon.anim = nullptr;
         }
-        check(actor.ai >= kAiDying && blows == 5, "five blows of the crowbar kill it");
+        g.drain();
+        check(actor.ai >= kAiDying && blows == 9, "a whole blow of the crowbar and eight halves kill it");
+        check(turnAbout, "... the hand swinging one way and the other, turn about");
+        check(g.times(CommonSound::CrowbarMiss) == swings && swings >= blows,
+              "every swing is heard through the air, whether it lands or not");
+        check(g.times(CommonSound::CrowbarFlesh) + g.times(CommonSound::CrowbarFlesh2) + g.times(CommonSound::CrowbarFlesh3) == blows &&
+                  g.times(CommonSound::CrowbarHit) + g.times(CommonSound::CrowbarHit2) == 0,
+              "and a blow on flesh sounds of flesh, not of metal");
+        // Swung at the air (straight up, in a room): the three swings in
+        // turn, half a second apart, and nothing hit.
+        {
+            WeaponState air;
+            const fx eye[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2] + g.player.viewHeight};
+            const fx skyward[3] = {0, 0, kFxOne}, right[3] = {kFxOne, 0, 0}, up[3] = {0, -kFxOne, 0};
+            std::string order;
+            int landed = 0, between = 0, last = -1;
+            for (int n = 0; n < 60; ++n)
+            {
+                const std::uint32_t did = weaponsTick(g.logic, g.player, air, eye, skyward, right, up, true, false, 33);
+                landed += (did & kWeaponHit) ? 1 : 0;
+                if (did & kWeaponFired)
+                {
+                    order += std::string(air.anim != nullptr ? air.anim : "?") + " ";
+                    between = last < 0 ? between : n - last;
+                    last = n;
+                }
+                air.anim = nullptr;
+            }
+            check(order.rfind("attack1miss attack2 attack3 attack1miss ", 0) == 0,
+                  "at the air it is the three other swings, in turn");
+            check(landed == 0 && between >= 15 && between <= 17, "half a second apart");
+        }
+        // Swung at the floor from just above it: a blow on a wall is a
+        // blow that landed -- a quarter of a second, the ring of it and the
+        // sound of what the floor is made of -- and its dent is there a
+        // fifth of a second later, not at once.
+        {
+            WeaponState wall;
+            const fx low[3] = {g.player.origin[0], g.player.origin[1],
+                               g.player.origin[2] - kStandingFeet + fxFromInt(20)};
+            const fx down[3] = {0, 0, -kFxOne}, right[3] = {kFxOne, 0, 0}, up[3] = {0, kFxOne, 0};
+            auto dents = [&]()
+            {
+                int n = 0;
+                for (const Decal &decal : g.actors.decals)
+                    n += decal.active && decal.picture == kDecalDent;
+                return n;
+            };
+            g.drain();
+            std::fill(g.timesHeard.begin(), g.timesHeard.end(), 0);
+            const int before = dents();
+            const std::uint32_t did = weaponsTick(g.logic, g.player, wall, low, down, right, up, true, false, 33);
+            g.drain();
+            check((did & kWeaponHit) && wall.cooldownMs == 250 && wall.anim != nullptr &&
+                      std::string(wall.anim) == "attack2hit",
+                  "a blow on the floor lands: the swing that lands, and a quarter of a second");
+            check(g.times(CommonSound::CrowbarMiss) == 1 &&
+                      g.times(CommonSound::CrowbarHit) + g.times(CommonSound::CrowbarHit2) == 1,
+                  "it is heard through the air, and it rings");
+            check(dents() == before, "its dent is not there yet");
+            for (int n = 0; n < 5; ++n)
+                weaponsTick(g.logic, g.player, wall, low, down, right, up, false, false, 33);
+            check(dents() == before, "... nor after a sixth of a second");
+            for (int n = 0; n < 3; ++n)
+                weaponsTick(g.logic, g.player, wall, low, down, right, up, false, false, 33);
+            check(dents() == before + 1, "... and is a fifth of a second after the blow");
+            // On the heels of the first, the next is half a blow.
+            wall.anim = nullptr;
+            weaponsTick(g.logic, g.player, wall, low, down, right, up, true, false, 33);
+            check(wall.blow == kCrowbarBlow / 2 && wall.anim != nullptr && std::string(wall.anim) == "attack3hit",
+                  "the blow after it is half as hard, and the hand swings the other way");
+            for (int n = 0; n < 45; ++n)
+                weaponsTick(g.logic, g.player, wall, low, down, right, up, false, false, 33);
+            weaponsTick(g.logic, g.player, wall, low, down, right, up, true, false, 33);
+            check(wall.blow == kCrowbarBlow, "after a second's rest it is a whole one again");
+        }
     }
 
     void testMaker(const char *dir)
@@ -1314,7 +1400,20 @@ static void testPick()
     inv.current = kWeaponCrowbar;
     const fx eye[3] = {0, 0, 0}, forward[3] = {kFxOne, 0, 0}, right[3] = {0, -kFxOne, 0}, up[3] = {0, 0, kFxOne};
     auto tick = [&](int pick) { return weaponsTick(logic, player, weapon, eye, forward, right, up, false, false, 33, false, pick); };
-    std::uint32_t did = tick(kWeaponPython);
+    // The crowbar is put away before another weapon comes out: half a
+    // second of it, as in the game.
+    std::uint32_t did = tick(kWeaponGlock);
+    check(!(did & kWeaponDrawn) && inv.current == kWeaponCrowbar && weapon.anim != nullptr &&
+              std::string(weapon.anim) == "holster",
+          "the crowbar is put away first");
+    weapon.anim = nullptr;
+    int waited = 33;
+    for (; waited < 2000 && !(did & kWeaponDrawn); waited += 33)
+        did = tick(0);
+    check((did & kWeaponDrawn) && inv.current == kWeaponGlock && waited >= 500 && waited <= 566,
+          "... and half a second on the other is in hand");
+    weapon = WeaponState();
+    did = tick(kWeaponPython);
     check((did & kWeaponDrawn) && inv.current == kWeaponPython && weapon.cooldownMs == 500,
           "a weapon asked for by name is in hand at once, drawn as the next one would be");
     did = tick(kWeaponPython);

@@ -69,6 +69,19 @@ namespace hldata
         std::int16_t fromNode = -1;  ///< ... and the one it last stood on
         fx goal[3] = {0, 0, 0};
         bool hasGoal = false;
+        /// A monster chasing (with `seen` and `lookMs` below, which a
+        /// soldier uses too): whether it has seen what it is after at all,
+        /// how long ago it last did; and where it was when it set out,
+        /// which is where it goes back to when it gives up.
+        bool hasSeen = false;
+        std::int32_t lostMs = 0;
+        fx home[3] = {0, 0, 0};
+        bool goingHome = false;
+        /// One of the people (HlPeople.hpp): what he is afraid of or
+        /// shooting at (an actor, or -1), and whether he was following the
+        /// player before he ran.
+        std::int16_t foe = -1;
+        bool wasFollowing = false;
         /// A barnacle's tongue: how far it hangs below the mouth. (The big
         /// turret's eye, too: how bright, 0..255 -- not Q12.)
         fx reach = 0;
@@ -159,7 +172,10 @@ namespace hldata
     /// family already is takes that one's place (decalAdd).
     constexpr int decalFamily(std::uint8_t picture)
     {
-        return picture < 4 ? 0 : (picture >= 5 && picture <= 7 ? 5 : (picture == 13 ? 8 : picture));
+        // (16 to 20: the hand, the pools and the splashes, which are all
+        // blood. 21 and 22: a wall's own damage.)
+        return picture < 4 ? 0
+               : ((picture >= 5 && picture <= 7) || (picture >= 16 && picture <= 20) ? 5 : (picture == 13 ? 8 : picture));
     }
     /// How long each lasts (ms): holes and dents a third of a minute,
     /// blood and scorches two thirds, a crack for as long as its pane.
@@ -262,11 +278,19 @@ namespace hldata
         const ActorRecord *records = nullptr;
         int recordCount = 0;
         const std::uint32_t *nameHashes = nullptr;
-        /// Where something that walks may stand, and from each to each the
-        /// next to go to (HlLevel.hpp, PathNext). May be none.
+        /// Where something that walks may stand, and the ways between
+        /// (HlLevel.hpp, PathLink). May be none.
         const PathNode *nodes = nullptr;
-        const std::uint8_t *next = nullptr;
+        const PathLink *links = nullptr;
         int nodeCount = 0;
+        int linkCount = 0;
+        /// How each link is just now, a byte a link (kLink*), kept by the
+        /// logic, which knows the doors; null: all of them are open.
+        std::uint8_t *linkShut = nullptr;
+        /// The doors those who walk have asked to have opened since the
+        /// logic last looked (brush indices): it opens them.
+        std::uint16_t doorWanted[4] = {};
+        int doorsWanted = 0;
         std::uint32_t seed = 12345; ///< what little chance there is in a fight
         /// Set by what happens to the player's things this tick (kGot*): the
         /// caller shows it, and clears it.
@@ -591,7 +615,7 @@ namespace hldata
         // Someone sitting, left to himself, has done with one way of
         // sitting: another.
         if (finished && actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter) &&
-            actor.scriptPhase == kActorFree)
+            actor.scriptPhase == kActorFree && actor.ai == 0)
         {
             const int next = model->findClip(sittingClip(sittingNext()));
             if (next >= 0)
@@ -650,15 +674,19 @@ namespace hldata
         return *slot;
     }
 
+    inline constexpr std::uint8_t kLinkOpen = 0;   ///< nothing in the way
+    inline constexpr std::uint8_t kLinkDoor = 1;   ///< a door that is shut, and opens for whoever can open doors
+    inline constexpr std::uint8_t kLinkNoWay = 2;  ///< locked, or not broken yet
+
     /// Leave a mark: `picture` (a kDecal*), `half` units from its middle to
     /// its edge, in `colour`, on the wall at `at` that faces `normal`
     /// (Q12). The oldest gives way.
     inline Decal &decalAdd(ActorWorld &a, std::uint8_t picture, const fx *at, const fx *normal, int half,
-                           std::uint16_t colour, int brush = -1)
+                           std::uint16_t colour, int brush = -1, bool exact = false)
     {
         const int limit = a.decalLimit < 1 ? 1 : (a.decalLimit > kMaxDecals ? kMaxDecals : a.decalLimit);
         const std::int32_t life = decalLife(picture) / 100 * a.markLifePercent;
-        half = half < 1 ? 1 : (half > 60 ? 60 : half);
+        half = half < 1 ? 1 : (half > 64 ? 64 : half);
         // One of its family there already -- on the same thing, facing the
         // same way, its middle within this one's reach (anywhere on the
         // pane, for a crack) -- is this one: moved to the new place and
@@ -669,6 +697,17 @@ namespace hldata
             Decal &old = a.decals[i];
             if (!old.active || old.brush != brush || decalFamily(old.picture) != decalFamily(picture))
                 continue;
+            // (A mark the map put there is itself and no other: it is this
+            // one only if it is this picture in this very place. Two of
+            // the map's stains side by side stay two.)
+            if (exact)
+            {
+                const fx gap[3] = {old.at[0] - at[0], old.at[1] - at[1], old.at[2] - at[2]};
+                if (old.picture != picture || fxLength(gap) > fxFromInt(1))
+                    continue;
+                old.leftMs = decalLife(picture) / 100 * a.markLifePercent;
+                return old;
+            }
             const std::int64_t facing = static_cast<std::int64_t>(old.normal[0]) * normal[0] +
                                         static_cast<std::int64_t>(old.normal[1]) * normal[1] +
                                         static_cast<std::int64_t>(old.normal[2]) * normal[2];

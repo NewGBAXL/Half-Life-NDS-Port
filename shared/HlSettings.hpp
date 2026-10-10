@@ -61,8 +61,9 @@ namespace hldata
         /// on the other side (HlTouchLayout.hpp).
         std::uint8_t leftHanded = 0;
         /// The view bobs with a walk and leans into a sidestep, as the
-        /// game's does. (Off, for whoever it makes ill.)
-        std::uint8_t viewBob = 1;
+        /// game's does. Off unless asked for: on a screen this small, held
+        /// this close, it is more than some can look at.
+        std::uint8_t viewBob = 0;
         /// The fog, and how much detail is given up for speed (HlFog.hpp).
         GraphicsSettings graphics;
 
@@ -76,7 +77,7 @@ namespace hldata
     };
 
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 7;
+    inline constexpr std::uint16_t kSettingsVersion = 8;
     inline constexpr int kVolumeMusic = 0;
     inline constexpr int kVolumeEffects = 1;
     inline constexpr int kVolumeVoices = 2;

@@ -36,6 +36,13 @@ namespace hlrt
         /// (where a register cannot be written): the texture's (0: none) and
         /// its palette's.
         const std::uint32_t *bind(unsigned index) const { return binds_ + index * 2; }
+        /// The texture's own colour, taken all together (the mean of its
+        /// palette), as an RGB555: what a wall of it is the colour of at
+        /// full light. White for one that is not there.
+        std::uint32_t tint(unsigned index) const
+        {
+            return tints_ != nullptr && index < static_cast<unsigned>(count_) ? tints_[index] : 0x7FFFu;
+        }
         /// Which texture is shown now where a surface names `index`: itself,
         /// or -- for one that is more than one picture -- the picture of
         /// its cycle that is due; and with `switched`, of its other face's
@@ -52,7 +59,8 @@ namespace hlrt
         /// one (0 / -1: anything). False, with nothing left allocated, if it
         /// is missing, wrong, or does not fit in video memory.
         static bool loadFile(const char *path, bool liquid, int expectWidth, int expectHeight,
-                             int expectA3I5, NEA_Material *&material, NEA_Palette *&palette);
+                             int expectA3I5, NEA_Material *&material, NEA_Palette *&palette,
+                             std::uint16_t *tint = nullptr);
 
         TextureCache() = default;
         TextureCache(const TextureCache &) = delete;
@@ -64,6 +72,7 @@ namespace hlrt
         NEA_Material **materials_ = nullptr;
         NEA_Palette **palettes_ = nullptr;
         std::uint32_t *binds_ = nullptr;
+        std::uint16_t *tints_ = nullptr;
         int count_ = 0;
         int missing_ = 0;
         std::uint32_t tick_ = 0;

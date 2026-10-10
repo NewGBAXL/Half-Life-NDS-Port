@@ -335,8 +335,83 @@ namespace
     }
 } // namespace
 
+/// Who bleeds what, and what the player's going sounds like.
+void testBloodAndSteps()
+{
+    using K = ActorKind;
+    auto kind = [](K k) { return static_cast<std::uint8_t>(k); };
+    check(bloodOf(kind(K::Grunt)) == kBloodRed && bloodOf(kind(K::Scientist)) == kBloodRed &&
+              bloodOf(kind(K::Guard)) == kBloodRed && bloodOf(kind(K::Sitter)) == kBloodRed &&
+              bloodOf(kind(K::Barnacle)) == kBloodRed,
+          "people bleed red, and so does the barnacle");
+    check(bloodOf(kind(K::Headcrab)) == kBloodYellow && bloodOf(kind(K::Zombie)) == kBloodYellow &&
+              bloodOf(kind(K::Houndeye)) == kBloodYellow,
+          "the aliens bleed yellow");
+    check(bloodOf(kind(K::Turret)) == kBloodNone && bloodOf(kind(K::Tripmine)) == kBloodNone &&
+              bloodOf(kind(K::Gman)) == kBloodNone,
+          "machines do not bleed, nor the man in the suit");
+    check(canBeHurt(kind(K::Scientist)) && canBeHurt(kind(K::Guard)) && !canBeHurt(kind(K::Gman)) &&
+              !fights(kind(K::Scientist)),
+          "people can be hurt, without being something that fights");
+    check(decalFamily(kDecalHand) == decalFamily(kDecalBlood) && decalFamily(kDecalPool) == 5 &&
+              decalRect(kDecalHand).y == 32 && decalRect(kDecalSplash).w == 32 && decalRect(kDecalShot + 1).w == 16 &&
+              decalFamily(kDecalSplash2) == 5 && decalFamily(kDecalWallCrack) != 5,
+          "the large pictures are blood, each in a cell of its own; the holes share one");
+    {
+        // The map's own marks are never folded together; the same one put
+        // again is itself.
+        ActorWorld marks;
+        const fx normal[3] = {kFxOne, 0, 0};
+        const fx here[3] = {0, 0, 0}, beside[3] = {0, fxFromInt(20), 0};
+        decalAdd(marks, kDecalBlood, here, normal, 26, kMarkBlood, -1, true);
+        decalAdd(marks, kDecalBlood + 1, beside, normal, 26, kMarkBlood, -1, true);
+        decalAdd(marks, kDecalBlood, here, normal, 26, kMarkBlood, -1, true);
+        int count = 0;
+        for (const Decal &d : marks.decals)
+            count += d.active ? 1 : 0;
+        check(count == 2, "two of the map's stains side by side stay two, and one put twice is one");
+    }
+
+    // A ladder: a rung for every 48 units up or down, none for standing.
+    PlayerState s;
+    s.onLadder = true;
+    s.stepLeft = 0;
+    fx before[3] = {0, 0, 0};
+    int rungs = 0;
+    for (int n = 0; n < 30; ++n)
+    {
+        before[2] = s.origin[2];
+        s.origin[2] += fxFromInt(8);
+        const StepsHeard heard = playerSteps(s, before);
+        check(heard.kind == StepKind::Ladder, "on a ladder, what is heard is rungs");
+        rungs += heard.count;
+    }
+    check(rungs == 5 || rungs == 6, "a rung for every 48 units climbed");
+    before[2] = s.origin[2];
+    check(playerSteps(s, before).count == 0, "and none for holding still");
+    // Water: to the waist it is wading, whatever is underfoot.
+    PlayerState w;
+    w.waterLevel = 2;
+    w.velocity[0] = fxFromInt(150);
+    int wades = 0;
+    fx from[3] = {0, 0, 0};
+    for (int n = 0; n < 40; ++n)
+    {
+        from[0] = w.origin[0];
+        w.origin[0] += fxFromInt(6);
+        const StepsHeard heard = playerSteps(w, from);
+        wades += heard.kind == StepKind::Wade ? heard.count : 100;
+    }
+    check(wades == 2 || wades == 3, "a wade for every 120 units through deep water");
+    PlayerState feet;
+    feet.waterLevel = 1;
+    feet.origin[0] = from[0];
+    check(playerSteps(feet, from).kind == StepKind::Slosh, "water round the feet is a slosh");
+}
+
 int main()
 {
+    testBloodAndSteps();
     testKick();
     testWalk();
     testFall();

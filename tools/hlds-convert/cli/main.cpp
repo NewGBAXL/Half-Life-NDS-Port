@@ -18,6 +18,7 @@
 #include "hlds/EntityParser.hpp"
 #include "hlds/GxStream.hpp"
 #include "hlds/MapStats.hpp"
+#include "hlds/Pack.hpp"
 #include "hlds/TextureCook.hpp"
 #include "hlds/WadFile.hpp"
 
@@ -39,12 +40,18 @@ namespace
                      "      --valve also checks that every texture can be found.\n"
                      "  hlds-convert cook-map <game folder> <map name> -o <card root> [options]\n"
                      "  hlds-convert cook-all <game folder> -o <card root> [options]\n"
-                     "      Cook one map, or every map, to <card root>/_nds/hl_nds/data/:\n"
-                     "      levels in maps/, textures in tex/, and the manifest.\n"
+                     "      Cook one map, or every map, and put it on the card under\n"
+                     "      <card root>/_nds/hl_nds/data/: one archive a map in maps/, one for\n"
+                     "      what every map shares, the music and the manifest.\n"
+                     "      --stage <folder>   where the converter keeps its own files, which\n"
+                     "                         the archives are made from and the next run\n"
+                     "                         finds again (default: <card root>-stage)\n"
+                     "      --no-compress      archives with nothing in them compressed\n"
                      "      --no-textures      levels only; the DS draws them in light alone\n"
                      "      --ptexconv <path>  the texture encoder, if it is not found by\n"
                      "                         itself (it comes with BlocksDS)\n"
-                     "      --light-gamma <g>  brightness curve of the baked light (1.8)\n"
+                     "      --light-scale <s>  how strong the baked light is (1.32, the game's)\n"
+                     "      --light-power <p>  ... and the power it is lifted by (0.8, the game's)\n"
                      "      --geometry <mode>  guarded (default): merge faces and drop mid-edge\n"
                      "                         vertices where the picture provably does not\n"
                      "                         change. lossless: keep every vertex of the map\n"
@@ -52,7 +59,9 @@ namespace
                      "                         face: fewer textures and polygons, and\n"
                      "                         floors that repeat\n"
                      "      --start <map>      the map a new game starts in (c0a0)\n"
-                     "  hlds-convert verify <level.hlm> [--brushes]\n"
+                     "  hlds-convert pack -o <card root> [--stage <folder>] [--no-compress]\n"
+                     "      Make the card's archives again from the stage, cooking nothing.\n"
+                     "  hlds-convert verify <level.hlm | map.npac> [--brushes]\n"
                      "      Open a cooked level with the DS's own reader, decode every\n"
                      "      surface, and print what it costs.\n");
         return 2;
@@ -158,6 +167,13 @@ namespace
         return 0;
     }
 
+    void printArchive(const MapResult &r)
+    {
+        if (r.archiveMembers != 0)
+            std::printf("  on the card: %d KB in one archive of %d files (%d KB inflated)\n", r.archiveKb,
+                        r.archiveMembers, r.archiveRawKb);
+    }
+
     void printResult(const MapResult &r)
     {
         for (const std::string &warning : r.warnings)
@@ -176,6 +192,12 @@ namespace
                     r.worstPolygons, r.worstVertices, r.brushes, r.logicRecords,
                     r.unsupportedEntities, r.unsupportedClasses, r.texturesUsed,
                     r.texturesEncoded, r.texelKb, r.alphaTexelKb);
+        printArchive(r);
+        if (r.pathNodes != 0)
+            std::printf("  %d nodes, %d ways between them (%s; %d through doors and what breaks, %d not walked by a "
+                        "trial over the world alone, %d ways down added)\n",
+                        r.pathNodes, r.pathLinks, r.pathFromGraph ? "the game's graph" : "worked out", r.pathDoorLinks,
+                        r.pathRefused, r.pathDrops);
         if (r.models != 0)
         {
             std::printf("  %d actors of %d models: %d KB, skins %dK texels\n", r.actors, r.models,
@@ -209,8 +231,10 @@ namespace
                 options.textures = false;
             else if (args[i] == "--ptexconv" && i + 1 < args.size())
                 options.ptexconv = args[++i];
-            else if (args[i] == "--light-gamma" && i + 1 < args.size())
-                options.lightGamma = std::atof(args[++i].c_str());
+            else if (args[i] == "--light-power" && i + 1 < args.size())
+                options.lightPower = std::atof(args[++i].c_str());
+            else if ((args[i] == "--light-scale" || args[i] == "--light-gamma") && i + 1 < args.size())
+                options.lightScale = std::atof(args[++i].c_str());
             else if (args[i] == "--geometry" && i + 1 < args.size())
             {
                 const std::string &mode = args[++i];
@@ -222,6 +246,10 @@ namespace
                 hlds::setRandomTiling(false);
             else if (args[i] == "--start" && i + 1 < args.size())
                 options.startMap = args[++i];
+            else if (args[i] == "--stage" && i + 1 < args.size())
+                options.stageRoot = args[++i];
+            else if (args[i] == "--no-compress")
+                options.compress = false;
             else if (options.gameDir.empty())
                 options.gameDir = args[i];
             else if (!all && mapName.empty())
@@ -229,7 +257,7 @@ namespace
             else
                 return usage();
         }
-        if (options.gameDir.empty() || options.cardRoot.empty() || options.lightGamma <= 0 ||
+        if (options.gameDir.empty() || options.cardRoot.empty() || options.lightScale <= 0 ||
             (!all && mapName.empty()))
             return usage();
 
@@ -269,6 +297,48 @@ namespace
         return failed == 0 ? 0 : 1;
     }
 
+    /// pack: the card's archives again, from the stage.
+    int cmdPack(const std::vector<std::string> &args)
+    {
+        ConvertOptions options;
+        for (std::size_t i = 0; i < args.size(); ++i)
+        {
+            if (args[i] == "-o" && i + 1 < args.size())
+                options.cardRoot = args[++i];
+            else if (args[i] == "--stage" && i + 1 < args.size())
+                options.stageRoot = args[++i];
+            else if (args[i] == "--no-compress")
+                options.compress = false;
+            else if (args[i] == "--start" && i + 1 < args.size())
+                options.startMap = args[++i];
+            else
+                return usage();
+        }
+        if (options.cardRoot.empty())
+            return usage();
+        Converter converter(options);
+        std::string error;
+        int maps = 0;
+        long cardKb = 0, rawKb = 0;
+        const int failed = converter.packAll(
+            [&](const MapResult &r)
+            {
+                ++maps;
+                cardKb += r.archiveKb;
+                rawKb += r.archiveRawKb;
+                if (!r.ok)
+                    std::printf("%s: FAILED: %s\n", r.name.c_str(), r.error.c_str());
+            },
+            error);
+        if (!error.empty())
+            std::fprintf(stderr, "error: %s\n", error.c_str());
+        for (const std::string &warning : converter.common().warnings)
+            std::printf("  warning: %s\n", warning.c_str());
+        std::printf("%d maps packed, %d failed: %ld MB on the card for %ld MB of files\n", maps, failed,
+                    cardKb / 1024, rawKb / 1024);
+        return failed == 0 ? 0 : 1;
+    }
+
     int cmdVerify(const std::vector<std::string> &allArgs)
     {
         std::vector<std::string> args;
@@ -284,7 +354,11 @@ namespace
             return usage();
         std::vector<std::uint8_t> bytes;
         std::string error;
-        if (!readFile(args[0], bytes, error))
+        // (A map's archive: the level in it, put together as the console
+        // puts it together.)
+        std::size_t archiveBytes = 0;
+        if (fs::path(args[0]).extension() == ".npac" ? !unpackLevel(args[0], bytes, archiveBytes, error)
+                                                     : !readFile(args[0], bytes, error))
         {
             std::fprintf(stderr, "error: %s\n", error.c_str());
             return 1;
@@ -354,7 +428,9 @@ namespace
             "vis",       "surfaces",     "gx stream", "models",    "clip nodes",
             "textures",  "entities",     "entity text", "light patch", "brushes",
             "brush leaves", "logic",     "logic lists", "path corners", "names",
-            "landmarks", "strings",   "models",     "actors"};
+            "landmarks", "strings",   "models",     "actors",      "path nodes",
+            "path next", "sounds",    "logic sounds", "sentences", "sentence words",
+            "rooms",     "sprites",   "speech",     "messages",    "model sounds"};
         std::printf("%s: ok, version %u, %zu KB\n", fs::path(args[0]).filename().string().c_str(),
                     view.header->version, bytes.size() / 1024);
         for (int i = 0; i < hldata::kSectionCount; ++i)
@@ -382,9 +458,7 @@ namespace
                             view.models[b.model].surfaceCount);
             }
         }
-        // The entity text is the converter's own; the DS skips it.
-        std::printf("  resident on the DS: about %zu KB\n",
-                    (bytes.size() - view.entityTextSize) / 1024);
+        std::printf("  resident on the DS: about %zu KB\n", bytes.size() / 1024);
         return 0;
     }
 } // namespace
@@ -401,6 +475,8 @@ int main(int argc, char *argv[])
         return cmdCook(args, false);
     if (command == "cook-all")
         return cmdCook(args, true);
+    if (command == "pack")
+        return cmdPack(args);
     if (command == "verify")
         return cmdVerify(args);
     return usage();

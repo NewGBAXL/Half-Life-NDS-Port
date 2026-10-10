@@ -1136,4 +1136,59 @@ namespace hldata
         }
         return steps;
     }
+
+    /// What the player's going sounded like over a move from `before`: how
+    /// many steps, and of which kind. The game's own rules: a rung for every
+    /// so far up or down a ladder, a wade for every stride through water to
+    /// the waist or deeper (swum or walked), a slosh where it is only round
+    /// the feet, and otherwise a footstep.
+    enum class StepKind
+    {
+        Floor,
+        Ladder,
+        Slosh,
+        Wade
+    };
+    struct StepsHeard
+    {
+        int count = 0;
+        StepKind kind = StepKind::Floor;
+    };
+    inline StepsHeard playerSteps(PlayerState &s, const fx *before)
+    {
+        StepsHeard heard;
+        const fx all[3] = {s.origin[0] - before[0], s.origin[1] - before[1], s.origin[2] - before[2]};
+        if (fxLength(all) > fxFromInt(64))
+            return heard; // (a teleport, not a stride)
+        fx moved = 0, stride = fxFromInt(90);
+        if (s.onLadder)
+        {
+            // (Up and down count on a ladder, and nothing else does.)
+            heard.kind = StepKind::Ladder;
+            moved = all[2] < 0 ? -all[2] : all[2];
+            stride = fxFromInt(48);
+        }
+        else if (s.waterLevel >= 2)
+        {
+            heard.kind = StepKind::Wade;
+            moved = fxLength(all);
+            stride = fxFromInt(120);
+            const fx speed[3] = {s.velocity[0], s.velocity[1], s.velocity[2]};
+            if (fxLength(speed) < fxFromInt(60))
+                moved = 0;
+        }
+        else
+        {
+            heard.kind = s.waterLevel == 1 ? StepKind::Slosh : StepKind::Floor;
+            heard.count = playerFootsteps(s, before);
+            return heard;
+        }
+        s.stepLeft -= moved;
+        while (s.stepLeft <= 0)
+        {
+            s.stepLeft += stride;
+            ++heard.count;
+        }
+        return heard;
+    }
 } // namespace hldata

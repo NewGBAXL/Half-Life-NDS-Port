@@ -12,7 +12,15 @@ Working:
 
 - Any of the game's maps converts to a cooked level: BSP tree, PVS, clip hulls,
   and the map's faces as ready-made runs of geometry-engine commands with their
-  lightmaps baked into vertex colours. Neighbouring faces share vertices in
+  lightmaps baked into vertex colours -- as the game shows them: a third
+  stronger than the file has them and lifted by the power 0.8, cut off at
+  full (`--light-scale`, `--light-power` for another curve), with its
+  textures lifted by the same power. That curve was not read out of
+  anything: it was fitted to the real game photographed beside the port at
+  the same places (`tools/ref/measure.py`), which brought the mean
+  difference over 120 patches of wall on three maps from 15.6 to 5.6 of
+  255 (the port now 5% under the game, where it was 18% under).
+  Neighbouring faces share vertices in
   quad strips, and faces are merged only where that provably changes nothing
   on screen (about 12% fewer vertices over the campaign).
 - World textures in the DS's 4x4 compressed format; textures with holes
@@ -91,16 +99,26 @@ Working:
   sounds have an allowance of memory (350 KB); the longest are cooked at half
   the rate where a map has more than that.
 - On a DSi the sound has more to it. The output runs at 47.6 kHz. With
-  "DSi SOUND" switched on in the pause menu (it is **off** unless it is: the
-  DSP has not been proved on a console, and off is exactly what a DS does),
+  "DSi SOUND" switched on in the pause menu (it is **off** unless it is, and
+  it is an experiment: tried on a DSi, it was not judged worth taking
+  further, and nothing more is being built on the DSP; off is exactly what
+  a DS does),
   the DSP
   plays the music in stereo (cooked as a second file for each track), and
   adds the echo of the room: the ARM7 captures what the sixteen channels are
   playing, the ARM9 passes it to the DSP, and the DSP puts out a reverb of it
   set by the map's own room markers (env_sound). The DSP program is in
-  `teak/`; its arithmetic is one C header (`shared/dsp/hl_dsp.h`) that the
-  host tests run too, and `tools/dspsim` checks that the two give the same
-  samples, bit for bit, in an emulated DSP. A DS is unchanged.
+  `teak/`, and is assembly, all of it: compiled C runs on this chip no
+  faster than on the ARM9, and what it is good at -- multiply and add in
+  one step, a loop that costs nothing to go round -- a compiler does not
+  use. What the program must work out is written in C once, in one header
+  (`shared/dsp/hl_dsp.h`, its model, which the host tests run), and
+  `tools/dspsim` runs the real program in an emulated DSP and holds every
+  pair of samples that comes out against the model's: a quiet scene, and
+  one with everything as loud as it goes. By the same tool, a pair of
+  samples costs 258 steps of the processor where the C program this
+  replaced took 588 (6.3% of the processor against 14.4%, with music and
+  echo both going). A DS is unchanged.
   The DSP is built not to make a noise when something goes wrong: its
   interrupt only hands finished samples to the speakers (the working out is
   in its main loop, and a port left short gets the last sample, fading); the
@@ -236,16 +254,44 @@ Working:
   a small header that points at it, so nothing is cooked twice and the
   hardware still plays the ADPCM itself, loops included. Every sound is of
   a layer -- the player's own, the world's, the voice, the loops of a
-  place, the menu -- and each layer has its share of the fifteen voices
-  (3, 6, 1, 4, 1), which no other layer can take from it; over its share a
-  layer has only what is free, and gives it back, the quietest first, to
-  whoever is short (`shared/HlMixer.hpp`). So a far headcrab does not cut
-  off the player's gun, and a spoken line is cut short only by the next.
-  What has a place goes on being placed as the view moves and turns:
-  louder, quieter, from one side to the other; a soldier's line comes from
-  where he stood. In the pause menu the game's own layers are silent (the
-  music and the menu's clicks are not). The music, on a DS, is a maxmod
-  stream fed from the card.
+  place, the menu -- and each layer has its share of the fourteen voices
+  the hardware really has beside the music (3, 4, 2, 4, 1), which no other
+  layer can take from it; over its share a layer has only what is free,
+  and gives it back, the quietest first, to whoever is short
+  (`shared/HlMixer.hpp`). If the hardware refuses a sound anyway, what
+  matters least gives its channel up and the sound is asked for again:
+  nothing is counted as played that was not. So a far headcrab does not
+  cut off the player's gun.
+  **Two people may speak at once**: a line cuts in only on the same
+  speaker's last (the same place -- or no place, which is the voice heard
+  everywhere), and the next word of a line is read from the card while the
+  one before it is said. A scripted line comes from where its speaker
+  stands. What has a place goes on being placed as the view moves and
+  turns. Sounds are played at the **pitch** the map asks for; up to eight
+  looping ambiences run at once where voices are free; what moves (a lift,
+  a train, a door, a fan) is heard for as long as it moves, if its sound is
+  one that goes round, and a sound whose file has no loop point is played
+  once, as the game plays it. Buttons have the whole of the game's list of
+  sounds, and a door or button that will not work answers with its locked
+  sound and line -- and, the day it works for them, with its unlocked
+  one. A line is said word by word as the game's sentences.txt marks it:
+  each word at its own pitch and loudness, cut short where it says, with
+  the pauses of its commas and full stops. A voice that gives way to
+  another sound is faded over a few frames, not cut (a hardware channel
+  is kept back for that: thirteen voices and one on its way out). The
+  player is heard on ladders, in water and landing, and a step sounds of
+  what it lands on -- metal, dirt, a vent, a grate, tiles -- by the game's
+  own list of what its textures are made of (`sound/materials.txt`): the
+  converter marks each texture, and the console finds the floor under the
+  feet once a step (`shared/HlMaterial.hpp`). What the models themselves
+  sound like as they move -- a footstep in a walk, a keypad in a scene --
+  is in their animations, and is played from where they are.
+  **In the pause menu everything stops where it is, music included, and
+  goes on from there** (a DS's channel cannot be stopped and continued: it
+  is slowed to the slowest the hardware has and silenced, which costs a
+  sound a quarter of a second for ten of menu); the menu's clicks are
+  heard meanwhile. The music, on a DS, is a maxmod stream fed from the
+  card.
 - The pause menu has two pages: RESUME, SAVE, NEW GAME, OPTIONS, COMMAND;
   and under OPTIONS the rendering mode, the DSi's sound, a volume slider
   each for the music, the effects, the voices and the ambience, which
@@ -304,6 +350,18 @@ Working:
     shorter instead).
   - **Models at once**: 4 to 12, or what the machine is good for (8 on a
     DS, 12 on a DSi).
+    Who those are is decided by what they are before how near they are
+    (`shared/HlDrawPlan.hpp`): an enemy alive and in view is always drawn,
+    limit or no limit, and so are the people of the place; what gives way
+    for them is, in order, bodies and furniture, things to pick up, the far
+    enemies' detail, the detail of the weapon in hand, and at the last up
+    to 300 polygons of the world's far end. When that has had to happen
+    the frame's stains, pieces and gibs are cut back as well. And "in
+    view" follows the shape of the thing: a barnacle is in view by any
+    part of its tongue, not only by its mouth on the ceiling -- under a
+    high ceiling it used not to be drawn at all unless looked up at. The
+    debug overlay says when anything in view was left out, by kind
+    (`cut A0 B0 C1 D3`: A, enemies, is never to be anything but 0).
   - **Draw distance**: far (8192 units), medium (3072) or near (1536).
   The hardware's fog is 32 steps of density over a band of fixed widths:
   a light or near fog shows its steps.
@@ -331,12 +389,21 @@ Working:
     same idea, another scatter.
 - What a shot, a blow and a fall do, as in the game:
   - **Marks on walls** -- bullet holes, the crowbar's dent, blood behind
-    what is shot and under what dies or lands in pieces (yellow for the
-    aliens), the scorch of a blast, cracks on glass that is shot and
-    stands. They are the game's own decals (your `decals.wad`, cooked to
-    one small texture), each drawn as one quad in its wall's plane with
+    what is shot, struck or blown up and under what dies or lands in pieces
+    (red for people and the barnacle, yellow for the aliens, none for
+    machines; the player's own when they are hit), the scorch of a blast,
+    cracks on glass that is shot and stands. Scientists and guards can be
+    hurt and killed, and the scene that needed them goes without. The
+    stains the map's makers left (its unnamed `infodecal`s) are on the
+    walls near the player: the nearest sixteen on a DS and thirty-two on
+    a DSi within 640 units, each as large as its picture is in the game
+    (48 units for most blood, 96 and 80 for the pools, 64 for a hand's
+    print, 96 for a scorch or a crack), each one itself -- two side by
+    side are never made one -- and the walls' own cracks and dents among
+    them. They are the game's own decals (your `decals.wad`, cooked to
+    one 256x64 texture), each drawn as one quad in its wall's plane with
     the hardware's "same depth" test, which is what that test is for. A
-    ring of them (24 on a DS, 64 on a DSi); one on a door or a pane goes
+    ring of them (32 on a DS, 64 on a DSi); one on a door or a pane goes
     with it. They are kept cheap: a new mark where one of its kind already
     is takes that one's place (ten blows on one spot are one mark, a pane
     has one crack, glass that never breaks takes none from a blow); each
@@ -359,8 +426,8 @@ Working:
     units a second, fatal at 1024). Dying, the camera sinks to the floor
     and rolls over before the game goes back.
   - **The view** -- each weapon's own kick when it fires, the bob of a
-    walk and the lean into a sidestep (the game's numbers; "View bob" in
-    the options turns them off), the dip of a landing, casings thrown
+    walk and the lean into a sidestep (the game's numbers; off unless
+    "View bob" in the options turns them on), the dip of a landing, casings thrown
     from the pistol, the MP5 and the shotgun (`shared/HlView.hpp`).
 - Two things that could hold the game for good are closed. A player
   stuck fast in something (nothing got them out but a few units' nudge)
@@ -380,29 +447,33 @@ Working:
   (`source/render/TopText.cpp`: video bank G, no texture memory, the same
   in all three rendering modes), in the game's title face, faded or
   written out letter by letter as the file asks.
-- The suit's lamp, by the game's rules (it wants the suit; two minutes
-  alight, twenty seconds to be full again). The world's light is baked
-  into its vertices and cannot be relit, so the lamp's light is
-  *projected*: the surfaces in its beam are drawn a second time with one
-  small round picture of light, and the hardware itself works out where
-  on that picture each vertex is from where the vertex is in the world
-  (its texture matrix, in the mode that takes the vertex --
+- The suit's lamp, by the game's rules: it wants the suit; two minutes
+  alight, twenty seconds to be full again; it starts at 99 of a hundred,
+  lights with whatever is in it, and what is in it is kept from map to
+  map and in a save. Its light is the game's too: a ball eighty units
+  from middle to edge at the point the middle of the view meets (out to
+  2000 units), the same size however far off, fading evenly from its
+  middle, full strength to 500 units and fainter beyond. The world's
+  light is baked into its vertices and cannot be relit, so the light is
+  *projected*: the surfaces in it are drawn a second time with one small
+  round picture of light, and the hardware itself works out where on
+  that picture each vertex is from where the vertex is in the world (its
+  texture matrix, in the mode that takes the vertex --
   `NEA_TEXGEN_POSITION`; `WorldDraw::lampPass`, `shared/HlLamp.hpp`). So
-  the light lies on the walls as a light does: it bends round a corner or
-  a pillar, is long on a floor it skims, smaller on the screen the
-  farther off, brighter on a wall met head-on. The surface's own packed
-  geometry is sent again through a small filter (vertices as they are,
-  colours white, the projection's constant for a texture coordinate) and
-  drawn only where the depth is the very same. The lamp is carried a
-  little beside the eyes, so what is near is lit a little off the view's
-  middle. Doors and other solid brushes are lit the same way; whoever
-  stands in the beam is lit by a second hardware light along the view,
-  with the material's specular colour and a shininess table. What it is
-  not: a true cone (one radius a frame, taken where the beam lands),
-  added light (the DS blends towards a colour), or a caster of shadows.
-  Its button is in the touch screen's column between JUMP and DUCK, with
-  what is left in it; Select switches it too; the game's lamp icon is at
-  the top right of the top screen while it is alight or filling.
+  it lies on the walls as a light does: round a corner or a pillar, long
+  on a floor it skims. The surface's own packed geometry is sent again
+  through a small filter (vertices as they are, the projection's
+  constant for a texture coordinate, and for a colour the wall's own
+  texture's average, so that the wall is lit towards what it is and not
+  towards white) and drawn only where the depth is the very same. Doors
+  and other solid brushes are lit the same way; whoever stands in the
+  light is lit by a hardware light along the view. What it is not: added
+  light (the DS blends towards a colour -- the wall's texture is seen
+  fainter in the light's middle, where the game shows it brighter), or a
+  caster of shadows. Its button is in the touch screen's column between
+  JUMP and DUCK, with what is left in it; Select switches it too; the
+  game's lamp icon is at the top right of the top screen whenever the
+  suit is worn, dim while the lamp is off.
 - Everything on the touch screen is drawn in the game's own fonts, which
   the converter cooks from your `fonts.wad` and `gfx.wad` (`ui/` on the
   card; `shared/HlFont.hpp` draws them on a screen of tiles). The libnds
@@ -426,8 +497,13 @@ Working:
   the picture is in main memory already. The very first load has no
   picture to keep and shows the game's own loading picture (cooked from
   your `cached.wad`); a load that changes the rendering mode shows black.
-  The screen is blacked out for the frame or two the new map's first
-  picture takes. One owner of the screen's brightness (`ScreenFade`)
+  That first picture is itself captured and its texture let go, so nothing
+  drawn out of texture memory is on the screen while a map's textures are
+  written into it. (The engine used to switch all four texture banks off
+  for every texture it loaded, the one being shown among them: a band
+  across the picture a texture. It now switches only the bank it writes.)
+  The screen is blacked out for the dozen frames the new map takes to put
+  itself in order. One owner of the screen's brightness (`ScreenFade`)
   keeps the map's fades, the dimness of being under water and this
   curtain from undoing each other.
 - Levels of detail for models, made with meshoptimizer
@@ -526,11 +602,38 @@ minute, nothing is drawn or heard).
 The DSP program needs the Teak LLVM toolchain and libteak in `$BLOCKSDSEXT`
 (`llvm-teak/`, `libteak/`); `./make.sh` builds it and links it into the ROM,
 and without them builds a ROM with no DSP audio. `tools/dspsim/run.sh` runs it
-against its model (it needs teakra, built: see the script).
+against its model (it needs teakra, built: see the script), and says how much
+of the processor it uses; it is one of the test suites, skipped where teakra
+is not built.
 
 `tools/emu/` has scripts that run the ROM in melonDS without a display, for
 looking at a change on the console's own renderer -- and, with `EMU_AUDIO`,
 for writing what it would have played to a file.
+
+## Comparing with the game
+
+`tools/ref/` runs the real Half-Life -- your own Steam copy -- without a
+screen, with the player put at a place and the game driven by the same kind
+of script that drives the port in the emulator, and lays the two pictures
+side by side:
+
+```sh
+tools/ref/compare.sh scientist c1a0 "-768 104 -180 0" "shot; key a 0.1; sleep 0.15; shot"
+```
+
+It runs the game out of a folder of its own beside `valve` (made by
+`tools/ref/setup.sh`, removed by `remove.sh`), so your game's config and
+saves are not touched. See `tools/ref/README.md`.
+
+The crowbar was the first thing checked this way, and is now the game's: its
+three swings at the air in turn and its two that land turn about, a blow on
+a wall counted as a blow (it was a miss), every swing heard through the air,
+a swing that meets nothing made again a tenth of a second on, a whole blow
+after a second's rest and half of one on the heels of the last, three thuds
+on flesh and two rings on a wall -- as loud as what the wall is made of lets
+them be, with that material's own sound -- the dent a fifth of a second after
+the blow, the hand left as its last swing left it, and put away before
+another weapon comes out (`shared/HlMonsters.hpp`, `crowbarBlow`).
 
 ## Converting the game
 
@@ -539,9 +642,51 @@ build/convert/hlds-convert cook-all <path to>/Half-Life/valve -o <SD card root>
 ```
 
 or run `build/convert/gui/hlds-convert-gui`. Everything goes to
-`<card>/_nds/hl_nds/data/`. Other commands: `cook-map` (one map), `info`
-(what a map will cost the DS to draw), `verify` (check a cooked level with the
+`<card>/_nds/hl_nds/data/`. Other commands: `cook-map` (one map), `pack`
+(the card's archives again, cooking nothing), `info` (what a map will cost
+the DS to draw), `verify` (check a cooked level, or a map's archive, with the
 DS's own reader; `--brushes` lists its brush entities).
+
+**On the card** a map is one file, `maps/<map>.npac`: an archive (Nitro
+Engine Advanced's NPAC, mounted by the console as a drive) holding all that
+the map loads -- its level, textures, sprites, models and sounds -- in the
+order it loads them. Opening a file is the slow part of reading a card, and a
+map used to be between one and five hundred of them. `common.npac` holds
+what belongs to no map (the letters, the head-up display, the menu's
+sounds). Loose beside them: the music, which is played off the card as it
+goes, the manifest, and what the game itself writes.
+
+Inside an archive, what shrinks well is LZ77-compressed (the DS's own BIOS
+format, inflated by the engine as a member is opened): levels and models
+come to about half. A member is compressed only if it is a kilobyte or more
+and comes down to three quarters of itself; textures of a few hundred bytes
+and sounds, which are compressed as sound already, are stored as they are.
+A level is in pieces of 256 KB at most, each compressed on its own, because
+a member is inflated whole beside where it is going and a DS has not the
+memory to do that to a level. `--no-compress` stores everything.
+
+**Finding the way.** The game works out, the first time a map is run,
+which of its path nodes can be walked between, by what size of creature and
+through which doors, and writes that beside the map
+(`maps/graphs/<map>.nod`); those files come with the game, and the converter
+reads them (`NodGraph`): the nodes, the links for small things, people and
+large things, and the door or breakable thing each link passes through. It
+adds ways DOWN from ledges, which the game has not got. There is no table
+of routes on the card: the console finds a route when it needs one
+(`shared/HlWalk.hpp`, `pathStep`), over the links as they are at that
+moment -- a door shut costs a little and is opened by whoever opens doors,
+a locked one or something not yet broken is no way. Monsters go to where
+they last saw the player, give up after a while and go home; soldiers take
+cover they can reach. Scientists and guards follow the player on USE and
+stay on USE again; a scientist runs out of sight of what would kill him, a
+guard shoots it, and shoots a player who has shot him twice
+(`shared/HlPeople.hpp`). The map's entity text, which the console never
+read, stays in the stage (`maps/<map>.ent`) instead of in the level.
+
+The loose files the archives are made from stay on the PC, in a **stage**
+folder (`--stage <folder>`; by default `<card root>-stage`, beside the
+card's): a texture or a sound shared by fifty maps is made once there and
+found again by the next run.
 
 `build/convert/hlds-testmap <folder>` writes a small synthetic map -- one room
 with a door, a button, a lift and one brush of each drawing class -- that can
@@ -553,7 +698,7 @@ way to look at a rendering or logic change on the console.
 | | |
 |---|---|
 | `source/` | the ARM9 program. `*.arm.cpp` is built as ARM; `*.itcm.arm.cpp` also runs from ITCM |
-| `teak/` | the DSi's DSP program (music and echo) |
+| `teak/` | the DSi's DSP program (music and echo), in assembly |
 | `shared/` | file formats, fixed-point maths, collision and movement: compiled by both the ROM and the converter, so the host tests run the console's code |
 | `tools/hlds-convert/` | the converter: `core` (no Qt), `cli`, `gui`, `tests` |
 | `architectds_nea_mod/` | the ROM build system (ArchitectDS with Nitro Engine Advanced support) |

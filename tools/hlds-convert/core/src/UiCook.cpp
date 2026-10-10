@@ -317,7 +317,8 @@ namespace hlds
     RgbaImage decalAtlas(const WadFile &decals, int &missing)
     {
         RgbaImage atlas;
-        atlas.width = atlas.height = hldata::kDecalAtlasSize;
+        atlas.width = hldata::kDecalAtlasWidth;
+        atlas.height = hldata::kDecalAtlasSize;
         atlas.rgba.assign(static_cast<std::size_t>(atlas.width) * atlas.height * 4, 0);
         missing = 0;
         for (int n = 0; n < hldata::kDecalCount; ++n)
@@ -347,6 +348,11 @@ namespace hlds
                             sum += picture.pixels[sy * picture.width + sx];
                     }
                     int solid = static_cast<int>(sum / ((x1 - x0) * (y1 - y0)));
+                    // (The texture has eight steps of see-through: the
+                    // faint spray round a stain, which is most of how big
+                    // it looks, would be under the first of them. It is
+                    // made a little more of.)
+                    solid = std::min(255, solid * 7 / 4);
                     // (Nothing along a cell's edge: a mark does not run on
                     // into its neighbour's.)
                     if (x == 0 || y == 0 || x == cell.w - 1 || y == cell.h - 1)

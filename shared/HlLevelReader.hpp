@@ -57,6 +57,8 @@ namespace hldata
         const std::uint8_t *planeTypes = nullptr;
         const Node *nodes = nullptr;
         const Leaf *leaves = nullptr;
+        const ModelSound *modelSounds = nullptr;
+        std::uint32_t modelSoundCount = 0;
         const std::uint16_t *marks = nullptr;
         const std::uint8_t *vis = nullptr;
         const Surface *surfaces = nullptr;
@@ -77,12 +79,12 @@ namespace hldata
         const ModelRef *modelRefs = nullptr;
         const ActorRecord *actors = nullptr;
         const PathNode *pathNodes = nullptr;
-        const std::uint8_t *pathNext = nullptr;
+        const PathLink *pathLinks = nullptr;
         const SoundRef *sounds = nullptr;
         const SpriteRef *sprites = nullptr;
         const LogicSound *logicSounds = nullptr;
         const SentenceRecord *sentences = nullptr;
-        const std::uint16_t *sentenceWords = nullptr;
+        const SentenceWord *sentenceWords = nullptr;
         const RoomRecord *rooms = nullptr;
         const std::uint16_t *speech = nullptr;
         std::uint32_t speechCount = 0;
@@ -114,7 +116,7 @@ namespace hldata
         std::uint32_t modelRefCount = 0;
         std::uint32_t actorCount = 0;
         std::uint32_t pathNodeCount = 0;
-        std::uint32_t pathNextCount = 0;
+        std::uint32_t pathLinkCount = 0;
         std::uint32_t soundCount = 0;
         std::uint32_t logicSoundCount = 0;
         std::uint32_t sentenceCount = 0;
@@ -202,15 +204,16 @@ namespace hldata
         modelRefs = section<ModelRef>(data, dir, Section::ModelRefs, modelRefCount);
         actors = section<ActorRecord>(data, dir, Section::Actors, actorCount);
         pathNodes = section<PathNode>(data, dir, Section::PathNodes, pathNodeCount);
-        pathNext = section<std::uint8_t>(data, dir, Section::PathNext, pathNextCount);
+        pathLinks = section<PathLink>(data, dir, Section::PathNext, pathLinkCount);
         sounds = section<SoundRef>(data, dir, Section::Sounds, soundCount);
         logicSounds = section<LogicSound>(data, dir, Section::LogicSounds, logicSoundCount);
         sentences = section<SentenceRecord>(data, dir, Section::Sentences, sentenceCount);
-        sentenceWords = section<std::uint16_t>(data, dir, Section::SentenceWords, sentenceWordCount);
+        sentenceWords = section<SentenceWord>(data, dir, Section::SentenceWords, sentenceWordCount);
         rooms = section<RoomRecord>(data, dir, Section::Rooms, roomCount);
         sprites = section<SpriteRef>(data, dir, Section::Sprites, spriteCount);
         speech = section<std::uint16_t>(data, dir, Section::Speech, speechCount);
         messages = section<MessageRecord>(data, dir, Section::Messages, messageCount);
+        modelSounds = section<ModelSound>(data, dir, Section::ModelSounds, modelSoundCount);
         lightPatches = section<LightPatch>(data, dir, Section::LightPatch, lightPatchCount);
 
         LevelError result = planeTypeCount == planeCount ? validate() : LevelError::BadLayout;
@@ -382,7 +385,16 @@ namespace hldata
         for (std::uint32_t i = 0; i < logicSoundCount; ++i)
         {
             if ((logicSounds[i].move != 0xFFFF && logicSounds[i].move >= soundCount) ||
-                (logicSounds[i].stop != 0xFFFF && logicSounds[i].stop >= soundCount))
+                (logicSounds[i].stop != 0xFFFF && logicSounds[i].stop >= soundCount) ||
+                (logicSounds[i].locked != 0xFFFF && logicSounds[i].locked >= soundCount) ||
+                (logicSounds[i].lockedLine != 0xFFFF && logicSounds[i].lockedLine >= sentenceCount) ||
+                (logicSounds[i].unlocked != 0xFFFF && logicSounds[i].unlocked >= soundCount) ||
+                (logicSounds[i].unlockedLine != 0xFFFF && logicSounds[i].unlockedLine >= sentenceCount))
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < modelSoundCount; ++i)
+        {
+            if (modelSounds[i].sound >= soundCount)
                 return LevelError::BadIndex;
         }
         for (std::uint32_t i = 0; i < sentenceCount; ++i)
@@ -393,15 +405,20 @@ namespace hldata
         }
         for (std::uint32_t i = 0; i < sentenceWordCount; ++i)
         {
-            if (sentenceWords[i] >= soundCount)
+            if (sentenceWords[i].sound >= soundCount)
                 return LevelError::BadIndex;
         }
-        if (pathNodeCount > static_cast<std::uint32_t>(kMaxPathNodes) ||
-            pathNextCount != pathNodeCount * pathNodeCount)
+        if (pathNodeCount > static_cast<std::uint32_t>(kMaxPathNodes) || pathLinkCount > 0xFFFF)
             return LevelError::BadIndex;
-        for (std::uint32_t i = 0; i < pathNextCount; ++i)
+        for (std::uint32_t i = 0; i < pathNodeCount; ++i)
         {
-            if (pathNext[i] != kNoPathNode && pathNext[i] >= pathNodeCount)
+            if (static_cast<std::uint32_t>(pathNodes[i].firstLink) + pathNodes[i].linkCount > pathLinkCount)
+                return LevelError::BadIndex;
+        }
+        for (std::uint32_t i = 0; i < pathLinkCount; ++i)
+        {
+            if (pathLinks[i].to >= pathNodeCount ||
+                (pathLinks[i].brush != kNoBrush && pathLinks[i].brush >= brushCount))
                 return LevelError::BadIndex;
         }
         for (std::uint32_t i = 0; i < cornerCount; ++i)

@@ -32,6 +32,13 @@ namespace hlds
 
     RgbaImage toRgba(const IndexedImage &image, bool colourKey);
 
+    /// The game shows its pictures lighter than they are in its files: each
+    /// colour to the power 0.8 (its "texture gamma" of 2 on a screen of
+    /// 2.5, the settings it ships with).
+    inline constexpr double kTextureGamma = 0.8;
+    std::uint8_t brightened(std::uint8_t value);
+    void brighten(RgbaImage &image);
+
     /// Resize by area averaging. Colour is averaged over the opaque source
     /// pixels only, so a hole's key colour never bleeds into its edge.
     ///

@@ -4,8 +4,14 @@
 // about two minutes alight and is full again twenty seconds after it is put
 // out; at nothing it goes out by itself.
 //
-// What it does to the picture is light projected onto the world (LampBeam,
-// below), and a light of the hardware's own on whoever stands in it
+// What it does to the picture is the game's too: a light eighty units
+// across its half, at the point the middle of the view meets, the same size
+// however far off that is; brightest at its middle and fading evenly to its
+// edge; as bright as it gets out to five hundred units and fainter beyond.
+// The game ADDS it to the wall's own light, so that the wall is seen
+// brighter; here the wall is drawn again towards its own colour at full
+// light (the lamp pass), which is the nearest this hardware comes to that
+// -- and a light of the hardware's own falls on whoever stands in it
 // (lampOn).
 //
 // std-only and inline: the host tests run it.
@@ -17,13 +23,20 @@
 namespace hldata
 {
     inline constexpr std::int32_t kLampFull = 100000; ///< thousandths of a hundredth
-    inline constexpr std::int32_t kLampLeast = 2000;  ///< less than this will not light it
-    inline constexpr int kLampReach = 600;            ///< units: beyond this it lights nothing
+    inline constexpr int kLampReach = 2000;           ///< units: what the view meets farther off than this is not lit
+    /// The game's light: a ball this many units from its middle to its
+    /// edge, at the point the view meets -- the same size however far off
+    /// that is (so smaller on the screen, as a real one is not, and as the
+    /// game's is).
+    inline constexpr int kLampRadius = 80;
+    inline constexpr int kLampNear = 500;  ///< as bright as it gets out to here; fainter beyond
+    inline constexpr int kLampFullStrength = 22; ///< of 31, at its middle: what the game's adds, measured beside it (tools/ref)
 
     struct LampState
     {
         bool on = false;
-        std::int32_t charge = kLampFull;
+        /// (The game hands a new player 99 of a hundred.)
+        std::int32_t charge = kLampFull - 1000;
     };
 
     /// 0..100, as the game shows it.
@@ -32,7 +45,9 @@ namespace hldata
         return (lamp.charge + 999) / 1000;
     }
 
-    /// The switch. False if it stays as it was (no suit, or nothing in it).
+    /// The switch. False if it stays as it was (no suit). It lights with
+    /// whatever is in it, as the game's does: with nothing, it goes out
+    /// again at the next tick.
     inline bool lampToggle(LampState &lamp, bool suit)
     {
         if (lamp.on)
@@ -40,7 +55,7 @@ namespace hldata
             lamp.on = false;
             return true;
         }
-        if (!suit || lamp.charge < kLampLeast)
+        if (!suit)
             return false;
         lamp.on = true;
         return true;
@@ -77,9 +92,10 @@ namespace hldata
     // floor it skims, smaller on the screen the farther off -- as a light
     // does, and is not a shape on the screen.
 
-    /// The beam for one frame: from the lamp, along `axis`, with `u` and `v`
-    /// across it (all Q12, unit), `radius` units from its middle to its
-    /// edge, lighting nothing more than `reach` units off.
+    /// The light for one frame: seen from `from` along `axis`, with `u` and
+    /// `v` across it (all Q12, unit); a ball of `radius` units whose middle
+    /// is `distance` units along -- so nothing nearer than `near` or farther
+    /// than `reach` along the axis is in it.
     struct LampBeam
     {
         fx from[3] = {0, 0, 0};
@@ -87,32 +103,37 @@ namespace hldata
         fx u[3] = {0, 0, 0};
         fx v[3] = {0, 0, 0};
         int radius = 0;
+        int near = 0;
         int reach = 0;
         int strength = 0; ///< of 31: how solid the light is drawn, met head-on
     };
 
-    /// How wide the light is where it lands, `distance` units off (a cone,
-    /// taken at that one distance), and how strong.
-    inline constexpr int lampRadius(int distance)
+    /// How wide the light is where it lands (the same at any distance), and
+    /// how strong: full out to kLampNear, then as the square of how much
+    /// farther, to nothing at the lamp's reach.
+    inline constexpr int lampRadius(int)
     {
-        return 34 + (distance < 0 ? 0 : distance) / 5;
+        return kLampRadius;
     }
     inline constexpr int lampStrength(int distance)
     {
         if (distance >= kLampReach)
             return 0;
-        return 22 - (distance < 0 ? 0 : distance) * 13 / kLampReach;
+        if (distance <= kLampNear)
+            return kLampFullStrength;
+        const int fade = (kLampFullStrength * kLampNear / distance) * kLampNear / distance;
+        return fade < 1 ? 1 : fade;
     }
 
-    /// Whether a ball (`centre` in whole units, `radius`) is in the beam at
-    /// all: beside it within the two radii, and not behind the lamp or past
-    /// its reach.
+    /// Whether a ball (`centre` in whole units, `radius`) is in the light at
+    /// all: beside its line within the two radii, and along it no nearer
+    /// than the light begins nor farther than it ends.
     inline bool lampTouches(const LampBeam &beam, const std::int32_t *centre, int radius)
     {
         const std::int32_t d[3] = {centre[0] - fxToInt(beam.from[0]), centre[1] - fxToInt(beam.from[1]),
                                    centre[2] - fxToInt(beam.from[2])};
         const std::int32_t along = (d[0] * beam.axis[0] + d[1] * beam.axis[1] + d[2] * beam.axis[2]) >> 12;
-        if (along < -radius || along > beam.reach + radius)
+        if (along < beam.near - radius || along > beam.reach + radius)
             return false;
         const std::int64_t square = static_cast<std::int64_t>(d[0]) * d[0] + static_cast<std::int64_t>(d[1]) * d[1] +
                                     static_cast<std::int64_t>(d[2]) * d[2] - static_cast<std::int64_t>(along) * along;
@@ -158,10 +179,11 @@ namespace hldata
     }
 
     /// A surface's geometry (the level's packed commands), for the light's
-    /// pass: its vertices as they are, every colour white and every texture
-    /// coordinate `texCoord`. `emit` is given each word in turn.
+    /// pass: its vertices as they are, every colour `colour` and every
+    /// texture coordinate `texCoord`. `emit` is given each word in turn.
     template <class Emit>
-    inline void lampStream(const std::uint32_t *words, int count, std::uint32_t texCoord, Emit &&emit)
+    inline void lampStream(const std::uint32_t *words, int count, std::uint32_t texCoord, Emit &&emit,
+                           std::uint32_t colour = 0x7FFF)
     {
         int at = 0;
         while (at < count)
@@ -174,7 +196,7 @@ namespace hldata
                 if (code == 0)
                     break;
                 if (code == 0x20) // a colour
-                    emit(0x7FFF);
+                    emit(colour);
                 else if (code == 0x22) // a texture coordinate
                     emit(texCoord);
                 else
@@ -190,15 +212,17 @@ namespace hldata
         }
     }
 
-    /// How bright the lamp is as a light    /// How bright the lamp is as a light (0..31 of the hardware's) on something `along`
-    /// units down the beam and `aside` units off its middle is.
-    inline constexpr int lampOn(int along, int aside)
+    /// How bright the lamp is as a light of the hardware's (0..31) on
+    /// something `along` units down the view and `aside` units off its
+    /// middle, when the light is `distance` units off: in the ball, by how
+    /// near its middle.
+    inline constexpr int lampOn(int along, int aside, int distance = kLampNear)
     {
-        if (along <= 0 || along >= kLampReach)
+        const int back = along > distance ? along - distance : distance - along;
+        if (along <= 0 || back >= kLampRadius || aside >= kLampRadius)
             return 0;
-        const int wide = 28 + along / 4;
-        if (aside >= wide)
-            return 0;
-        return (kLampReach - along) * 22 / kLampReach * (wide - aside) / wide;
+        const int off = back > aside ? back : aside;
+        const int light = lampStrength(distance) * 2 * (kLampRadius - off) / kLampRadius;
+        return light > 31 ? 31 : light;
     }
 } // namespace hldata

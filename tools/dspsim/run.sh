@@ -16,3 +16,5 @@ mkdir -p build/dspsim
 g++ -O2 -std=c++17 -I"$TEAKRA_DIR/include" -Ishared/dsp -Wno-unused-function \
     -o build/dspsim/dspsim tools/dspsim/dspsim.cpp "$LIB"
 build/dspsim/dspsim build/teak.elf
+# (... and again with everything as loud as it goes.)
+DSPSIM_SCENE=loud build/dspsim/dspsim build/teak.elf

@@ -140,7 +140,7 @@ namespace hlrt
             titleTried = true;
             if (global.hasFat)
             {
-                if (std::FILE *file = std::fopen(global.dataPath(kTitleFile).c_str(), "rb"))
+                if (std::FILE *file = std::fopen(global.commonPath(kTitleFile).c_str(), "rb"))
                 {
                     const std::size_t size = std::fread(titleWords, 1, sizeof(titleWords), file);
                     std::fclose(file);

@@ -1,17 +1,17 @@
 /* What the DSi's DSP does for the game's sound: plays the music, and adds
  * the room's echo.
  *
- * This one file is the DSP program's arithmetic AND its model: the Teak
- * program (teak/source/main.c) includes it and calls hlDspTick() once for
- * every pair of samples it puts out; the host tests and the simulator's
- * harness include it too, and get the same samples, bit for bit. On the DSP
- * the pairs are worked out by the main loop into a small ring (hlDspFill)
- * and only handed to the speakers by the interrupt (hlDspPull): a pair that
+ * This file is the DSP program's MODEL. The program itself is assembly
+ * (teak/source/*.s), written to give the same samples as this, bit for bit:
+ * the host tests run this, and the simulator's harness (tools/dspsim) runs
+ * both -- the real program in an emulated DSP -- and compares every pair
+ * that comes out. Anything the program is to do is written here first.
+ * (What the two share by name -- the numbers of the commands, the sizes of
+ * the rings -- is in hl_dsp_proto.h, which both include.) On the DSP the
+ * pairs are worked out by the main loop into a small ring (hlDspFill) and
+ * only handed to the speakers by the interrupt (hlDspPull): a pair that
  * takes long to work out is then a moment's delay, not a missed sample. It
- * is plain C within what the Teak compiler can do: 16-bit words, 32-bit
- * sums, static arrays only, no pointers to locals, no division. (What of it
- * runs in the interrupt handler must first switch accumulator saturation
- * off: see teak/source/mode.s.)
+ * is plain C in the DSP's own terms: 16-bit words, 32-bit sums.
  *
  * MUSIC is two channels of IMA-ADPCM at half the output rate, four bits a
  * sample, packed two pairs to a word (left, right, left, right, low nibble
@@ -30,45 +30,7 @@
 
 #include <stdint.h>
 
-#define HL_DSP_MAGIC 0x484C /* "HL": the answer to a ping */
-
-#define HL_DSP_MUSIC_WORDS 4096 /* a third of a second of music */
-#define HL_DSP_SEND_WORDS 2048  /* a sixth of a second of what is to echo */
-
-/* Commands: the number in register 0, its arguments in registers 1 and 2
- * (written first). Every command is answered in register 0, with the number
- * of the tick it took effect before in register 1 (which is how the tests
- * line the model up with the program). */
-#define HL_DSP_CMD_PING 1        /* -> HL_DSP_MAGIC */
-#define HL_DSP_CMD_INFO 2        /* arg1: HL_DSP_INFO_* -> a DSP data address */
-#define HL_DSP_CMD_MUSIC_START 3 /* arg1: the ring's write position (what is in it already) */
-#define HL_DSP_CMD_MUSIC_STOP 4
-#define HL_DSP_CMD_MUSIC_FED 5   /* arg1: the ring's new write position -> its read position */
-#define HL_DSP_CMD_SEND_FED 6    /* the same for the echo's ring */
-#define HL_DSP_CMD_ROOM 7        /* arg1: feedback (Q15), arg2: damping (Q14, high 8 bits) | level (Q7, low 8) */
-#define HL_DSP_CMD_STATUS 8      /* -> times the music ran dry since last asked (low 15 bits),
-                                  * and HL_DSP_FAULT if the music has been stopped as wrong */
-#define HL_DSP_CMD_HEARD 9       /* -> the loudest sample sent to echo since last asked */
-
-#define HL_DSP_INFO_MUSIC 0
-#define HL_DSP_INFO_SEND 1
-
-#define HL_DSP_FAULT 0x8000
-
-/* The music arrives in blocks: a mark, the four words of both decoders'
- * states at the block's start (left sample, left step, right sample, right
- * step), then HL_DSP_BLOCK_WORDS words of samples. The decoders take their
- * states afresh from every block, so nothing that goes wrong outlasts one;
- * and a block that does not begin with the mark is the stream out of step,
- * at which the music is stopped (HL_DSP_FAULT) rather than played as noise. */
-#define HL_DSP_BLOCK_MARK 0xB10C
-#define HL_DSP_BLOCK_WORDS 1024
-#define HL_DSP_BLOCK_WHOLE (HL_DSP_BLOCK_WORDS + 5)
-
-/* What has been worked out and not yet sent to the speakers: pairs, in a
- * ring between the program's main loop (which fills it) and the interrupt
- * that asks for a pair 47,605 times a second (which only empties it). */
-#define HL_DSP_OUT_WORDS 128
+#include "hl_dsp_proto.h"
 
 static uint16_t hlMusicRing[HL_DSP_MUSIC_WORDS];
 static int16_t hlSendRing[HL_DSP_SEND_WORDS];
@@ -85,7 +47,6 @@ static int16_t hlValue[2], hlIndex[2], hlLast[2];
 static int16_t hlOutL, hlOutR;
 
 /* The echo: six delay lines in one array. */
-#define HL_DSP_DELAY_WORDS 1602
 static int16_t hlDelay[HL_DSP_DELAY_WORDS];
 static const uint16_t hlLineBase[6] = {0, 301, 622, 967, 1333, 1483};
 static const uint16_t hlLineLength[6] = {301, 321, 345, 366, 150, 119};

@@ -59,10 +59,23 @@ namespace hlds
 
     /// One spoken line: the sounds it is made of, as the game's paths
     /// ("scientist/alright.wav"), lower-case.
+    /// How one word of a line is said: the game's own marks on it. `pitch`
+    /// and `volume` in percent; `end`: where it is cut off, in percent of
+    /// its length (100: said to its end).
+    struct WordSaid
+    {
+        int pitch = 100;
+        int volume = 100;
+        int end = 100;
+    };
     struct Sentence
     {
+        /// The sounds, in order -- the pauses of its commas and full stops
+        /// among them, which are sounds too ("_comma", "_period").
         std::vector<std::string> words;
+        std::vector<WordSaid> said; ///< parallel to `words`
         int volume = 127;
+        int pitch = 0; ///< (as it was: each word has its own now)
     };
     /// sentences.txt: every line by its name, upper-case, without the "!".
     struct SentenceBook

@@ -31,6 +31,7 @@
 // std-only and inline: the host tests run it.
 
 #include "HlLogic.hpp"
+#include "HlMaterial.hpp"
 
 namespace hldata
 {
@@ -69,6 +70,32 @@ namespace hldata
     inline bool isGrunt(std::uint8_t kind)
     {
         return kind == static_cast<std::uint8_t>(ActorKind::Grunt);
+    }
+    /// The people of the place, who can be hurt (the man in the suit
+    /// cannot).
+    inline bool isPerson(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Guard) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Sitter);
+    }
+    /// What comes out of something that is hit, as the game has it: red
+    /// from people (and from the barnacle, which is made of what it has
+    /// eaten), yellow from the aliens, nothing from a machine.
+    inline constexpr int kBloodNone = 0;
+    inline constexpr int kBloodRed = 1;
+    inline constexpr int kBloodYellow = 2;
+    inline int bloodOf(std::uint8_t kind)
+    {
+        if (isGrunt(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
+            return kBloodRed;
+        return isMonster(kind) ? kBloodYellow : kBloodNone;
+    }
+    /// How much a person takes before they are dead (the game's, at its
+    /// middle difficulty).
+    inline int personHealth(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Guard) ? 35 : 20;
     }
     inline bool isMine(std::uint8_t kind)
     {
@@ -288,6 +315,13 @@ namespace hldata
             actor.thinkMs = 0;
             actor.hasGoal = false;
             actor.goalNode = actor.fromNode = -1;
+            // (Where it was: where it goes back to if it loses them.)
+            for (int i = 0; i < 3; ++i)
+                actor.home[i] = actor.pos[i];
+            actor.hasSeen = false;
+            actor.goingHome = false;
+            actor.lostMs = 0;
+            actor.lookMs = 0;
             monsterClip(a, actor, monsterKind(actor.kind).move, false);
         }
 
@@ -314,10 +348,18 @@ namespace hldata
     namespace detail
     {
         inline void gruntTick(LogicWorld &w, PlayerState &player, int index, int ms);
+        inline void personTick(LogicWorld &w, PlayerState &player, int index, int ms);
         inline void mineTick(LogicWorld &w, PlayerState &player, int index, int ms);
     }
     inline bool fights(std::uint8_t kind);
+    /// What a shot, a blow or a blast can hurt: what fights, and people.
+    inline bool canBeHurt(std::uint8_t kind);
     inline void targetBox(const ActorState &actor, fx *mins, fx *maxs);
+    /// Blood where something that bleeds was hurt at `at`: a puff of its
+    /// colour, and a mark on the wall or floor behind it along `dir` (null:
+    /// on the floor under it) -- more of it, and a pool, for the blow that
+    /// killed.
+    inline void bleed(LogicWorld &w, int index, const fx *at, const fx *dir, bool heavy);
 
     /// A blast at `origin`: hurts the player and every monster within
     /// `radius` units that it can reach in a straight line, less with
@@ -348,7 +390,7 @@ namespace hldata
         for (int i = 0; i < a.count; ++i)
         {
             const ActorState &actor = a.states[i];
-            if (i == except || !actor.active || !fights(actor.kind))
+            if (i == except || !actor.active || !canBeHurt(actor.kind))
                 continue;
             fx mins[3], maxs[3];
             targetBox(actor, mins, maxs);
@@ -363,7 +405,15 @@ namespace hldata
             }
             const int hurt = share(middle);
             if (hurt > 0)
+            {
                 monsterHurt(w, i, hurt, false);
+                // (Away from the blast.)
+                fx away[3] = {middle[0] - origin[0], middle[1] - origin[1], middle[2] - origin[2]};
+                const fx far = fxLength(away);
+                for (int k = 0; k < 3 && far > 0; ++k)
+                    away[k] = static_cast<fx>((static_cast<std::int64_t>(away[k]) << kFxShift) / far);
+                bleed(w, i, middle, far > 0 ? away : nullptr, a.states[i].ai >= kAiDying || !a.states[i].active);
+            }
         }
         for (int i = 0; i < w.recordCount; ++i)
         {
@@ -458,6 +508,38 @@ namespace hldata
         if (actor.active && isMine(actor.kind))
         {
             mineHurt(w, index);
+            return;
+        }
+        if (actor.active && isPerson(actor.kind))
+        {
+            // One of the people of the place. They do not fight back: they
+            // cry out, and die of enough of it -- the scene that had them
+            // has lost them, and they lie where they fell.
+            if (actor.ai >= kAiDying)
+                return;
+            if (group == kHitHead)
+                damage *= 3;
+            actor.health = static_cast<std::int16_t>(actor.health - damage);
+            const bool guard = actor.kind == static_cast<std::uint8_t>(ActorKind::Guard);
+            if (-actor.health < personHealth(actor.kind))
+            {
+                detail::monsterSound(w, actor, guard ? CommonSound::GuardPain : CommonSound::ScientistPain);
+                return;
+            }
+            detail::monsterSound(w, actor, guard ? CommonSound::GuardDie : CommonSound::ScientistDie);
+            if (actor.script >= 0 && actor.script < w.recordCount)
+            {
+                w.states[actor.script].dead = true;
+                actor.script = -1;
+                actor.scriptPhase = kActorFree;
+            }
+            actor.ai = kAiDead;
+            actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
+            actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
+            // (Falling, if this map's model was given how: else as they
+            // stood, which is at least still.)
+            detail::monsterClip(a, actor, "diesimple", true);
+            actorPlaceBox(a, index);
             return;
         }
         if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
@@ -903,12 +985,65 @@ namespace hldata
                     }
                 }
                 const fx speed = actor.speed > 0 ? actor.speed : kind.speed;
-                if (walkTick(a, world, index, monsterHull(actor.kind), target, speed, ms, &player, kind.half,
-                             kind.height) == kWalkNoWay)
+                // Does it see them? Looked at twice a second. While it does,
+                // it is them it makes for; once it does not, where it last
+                // did -- and it gets there, looks, and after a while gives
+                // them up and goes back to where it was.
+                actor.lookMs -= ms;
+                if (actor.lookMs <= 0)
                 {
-                    // Nowhere to go: it waits, facing them.
+                    actor.lookMs = 500;
+                    if (lineClear(world, eye, theirs))
+                    {
+                        for (int i = 0; i < 3; ++i)
+                            actor.seen[i] = target[i];
+                        actor.hasSeen = true;
+                        actor.lostMs = 0;
+                        actor.goingHome = false;
+                    }
+                    else
+                    {
+                        actor.lostMs += 500;
+                    }
+                }
+                if (actor.goingHome)
+                {
+                    const fx back[3] = {actor.home[0] - actor.pos[0], actor.home[1] - actor.pos[1], 0};
+                    const int went = fxLength(back) < fxFromInt(40)
+                                         ? kWalkNoWay
+                                         : walkTick(a, world, index, monsterHull(actor.kind), actor.home, speed, ms,
+                                                    &player, kind.half, kind.height);
+                    if (went == kWalkNoWay || actor.lostMs > 40000)
+                    {
+                        // Home (or as near as there is a way): as it was.
+                        actor.ai = kAiIdle;
+                        actor.goingHome = false;
+                        monsterClip(a, actor, kind.idle, false);
+                        break;
+                    }
+                    monsterClip(a, actor, kind.move, false);
+                    break;
+                }
+                const bool lost = actor.hasSeen && actor.lostMs > 0;
+                const fx *making = lost ? actor.seen : target;
+                const fx gap[3] = {making[0] - actor.pos[0], making[1] - actor.pos[1], 0};
+                const bool there = lost && fxLength(gap) < fxFromInt(48);
+                const int went = there ? kWalkNoWay
+                                       : walkTick(a, world, index, monsterHull(actor.kind), making, speed, ms, &player,
+                                                  kind.half, kind.height);
+                if (went == kWalkNoWay)
+                {
+                    // Nowhere to go, or where it last saw them and they are
+                    // not there: it waits, looking -- and not for ever.
                     faceTo(actor, d[0], d[1], ms, 32768);
                     monsterClip(a, actor, kind.idle, false);
+                    if (actor.lostMs > 6000)
+                    {
+                        actor.goingHome = true;
+                        actor.thinkMs = 0;
+                        actor.hasGoal = false;
+                        actor.goalNode = actor.fromNode = -1;
+                    }
                     break;
                 }
                 monsterClip(a, actor, kind.move, false);
@@ -2070,6 +2205,26 @@ namespace hldata
     {
         return isMonster(kind) || isTurret(kind) || isGrunt(kind) || isMine(kind);
     }
+    inline bool canBeHurt(std::uint8_t kind)
+    {
+        return fights(kind) || isPerson(kind);
+    }
+
+    inline void bleed(LogicWorld &w, int index, const fx *at, const fx *dir, bool heavy)
+    {
+        if (w.actors == nullptr || w.world == nullptr)
+            return;
+        const int blood = bloodOf(w.actors->states[index].kind);
+        if (blood == kBloodNone)
+            return;
+        const bool alien = blood == kBloodYellow;
+        effectAdd(*w.actors, kEffectBlood, at, nullptr, alien ? 1 : 0, 250);
+        static const fx kDown[3] = {0, 0, -kFxOne};
+        markBlood(*w.actors, *w.world, at, dir != nullptr ? dir : kDown, alien, heavy);
+        if (heavy)
+            markFloor(*w.actors, *w.world, at, 96, alien ? kDecalAlien : kDecalBlood, 22,
+                      alien ? kMarkAlien : kMarkBlood);
+    }
 
     /// The box a shot at the actor is first tried against.
     inline void targetBox(const ActorState &actor, fx *mins, fx *maxs)
@@ -2086,6 +2241,19 @@ namespace hldata
                 mins[i] = actor.pos[i] - fxFromInt(8);
                 maxs[i] = actor.pos[i] + fxFromInt(8);
             }
+            return;
+        }
+        if (isPerson(actor.kind))
+        {
+            // (Seated, a scientist is half the height.)
+            const bool seated = actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter);
+            for (int i = 0; i < 2; ++i)
+            {
+                mins[i] = actor.pos[i] - fxFromInt(14);
+                maxs[i] = actor.pos[i] + fxFromInt(14);
+            }
+            mins[2] = actor.pos[2];
+            maxs[2] = actor.pos[2] + fxFromInt(seated ? 48 : 70);
             return;
         }
         const MonsterKind &kind = monsterKind(actor.kind);
@@ -2175,6 +2343,13 @@ namespace hldata
                 actorPlaceBox(a, i);
                 continue;
             }
+            if (isPerson(actor.kind))
+            {
+                // (No scene has them: they follow, run, or shoot.)
+                if (actor.script < 0 && actor.ai < kAiDying)
+                    detail::personTick(w, player, i, ms);
+                continue;
+            }
             if (!isMonster(actor.kind))
                 continue;
             detail::monsterTick(w, player, i, ms);
@@ -2234,7 +2409,30 @@ namespace hldata
         std::int32_t secondMs = 0;   ///< ... and its other fire
         std::int32_t reloadMs = 0;   ///< left of a reload under way
         std::uint32_t seed = 777;    ///< where the shotgun's pellets go
+        /// The clip the hand should start, said by weaponsTick as it
+        /// happens (null: none this tick). Whoever draws the hand plays it
+        /// and sets this back to null.
+        const char *anim = nullptr;
+        // The crowbar, as the game keeps it:
+        std::uint8_t swingMiss = 0;  ///< which of its three swings at the air is next
+        std::uint8_t swingHit = 0;   ///< ... and of its two that land
+        std::int32_t readyMs = 1000; ///< how long it has been ready: a blow after a second's rest is a whole one
+        std::int32_t retryMs = 0;    ///< a swing that met nothing is tried again when this runs out
+        std::uint8_t blow = 10;      ///< what the swing under way does
+        std::int32_t dentMs = 0;     ///< until the mark of the last blow on a wall is made
+        fx dentAt[3] = {0, 0, 0};
+        fx dentNormal[3] = {0, 0, 0};
+        std::int32_t holsterMs = 0;  ///< while it is being put away
+        std::uint8_t taking = 0;     ///< ... for this weapon
     };
+    inline constexpr int kCrowbarReach = 32;  ///< the game's: units along the view
+    inline constexpr int kCrowbarBlow = 10;   ///< a whole blow; a follow-up is half
+    // What a swing of the crowbar met (detail::crowbarBlow).
+    inline constexpr int kMetNothing = 0;
+    inline constexpr int kMetFlesh = 1;   ///< something that bleeds
+    inline constexpr int kMetThing = 2;   ///< a machine, or something that breaks
+    inline constexpr int kMetWall = 3;
+    inline constexpr int kMetKilled = 4;  ///< flesh, and that was the end of it
 
     /// Which part of the actor a line from `from` to `to` strikes first
     /// (kHit*): the model is posed as the actor stands, and the line tried
@@ -2300,8 +2498,10 @@ namespace hldata
     /// `range` units, and hurts: a monster, or something that breaks. True
     /// if it hurt anything.
     inline bool fireLine(LogicWorld &w, PlayerState &player, const fx *eye, const fx *dir, int range,
-                         int damage, bool bullet)
+                         int damage, bool bullet, bool mark = true, int *met = nullptr)
     {
+        if (met != nullptr)
+            *met = kMetNothing;
         const fx end[3] = {eye[0] + dir[0] * range, eye[1] + dir[1] * range, eye[2] + dir[2] * range};
         const Shot shot = traceShot(*w.world, eye, end);
         // The nearest monster the line goes through before that.
@@ -2311,7 +2511,7 @@ namespace hldata
         for (int i = 0; a != nullptr && i < a->count; ++i)
         {
             const ActorState &actor = a->states[i];
-            if (!actor.active || !fights(actor.kind) || actor.ai >= kAiDying)
+            if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying)
                 continue;
             fx mins[3], maxs[3];
             targetBox(actor, mins, maxs);
@@ -2325,28 +2525,31 @@ namespace hldata
         }
         if (struck >= 0)
         {
-            // Where it landed, what bleeds bleeds (the aliens yellow).
+            // Where it landed, what bleeds bleeds (people red, the aliens
+            // yellow) -- and on the wall or the floor behind it, if there
+            // is one near: more of it for the blow that kills.
             const std::uint8_t kind = a->states[struck].kind;
-            if (isMonster(kind) || isGrunt(kind))
+            if (bloodOf(kind) != kBloodNone)
             {
                 fx at[3];
                 for (int i = 0; i < 3; ++i)
                     at[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * nearest) >>
                                                      kFractionShift);
-                effectAdd(*w.actors, kEffectBlood, at, nullptr, isGrunt(kind) ? 0 : 1, 250);
                 if (bullet && w.heard != nullptr)
                     w.heard->add(CommonSound::BulletFlesh, at, 90, kRadiusSmall);
                 monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
-                // ... and on the wall or the floor behind it, if there is
-                // one near: more of it for the blow that kills.
                 const bool killed = a->states[struck].ai >= kAiDying || !a->states[struck].active;
-                markBlood(*w.actors, *w.world, at, dir, !isGrunt(kind), killed || damage >= 40);
-                if (killed)
-                    markFloor(*w.actors, *w.world, at, 96, isGrunt(kind) ? kDecalBlood : kDecalAlien, 22,
-                              isGrunt(kind) ? kMarkBlood : kMarkAlien);
+                if (met != nullptr)
+                    *met = killed ? kMetKilled : kMetFlesh;
+                // (A guard counts the player's shots: at two he shoots back.)
+                if (kind == static_cast<std::uint8_t>(ActorKind::Guard) && w.actors->states[struck].struck < 200)
+                    ++w.actors->states[struck].struck;
+                bleed(w, struck, at, dir, killed || damage >= 40);
                 return true;
             }
             monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
+            if (met != nullptr)
+                *met = kMetThing;
             return true;
         }
         if (shot.mover >= 0)
@@ -2360,6 +2563,8 @@ namespace hldata
                     w.struckFrom[1] = dir[1];
                     w.struckFrom[2] = dir[2];
                     logicStrike(w, player, i, damage);
+                    if (met != nullptr)
+                        *met = kMetThing;
                     // Glass that takes it and stands (the marks are the
                     // brush's: they go with it). Glass that will break is
                     // cracked where it was hit -- one crack to a pane, moved
@@ -2387,7 +2592,9 @@ namespace hldata
         }
         // On the world, or on something that does not break: its mark, its
         // dust, and now and then the whine of it glancing off.
-        if (w.actors != nullptr && shot.fraction < kFractionOne && markShot(*w.actors, *w.world, eye, end, !bullet) &&
+        if (met != nullptr && shot.fraction < kFractionOne)
+            *met = kMetWall;
+        if (mark && w.actors != nullptr && shot.fraction < kFractionOne && markShot(*w.actors, *w.world, eye, end, !bullet) &&
             bullet && w.heard != nullptr && detail::chance(*w.actors) % 3 == 0)
         {
             fx at[3];
@@ -2412,6 +2619,178 @@ namespace hldata
         return kWeaponNone;
     }
 
+    namespace detail
+    {
+        /// The crowbar's blow, as the game makes it: along the view for
+        /// kCrowbarReach units; and if that meets nothing, a box the size of
+        /// someone crouching swept the same way, which is what lets a swing
+        /// land on what is beside the line and not on it. Hurts what it
+        /// meets by `damage`; sounds as what it met sounds; a wall's dent is
+        /// left for a fifth of a second later (WeaponState::dentMs). Returns
+        /// a kMet*.
+        inline int crowbarBlow(LogicWorld &w, PlayerState &player, WeaponState &state, const fx *eye,
+                               const fx *forward, int damage)
+        {
+            int met = kMetNothing;
+            fireLine(w, player, eye, forward, kCrowbarReach, damage, false, false, &met);
+            const fx end[3] = {eye[0] + forward[0] * kCrowbarReach, eye[1] + forward[1] * kCrowbarReach,
+                               eye[2] + forward[2] * kCrowbarReach};
+            fx probe[3] = {eye[0] + forward[0] * (kCrowbarReach + 16), eye[1] + forward[1] * (kCrowbarReach + 16),
+                           eye[2] + forward[2] * (kCrowbarReach + 16)};
+            bool breaks = false;
+            if (met == kMetNothing && w.actors != nullptr)
+            {
+                // The box: whoever stands within half its width of the line.
+                ActorWorld &a = *w.actors;
+                int best = -1;
+                std::int64_t nearest = kFractionOne;
+                for (int i = 0; i < a.count; ++i)
+                {
+                    const ActorState &actor = a.states[i];
+                    if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying)
+                        continue;
+                    fx mins[3], maxs[3];
+                    targetBox(actor, mins, maxs);
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        mins[k] -= fxFromInt(k == 2 ? 18 : 16);
+                        maxs[k] += fxFromInt(k == 2 ? 18 : 16);
+                    }
+                    std::int64_t enter = 0;
+                    if (lineEntersBox(eye, end, mins, maxs, enter) && enter < nearest)
+                    {
+                        nearest = enter;
+                        best = i;
+                    }
+                }
+                if (best >= 0)
+                {
+                    monsterHurt(w, best, damage, false);
+                    const ActorState &struck = a.states[best];
+                    fx mins[3], maxs[3];
+                    targetBox(struck, mins, maxs);
+                    const fx at[3] = {struck.pos[0], struck.pos[1], (mins[2] + maxs[2]) / 2};
+                    const bool killed = struck.ai >= kAiDying || !struck.active;
+                    bleed(w, best, at, forward, killed);
+                    met = bloodOf(struck.kind) == kBloodNone ? kMetThing : (killed ? kMetKilled : kMetFlesh);
+                }
+            }
+            if (met == kMetNothing)
+            {
+                // ... and the world, and what stands in it.
+                const Trace sweep = traceAll(*w.world, true, eye, end);
+                if (!sweep.startSolid && sweep.fraction < kFractionOne)
+                {
+                    met = kMetWall;
+                    // (Where on it: on from where the box stopped, into
+                    // what stopped it.)
+                    for (int k = 0; k < 3; ++k)
+                        probe[k] = sweep.endPos[k] - static_cast<fx>((static_cast<std::int64_t>(sweep.normal[k]) * 28) >> 18);
+                    if (sweep.mover >= 0)
+                    {
+                        for (int i = 0; i < w.recordCount; ++i)
+                        {
+                            if (w.records[i].brush == static_cast<std::uint16_t>(sweep.mover) && !w.states[i].dead &&
+                                isBreakable(w.records[i]))
+                            {
+                                w.struckFrom[0] = forward[0];
+                                w.struckFrom[1] = forward[1];
+                                w.struckFrom[2] = forward[2];
+                                logicStrike(w, player, i, damage);
+                                met = kMetThing;
+                            }
+                        }
+                    }
+                }
+            }
+            else if (met == kMetThing)
+            {
+                breaks = true;
+            }
+            if (w.heard == nullptr || met == kMetNothing)
+                return met;
+
+            if (met == kMetFlesh || met == kMetKilled)
+            {
+                // One of its three thuds.
+                static constexpr CommonSound kThuds[] = {CommonSound::CrowbarFlesh, CommonSound::CrowbarFlesh2,
+                                                         CommonSound::CrowbarFlesh3};
+                w.heard->add(kThuds[w.actors != nullptr ? chance(*w.actors) % 3 : 0], nullptr, 127, 0);
+                return met;
+            }
+            // A wall, or a thing: where, and what it is made of. Each
+            // material has its own sound, as loud as the game has it, and
+            // lets the crowbar's own ring more or less.
+            fx at[3] = {end[0], end[1], end[2]}, normal[3] = {0, 0, 0};
+            const bool found = traceShotWall(*w.world, eye, probe, at, normal);
+            Material made = Material::Concrete;
+            if (found && w.level != nullptr && met == kMetWall)
+                made = wallMaterial(*w.level, at, normal);
+            static constexpr struct
+            {
+                CommonSound first;
+                std::uint8_t count;
+                std::uint8_t step; ///< (the grate's two are its first and its fourth)
+                std::uint8_t loud; ///< of 127: the material's own sound
+                std::uint8_t ring; ///< of 127: the crowbar's
+            } kStruck[static_cast<int>(Material::Count)] = {
+                {CommonSound::Step1, 2, 1, 114, 76},     // concrete
+                {CommonSound::Metal1, 2, 1, 114, 38},    // metal
+                {CommonSound::Dirt1, 3, 1, 114, 13},     // dirt
+                {CommonSound::Duct1, 1, 1, 64, 38},      // vent
+                {CommonSound::Grate1, 2, 3, 114, 64},    // grate
+                {CommonSound::Tile1, 4, 1, 102, 25},     // tile
+                {CommonSound::Slosh1, 4, 1, 114, 0},     // slosh
+                {CommonSound::WoodHit1, 3, 1, 114, 25},  // wood
+                {CommonSound::GlassHit1, 3, 1, 102, 25}, // computer
+                {CommonSound::GlassHit1, 3, 1, 102, 25}, // glass
+            };
+            const auto &struck = kStruck[static_cast<int>(made)];
+            std::uint32_t roll = w.actors != nullptr ? chance(*w.actors) : 0;
+            // (On something that breaks, both are quieter.)
+            const int loud = breaks ? struck.loud * 2 / 3 : struck.loud;
+            const int ring = breaks ? struck.ring / 2 : struck.ring;
+            w.heard->add(static_cast<std::uint16_t>(static_cast<int>(struck.first) + static_cast<int>(roll % struck.count) * struck.step),
+                         at, loud, kRadiusMedium, 0, 96 + static_cast<int>((roll >> 8) & 15));
+            if (ring > 0)
+                w.heard->add((roll >> 16) & 1 ? CommonSound::CrowbarHit : CommonSound::CrowbarHit2, nullptr, ring, 0);
+            if (ring > 0 && w.heard->count > 0)
+                w.heard->events[w.heard->count - 1].pitch = static_cast<std::uint8_t>(98 + ((roll >> 20) & 3));
+            // The dent, a moment later -- on a wall; a thing that breaks has
+            // its own marks.
+            if (found && met == kMetWall)
+            {
+                state.dentMs = 200;
+                for (int k = 0; k < 3; ++k)
+                {
+                    state.dentAt[k] = at[k];
+                    state.dentNormal[k] = normal[k];
+                }
+            }
+            // Loud enough to turn a head.
+            if (w.actors != nullptr)
+            {
+                for (int k = 0; k < 3; ++k)
+                    w.actors->noise[k] = player.origin[k];
+                w.actors->noiseMs = 600;
+            }
+            return met;
+        }
+
+        /// A swing of the crowbar has landed: the hand's other swing (the
+        /// game has two for a blow that lands, turn about), and a quarter
+        /// of a second -- unless it killed, which in the game ends the
+        /// matter there and then.
+        inline void crowbarLanded(WeaponState &state, int met)
+        {
+            static const char *const kHits[] = {"attack2hit", "attack3hit"};
+            state.anim = kHits[state.swingHit++ % 2];
+            state.retryMs = 0;
+            if (met != kMetKilled)
+                state.cooldownMs = 250;
+        }
+    } // namespace detail
+
     /// The weapon in hand, for `ms` more milliseconds: `attack` is the
     /// trigger held, `next` a press of "the other weapon", `second` the
     /// other button held: the MP5's launcher, and for any other gun
@@ -2430,8 +2809,37 @@ namespace hldata
         std::uint32_t did = 0;
         if (state.cooldownMs > 0)
             state.cooldownMs -= ms;
+        else if (state.readyMs < 100000)
+            state.readyMs += ms; // (how long it has been ready: the crowbar's whole blow)
         if (state.secondMs > 0)
             state.secondMs -= ms;
+        // The mark of the crowbar's last blow on a wall, a moment after it.
+        if (state.dentMs > 0 && (state.dentMs -= ms) <= 0 && w.actors != nullptr)
+            decalAdd(*w.actors, kDecalDent, state.dentAt, state.dentNormal, 8, kMarkShot);
+        // A weapon being put away: when it is, the other is taken out.
+        if (state.holsterMs > 0)
+        {
+            state.holsterMs -= ms;
+            if (state.holsterMs > 0)
+                return did;
+            if (state.taking != kWeaponNone && (inv.have & (1u << state.taking)))
+                inv.current = state.taking;
+            state.taking = kWeaponNone;
+            state.cooldownMs = 500;
+            state.reloadMs = 0;
+            return did | kWeaponDrawn;
+        }
+        // A swing of the crowbar that met nothing is made again a tenth of
+        // a second on, without a sound: it may land then.
+        if (state.retryMs > 0 && (state.retryMs -= ms) <= 0 && inv.current == kWeaponCrowbar)
+        {
+            const int met = detail::crowbarBlow(w, player, state, eye, forward, state.blow);
+            if (met != kMetNothing)
+            {
+                detail::crowbarLanded(state, met);
+                did |= kWeaponHit;
+            }
+        }
         // Something not held is not in hand (a save from before it was).
         if (inv.current != kWeaponNone && !(inv.have & (1u << inv.current)))
             inv.current = weaponAfter(inv);
@@ -2462,6 +2870,17 @@ namespace hldata
             const std::uint8_t other = picked ? static_cast<std::uint8_t>(pick) : weaponAfter(inv);
             if (other != inv.current)
             {
+                state.retryMs = 0;
+                if (inv.current == kWeaponCrowbar)
+                {
+                    // Put away first, as the game puts it away: half a
+                    // second, and then the other comes out.
+                    state.anim = "holster";
+                    state.holsterMs = 500;
+                    state.taking = other;
+                    state.reloadMs = 0;
+                    return did;
+                }
                 inv.current = other;
                 state.cooldownMs = 500;
                 state.reloadMs = 0;
@@ -2529,55 +2948,27 @@ namespace hldata
         }
         if (inv.current == kWeaponCrowbar)
         {
-            // What is in reach: a monster first, else something that breaks
-            // (found as USE finds a button, and hit twice as hard, as the
-            // game doubles a blunt blow on a thing).
-            bool hit = fireLine(w, player, eye, forward, 48, 10, false);
-            // A swing is not a shot: it lands on what is close and roughly
-            // ahead, the nearest such (the game sweeps a box for the same
-            // reason).
-            if (!hit && w.actors != nullptr)
-            {
-                int best = -1;
-                fx bestD = fxFromInt(72);
-                for (int i = 0; i < w.actors->count; ++i)
-                {
-                    const ActorState &actor = w.actors->states[i];
-                    if (!actor.active || !(isMonster(actor.kind) || isGrunt(actor.kind)) || actor.ai >= kAiDying)
-                        continue;
-                    const fx half = monsterKind(actor.kind).height / 2;
-                    const fx to[3] = {actor.pos[0] - eye[0], actor.pos[1] - eye[1],
-                                      actor.pos[2] + half - eye[2]};
-                    const fx distance = fxLength(to);
-                    const std::int64_t ahead = static_cast<std::int64_t>(to[0]) * forward[0] +
-                                               static_cast<std::int64_t>(to[1]) * forward[1] +
-                                               static_cast<std::int64_t>(to[2]) * forward[2];
-                    // Within 72 units and 50 degrees or so of straight ahead.
-                    if (distance < bestD && ahead * 10 > static_cast<std::int64_t>(distance) * kFxOne * 6)
-                    {
-                        bestD = distance;
-                        best = i;
-                    }
-                }
-                if (best >= 0)
-                {
-                    monsterHurt(w, best, 10, false);
-                    hit = true;
-                }
-            }
-            if (!hit)
-            {
-                const int target = logicFindUsable(w, eye, forward, true);
-                if (target >= 0)
-                {
-                    logicStrike(w, player, target, 20);
-                    hit = true;
-                }
-            }
-            state.cooldownMs = hit ? 250 : 500;
+            // A swing, in the game's order: the swish and one of the three
+            // swings at the air, always; then the blow -- a whole one after
+            // a second's rest, half of one on the heels of the last -- and
+            // if it lands, one of the two swings that land takes the
+            // other's place.
+            static const char *const kMisses[] = {"attack1miss", "attack2", "attack3"};
+            state.anim = kMisses[state.swingMiss++ % 3];
+            state.blow = static_cast<std::uint8_t>(state.readyMs >= 1000 ? kCrowbarBlow : kCrowbarBlow / 2);
+            state.readyMs = 0;
             if (w.heard != nullptr)
-                w.heard->add(hit ? CommonSound::CrowbarHit : CommonSound::CrowbarMiss, nullptr);
-            return did | kWeaponFired | (hit ? kWeaponHit : 0);
+                w.heard->add(CommonSound::CrowbarMiss, nullptr);
+            did |= kWeaponFired;
+            const int met = detail::crowbarBlow(w, player, state, eye, forward, state.blow);
+            if (met == kMetNothing)
+            {
+                state.cooldownMs = 500;
+                state.retryMs = 100;
+                return did;
+            }
+            detail::crowbarLanded(state, met);
+            return did | kWeaponHit;
         }
         if (*clip <= 0)
         {
@@ -2640,3 +3031,4 @@ namespace hldata
 
 #include "HlEffects.hpp"
 #include "HlGrunt.hpp"
+#include "HlPeople.hpp"

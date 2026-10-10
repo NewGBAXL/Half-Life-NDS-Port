@@ -29,7 +29,8 @@ namespace hlrt
         /// Once a frame while it is open (after the keys have been scanned).
         Action frame();
         /// A line typed on the keyboard. False if it was given up (B).
-        /// Stands the game still meanwhile; the sound goes on.
+        /// Stands the game still meanwhile. The sound is whatever it was
+        /// (the menu's caller has it paused); the keys' own clicks are heard.
         bool typeLine(std::string &typed);
 
     private:

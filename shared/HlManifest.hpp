@@ -30,7 +30,7 @@
 namespace hldata
 {
     inline constexpr char kManifestMagic[4] = {'H', 'L', 'M', 'F'};
-    inline constexpr std::uint16_t kManifestVersion = 1;
+    inline constexpr std::uint16_t kManifestVersion = 2;
     /// The same on both sides, or nothing reads back.
     inline constexpr std::size_t kYasFlags = yas::mem | yas::binary | yas::no_header;
 
@@ -49,8 +49,9 @@ namespace hldata
 
     struct ManifestMap
     {
-        std::string name; ///< lower-case, no extension: maps/<name>.hlm
+        std::string name; ///< lower-case, no extension: maps/<name>.npac
         std::uint32_t levelBytes = 0;
+        std::uint32_t archiveBytes = 0; ///< the map's whole archive, as it is on the card
         std::uint16_t worstPolygons = 0;
         std::uint16_t worstVertices = 0;
         std::uint16_t textureCount = 0;
@@ -58,7 +59,7 @@ namespace hldata
         template <class Ar>
         void serialize(Ar &ar)
         {
-            ar &name &levelBytes &worstPolygons &worstVertices &textureCount;
+            ar &name &levelBytes &archiveBytes &worstPolygons &worstVertices &textureCount;
         }
     };
 

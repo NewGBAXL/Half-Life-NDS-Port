@@ -24,7 +24,9 @@ namespace hlrt
         std::free(materials_);
         std::free(palettes_);
         std::free(binds_);
+        std::free(tints_);
         binds_ = nullptr;
+        tints_ = nullptr;
         materials_ = nullptr;
         palettes_ = nullptr;
         count_ = 0;
@@ -36,7 +38,9 @@ namespace hlrt
         std::free(materials_);
         std::free(palettes_);
         std::free(binds_);
+        std::free(tints_);
         binds_ = nullptr;
+        tints_ = nullptr;
         materials_ = nullptr;
         palettes_ = nullptr;
         count_ = 0;
@@ -50,7 +54,10 @@ namespace hlrt
         materials_ = static_cast<NEA_Material **>(std::calloc(count + 1, sizeof(NEA_Material *)));
         palettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
         binds_ = static_cast<std::uint32_t *>(std::calloc(count + 1, 2 * sizeof(std::uint32_t)));
-        if (materials_ == nullptr || palettes_ == nullptr || binds_ == nullptr)
+        tints_ = static_cast<std::uint16_t *>(std::malloc((count + 1) * sizeof(std::uint16_t)));
+        for (int i = 0; tints_ != nullptr && i <= count; ++i)
+            tints_[i] = 0x7FFF;
+        if (materials_ == nullptr || palettes_ == nullptr || binds_ == nullptr || tints_ == nullptr)
         {
             destroy();
             return false;
@@ -96,11 +103,12 @@ namespace hlrt
         // (A liquid's coordinates go through the texture matrix, and a
         // conveyor belt's.)
         return loadFile(path.c_str(), (ref.flags & (hldata::kTextureLiquid | hldata::kTextureScroll)) != 0, ref.width,
-                        ref.height, a3i5 ? 1 : 0, materials_[index], palettes_[index]);
+                        ref.height, a3i5 ? 1 : 0, materials_[index], palettes_[index], &tints_[index]);
     }
 
     bool TextureCache::loadFile(const char *path, bool liquid, int expectWidth, int expectHeight,
-                                int expectA3I5, NEA_Material *&outMaterial, NEA_Palette *&outPalette)
+                                int expectA3I5, NEA_Material *&outMaterial, NEA_Palette *&outPalette,
+                                std::uint16_t *tint)
     {
         outMaterial = nullptr;
         outPalette = nullptr;
@@ -146,6 +154,20 @@ namespace hlrt
         // are, not in where they sit: texels, then (4x4 only) the index, then
         // the palette.
         const std::uint8_t *paletteData = data + header.texelBytes + header.indexBytes;
+        if (tint != nullptr && header.paletteColours != 0)
+        {
+            // Its colour, taken all together: the mean of its palette.
+            std::uint32_t r = 0, g = 0, b = 0;
+            for (int n = 0; n < header.paletteColours; ++n)
+            {
+                const std::uint16_t c = static_cast<std::uint16_t>(paletteData[n * 2] | (paletteData[n * 2 + 1] << 8));
+                r += c & 31;
+                g += (c >> 5) & 31;
+                b += (c >> 10) & 31;
+            }
+            *tint = static_cast<std::uint16_t>((r / header.paletteColours) | ((g / header.paletteColours) << 5) |
+                                               ((b / header.paletteColours) << 10));
+        }
         ok = material != nullptr && palette != nullptr;
         if (ok && a3i5)
         {

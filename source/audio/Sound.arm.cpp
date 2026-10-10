@@ -98,8 +98,11 @@ namespace hlrt
 
     const void *Sound::sample(std::uint32_t id) const
     {
-        if (id == static_cast<std::uint32_t>(kSpeechSample))
-            return word_.data != nullptr ? &word_.header : nullptr;
+        if (id >= static_cast<std::uint32_t>(kSpeechSample) && id < static_cast<std::uint32_t>(kSamples))
+        {
+            const Clip &clip = speech_[(id - kSpeechSample) / 2].clip[(id - kSpeechSample) & 1];
+            return clip.data != nullptr ? &clip.header : nullptr;
+        }
         if (id >= static_cast<std::uint32_t>(kUiSample) && id < static_cast<std::uint32_t>(kUiSample + kUiSoundCount))
             return ui_[id - kUiSample].data != nullptr ? &ui_[id - kUiSample].header : nullptr;
         if (id < static_cast<std::uint32_t>(count_) && clips_ != nullptr && clips_[id].data != nullptr)
@@ -123,8 +126,11 @@ namespace hlrt
     bool Sound::readClip(const char *name, Clip &clip)
     {
         clip = Clip();
-        const std::string path = global.dataPath("snd/") + name + ".hsn";
-        std::FILE *file = std::fopen(path.c_str(), "rb");
+        // The map's own, out of its archive; the menu's, out of the card's.
+        const std::string inArchive = std::string("snd/") + name + ".hsn";
+        std::FILE *file = std::fopen(global.mapPath(inArchive).c_str(), "rb");
+        if (file == nullptr)
+            file = std::fopen(global.commonPath(inArchive).c_str(), "rb");
         if (file == nullptr)
             return false;
         std::fseek(file, 0, SEEK_END);
@@ -194,8 +200,9 @@ namespace hlrt
             return;
         }
         count_ = count;
+        played_ = static_cast<std::uint32_t *>(std::calloc(view.logicCount / 32 + 1, sizeof(std::uint32_t)));
         soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
-                   view.soundCount, kept);
+                   view.soundCount, kept, view.modelSounds, view.modelSoundCount);
         for (int i = 0; i < count; ++i)
         {
             if (!kept[i] || view.sounds[i].name[0] == '\0')
@@ -256,7 +263,9 @@ namespace hlrt
 
     void Sound::resumeMusic()
     {
-        if (!musicHeld_)
+        // (With the game standing still it stays put down: setPaused takes
+        // it up again.)
+        if (!musicHeld_ || paused_)
             return;
         musicHeld_ = false;
         const int track = musicTrack_;
@@ -293,6 +302,7 @@ namespace hlrt
     {
         if (up_)
             mmEffectCancelAll();
+        fading_[0] = fading_[1] = Fading();
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
             mixer_.stop(v);
@@ -311,19 +321,19 @@ namespace hlrt
                 mmUnloadEffect(i);
             std::free(clips_[i].data);
         }
-        if (wordLoaded_)
-            mmUnloadEffect(kSpeechSample);
-        wordLoaded_ = false;
-        std::free(word_.data);
-        word_ = Clip();
-        wordVoice_ = -1;
+        for (Speech &speech : speech_)
+        {
+            releaseWord(speech, 0);
+            releaseWord(speech, 1);
+            speech = Speech();
+        }
+        std::free(played_);
+        played_ = nullptr;
         std::free(clips_);
         clips_ = nullptr;
         count_ = 0;
         loaded_ = 0;
         bytes_ = 0;
-        spokenCount_ = spokenAt_ = 0;
-        wordLeftMs_ = 0;
     }
 
     void Sound::place(const fx *pos, int volume, int radius, int &outVolume, int &outPan) const
@@ -347,7 +357,8 @@ namespace hlrt
     /// Play sample `sample` (which is `clip`) in `layer`, `volume` loud
     /// (0..127, before the layer's own volume) and `pan` to one side
     /// (0..127). The voice it got, or -1 if it is not to be heard.
-    int Sound::start(SoundLayer layer, int sample, const Clip &clip, int volume, int pan, bool loop, int tag)
+    int Sound::start(SoundLayer layer, int sample, const Clip &clip, int volume, int pan, bool loop, int tag,
+                     int pitch)
     {
         if (!up_ || (paused_ && layer != SoundLayer::Ui))
             return -1;
@@ -358,16 +369,43 @@ namespace hlrt
         if (v < 0)
             return -1;
         if (mixer_.voices[v].active)
-            stop(v);
-        const mm_sfxhand handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
-                                                static_cast<mm_byte>(pan * 2), 1024);
+            retire(v);
+        // (Maxmod's unit of speed: 1024 is as recorded.)
+        int rate = (1024 * pitch) / 100;
+        rate = rate < 64 ? 64 : (rate > 4095 ? 4095 : rate);
+        mm_sfxhand handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
+                                          static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+        if (handle == 0 && (fading_[0].handle != 0 || fading_[1].handle != 0))
+        {
+            // No channel: what was on its way out is out now.
+            killFading();
+            handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
+                                   static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+        }
         if (handle == 0)
-            return -1;
+        {
+            // The hardware has no channel for it, whatever the count says
+            // (something of its own is on one): then what matters least of
+            // all that is playing gives its channel up, and it is asked
+            // again. A sound is never taken as played that was not.
+            const int least = mixer_.weakest();
+            if (least < 0 || (layer != SoundLayer::Ui && layer != SoundLayer::Voice &&
+                              Mixer::rank(mixer_.voices[least].layer) > Mixer::rank(layer)))
+                return -1;
+            stop(least);
+            handle = NEA_SfxPlayEx(static_cast<mm_word>(sample), static_cast<mm_byte>(gain * 2),
+                                   static_cast<mm_byte>(pan * 2), static_cast<mm_hword>(rate));
+            if (handle == 0)
+                return -1;
+        }
         voices_[v] = Voice();
         voices_[v].handle = handle;
         voices_[v].shown = static_cast<std::uint8_t>(gain);
         voices_[v].pan = static_cast<std::uint8_t>(pan);
-        mixer_.start(v, layer, gain, loop ? -1 : static_cast<std::int32_t>(clip.ms) + 34, tag);
+        voices_[v].rate = static_cast<std::uint16_t>(rate);
+        voices_[v].hz = clip.rate;
+        // (Played faster, it is over sooner.)
+        mixer_.start(v, layer, gain, loop ? -1 : static_cast<std::int32_t>(clip.ms * 100 / pitch) + 34, tag);
         return v;
     }
 
@@ -379,6 +417,65 @@ namespace hlrt
         mixer_.stop(v);
     }
 
+    void Sound::retire(int v)
+    {
+        const mm_sfxhand handle = voices_[v].handle;
+        const int level = voices_[v].shown;
+        voices_[v] = Voice();
+        mixer_.stop(v);
+        if (handle == 0)
+            return;
+        // (Too quiet to click, or the game standing still: simply stopped.)
+        if (level < 8 || paused_)
+        {
+            NEA_SfxStop(handle);
+            return;
+        }
+        // A place on the way out; if both are taken, the older has had its
+        // time.
+        int slot = fading_[0].handle == 0 ? 0 : (fading_[1].handle == 0 ? 1 : -1);
+        if (slot < 0)
+        {
+            NEA_SfxStop(fading_[0].handle);
+            fading_[0] = fading_[1];
+            slot = 1;
+        }
+        fading_[slot].handle = handle;
+        fading_[slot].level = static_cast<std::uint8_t>(level / 2);
+        NEA_SfxSetVolume(handle, static_cast<mm_word>(level));
+    }
+
+    /// Every frame: what is on its way out is half as loud again, and gone
+    /// when there is nothing left of it (three or four frames).
+    void Sound::fadeTick()
+    {
+        for (Fading &fading : fading_)
+        {
+            if (fading.handle == 0)
+                continue;
+            fading.level = static_cast<std::uint8_t>(fading.level / 2);
+            if (fading.level < 4)
+            {
+                NEA_SfxStop(fading.handle);
+                fading = Fading();
+            }
+            else
+            {
+                NEA_SfxSetVolume(fading.handle, static_cast<mm_word>(fading.level * 2));
+            }
+        }
+    }
+
+    void Sound::killFading()
+    {
+        for (Fading &fading : fading_)
+        {
+            if (fading.handle != 0)
+                NEA_SfxStop(fading.handle);
+            fading = Fading();
+        }
+    }
+
     void Sound::playOnce(const SoundEvent &event)
     {
         if (event.sound >= count_ || clips_[event.sound].data == nullptr)
@@ -388,7 +485,7 @@ namespace hlrt
         const bool placed = !(event.flags & kSoundHere);
         if (placed)
             place(event.pos, event.volume, event.radius, volume, pan);
-        const int v = start(event.layer, event.sound, clip, volume, pan, false);
+        const int v = start(event.layer, event.sound, clip, volume, pan, false, -1, event.pitch);
         if (v < 0 || !placed)
             return;
         Voice &voice = voices_[v];
@@ -397,6 +494,46 @@ namespace hlrt
         voice.radius = event.radius;
         for (int k = 0; k < 3; ++k)
             voice.pos[k] = event.pos[k];
+    }
+
+    /// What something makes for as long as it moves (a lift, a train, a
+    /// door that takes its time): round and round from where it is, until
+    /// stopLoop. A sound that does not go round is simply played.
+    void Sound::playLoop(const SoundEvent &event)
+    {
+        if (event.sound >= count_ || clips_[event.sound].data == nullptr)
+            return;
+        const Clip &clip = clips_[event.sound];
+        if (clip.header.repeat != MM_SREPEAT_FORWARD)
+        {
+            playOnce(event);
+            return;
+        }
+        stopLoop(event.tag); // (it does not start twice)
+        int volume = event.volume, pan = 64;
+        const bool placed = !(event.flags & kSoundHere);
+        if (placed)
+            place(event.pos, event.volume, event.radius, volume, pan);
+        const int v = start(event.layer, event.sound, clip, volume, pan, true, event.tag, event.pitch);
+        if (v < 0)
+            return;
+        Voice &voice = voices_[v];
+        voice.placed = placed;
+        voice.volume = event.volume;
+        voice.radius = event.radius;
+        for (int k = 0; k < 3; ++k)
+            voice.pos[k] = event.pos[k];
+    }
+
+    void Sound::stopLoop(int tag)
+    {
+        for (int v = 0; v < Mixer::kVoices; ++v)
+        {
+            const MixVoice &mix = mixer_.voices[v];
+            if (mix.active && mix.layer != SoundLayer::Ambience && mix.layer != SoundLayer::Voice &&
+                mix.leftMs < 0 && mix.tag == tag)
+                retire(v);
+        }
     }
 
     /// What has a place is put there again as the camera moves and turns:
@@ -427,135 +564,255 @@ namespace hlrt
         }
     }
 
+    void Sound::releaseWord(Speech &speech, int which)
+    {
+        if (speech.loaded[which] && up_)
+            mmUnloadEffect(static_cast<mm_word>(kSpeechSample + (&speech - speech_) * 2 + which));
+        speech.loaded[which] = false;
+        std::free(speech.clip[which].data);
+        speech.clip[which] = Clip();
+    }
+
     void Sound::say(const SoundEvent &event)
     {
         const LevelView &view = level.view;
         const int sentence = event.sound;
         if (sentence < 0 || sentence >= static_cast<int>(view.sentenceCount))
             return;
-        // A line cuts in on the one before it, as on the game's own voice
-        // channel.
+        // Whose voice: the one that is already this speaker's (a line cuts
+        // in on the same speaker's last, as on the game's own voice
+        // channel); else one that is silent; else the one that has been
+        // speaking longest. The same speaker is the same place -- or no
+        // place at all, which is the voice that is heard everywhere.
+        const bool placed = !(event.flags & kSoundHere);
+        Speech *speech = nullptr;
+        for (Speech &other : speech_)
+        {
+            if (!other.busy() || other.placed != placed)
+                continue;
+            const fx d[3] = {other.pos[0] - event.pos[0], other.pos[1] - event.pos[1], other.pos[2] - event.pos[2]};
+            if (!placed || fxLength(d) < fxFromInt(96))
+                speech = &other;
+        }
+        for (Speech &other : speech_)
+        {
+            if (speech == nullptr && !other.busy())
+                speech = &other;
+        }
+        if (speech == nullptr)
+            speech = speech_[0].born < speech_[1].born ? &speech_[0] : &speech_[1];
+
         const SentenceRecord &record = view.sentences[sentence];
-        spokenCount_ = 0;
-        spokenAt_ = 0;
-        for (int w = 0; w < record.wordCount && spokenCount_ < kMaxSpoken; ++w)
-            spoken_[spokenCount_++] = view.sentenceWords[record.firstWord + w];
+        speech->count = 0;
+        speech->at = 0;
+        for (int w = 0; w < record.wordCount && speech->count < kMaxSpoken; ++w)
+            speech->words[speech->count++] = static_cast<std::uint16_t>(record.firstWord + w);
         // (As loud as the line is said and as whoever says it is far off:
         // a line from somewhere comes from there.)
-        spokenVolume_ = (record.volume * event.volume) / 127;
-        spokenPlaced_ = !(event.flags & kSoundHere);
-        spokenRadius_ = event.radius;
+        speech->volume = (record.volume * event.volume) / 127;
+        speech->pitch = event.pitch; // (each word has its own on top: SentenceWord)
+        speech->placed = placed;
+        speech->radius = event.radius;
         for (int k = 0; k < 3; ++k)
-            spokenPos_[k] = event.pos[k];
-        wordLeftMs_ = 1; // (the word in the air is cut short at the next tick)
+            speech->pos[k] = event.pos[k];
+        speech->born = ++speechClock_;
+        speech->leftMs = 1; // (the word in the air is cut short at the next tick)
+        // (What was read ahead was the old line's next word.)
+        releaseWord(*speech, speech->cur ^ 1);
+        speech->ahead = -1;
+    }
+
+    /// The word after the one in the air, into the buffer that one is not
+    /// in: read while there is time, so that the line does not stop for the
+    /// card between two words.
+    void Sound::readAhead(Speech &speech, int index)
+    {
+        const int other = speech.cur ^ 1;
+        releaseWord(speech, other);
+        speech.ahead = -1;
+        if (index >= static_cast<int>(level.view.soundCount) || level.view.sounds[index].name[0] == '\0' ||
+            (index < count_ && clips_[index].data != nullptr) || global.heapHeadroom() < 200 * 1024)
+            return;
+        if (!readClip(level.view.sounds[index].name, speech.clip[other]))
+            return;
+        describe(speech.clip[other]);
+        speech.loaded[other] =
+            up_ && mmLoadEffect(static_cast<mm_word>(kSpeechSample + (&speech - speech_) * 2 + other)) == 0;
+        if (speech.loaded[other])
+            speech.ahead = index;
+        else
+            releaseWord(speech, other);
     }
 
     void Sound::speechTick(int ms)
     {
-        if (wordLeftMs_ > 0)
+        for (int s = 0; s < kSpeakers; ++s)
         {
-            wordLeftMs_ -= ms;
-            if (wordLeftMs_ > 0)
-                return;
-        }
-        // The word in the air is over: its voice and its memory can go,
-        // and the next is read.
-        if (wordVoice_ >= 0 && mixer_.voices[wordVoice_].active && mixer_.voices[wordVoice_].layer == SoundLayer::Voice)
-            stop(wordVoice_);
-        wordVoice_ = -1;
-        if (wordLoaded_)
-        {
-            mmUnloadEffect(kSpeechSample);
-            wordLoaded_ = false;
-        }
-        std::free(word_.data);
-        word_ = Clip();
-        while (spokenAt_ < spokenCount_)
-        {
-            const std::uint16_t index = spoken_[spokenAt_++];
-            if (index >= level.view.soundCount || level.view.sounds[index].name[0] == '\0' ||
-                global.heapHeadroom() < 200 * 1024)
+            Speech &speech = speech_[s];
+            if (!speech.busy() && speech.voice < 0)
                 continue;
-            int volume = spokenVolume_, pan = 64;
-            if (spokenPlaced_)
-                place(spokenPos_, spokenVolume_, spokenRadius_, volume, pan);
-            // (In memory already, if something else of the map plays it.)
-            const bool borrowed = index < count_ && clips_[index].data != nullptr;
-            int v = -1;
-            std::uint32_t lasts = 0;
-            if (borrowed)
+            if (speech.leftMs > 0)
             {
-                lasts = clips_[index].ms;
-                v = start(SoundLayer::Voice, index, clips_[index], volume, pan, false);
+                speech.leftMs -= ms;
+                if (speech.leftMs > 0)
+                    continue;
             }
-            else if (readClip(level.view.sounds[index].name, word_))
+            // The word in the air is over: its voice and its memory can
+            // go, and the next is said.
+            if (speech.voice >= 0 && mixer_.voices[speech.voice].active &&
+                mixer_.voices[speech.voice].layer == SoundLayer::Voice && mixer_.voices[speech.voice].tag == s)
             {
-                describe(word_);
-                lasts = word_.ms;
-                wordLoaded_ = up_ && mmLoadEffect(kSpeechSample) == 0;
-                if (wordLoaded_)
-                    v = start(SoundLayer::Voice, kSpeechSample, word_, volume, pan, false);
+                // (A word read off the card is played out of memory that is
+                // about to be given back: that one is stopped dead. One of
+                // the map's own sounds may fade.)
+                if (speech.clip[speech.cur].data != nullptr)
+                    stop(speech.voice);
+                else
+                    retire(speech.voice);
             }
-            else
+            speech.voice = -1;
+            releaseWord(speech, speech.cur);
+            bool said = false;
+            while (speech.at < speech.count && !said)
             {
+                // How this word is said: the game's marks on it.
+                const SentenceWord &word = level.view.sentenceWords[speech.words[speech.at++]];
+                const std::uint16_t index = word.sound;
+                if (index >= level.view.soundCount || level.view.sounds[index].name[0] == '\0')
+                    continue;
+                const int pitch = (speech.pitch * (word.pitch != 0 ? word.pitch : 100)) / 100;
+                const int loud = (speech.volume * word.volume) / 100;
+                int volume = loud, pan = 64;
+                if (speech.placed)
+                    place(speech.pos, loud, speech.radius, volume, pan);
+                // (In memory already, if something else of the map plays it.)
+                const bool borrowed = index < count_ && clips_[index].data != nullptr;
+                int v = -1;
+                std::uint32_t lasts = 0;
+                if (borrowed)
+                {
+                    lasts = clips_[index].ms;
+                    v = start(SoundLayer::Voice, index, clips_[index], volume, pan, false, s, pitch);
+                }
+                else
+                {
+                    // Read ahead while the last word was said; or read now.
+                    if (speech.ahead != index)
+                        readAhead(speech, index);
+                    if (speech.ahead != index)
+                        continue; // (not on the card, or no memory for it)
+                    speech.cur ^= 1;
+                    speech.ahead = -1;
+                    Clip &clip = speech.clip[speech.cur];
+                    lasts = clip.ms;
+                    v = start(SoundLayer::Voice, kSpeechSample + s * 2 + speech.cur, clip, volume, pan, false, s,
+                              pitch);
+                }
+                if (v >= 0 && speech.placed)
+                {
+                    Voice &voice = voices_[v];
+                    voice.placed = true;
+                    voice.volume = static_cast<std::uint8_t>(loud);
+                    voice.radius = speech.radius;
+                    for (int k = 0; k < 3; ++k)
+                        voice.pos[k] = speech.pos[k];
+                }
+                // (Too far off to be heard, it still takes its time.)
+                speech.voice = v;
+                // (Said faster it is over sooner; and a word may be cut off
+                // before its end, which is how the game clips its speech.)
+                speech.leftMs = static_cast<std::int32_t>(lasts * 100 / (pitch > 0 ? pitch : 100)) *
+                                    (word.end != 0 ? word.end : 100) / 100 +
+                                (word.end != 0 && word.end < 100 ? 0 : 20);
+                said = true;
+            }
+            if (!said)
+            {
+                speech.count = speech.at = 0;
+                releaseWord(speech, speech.cur ^ 1);
+                speech.ahead = -1;
                 continue;
             }
-            if (v >= 0 && spokenPlaced_)
-            {
-                Voice &voice = voices_[v];
-                voice.placed = true;
-                voice.volume = static_cast<std::uint8_t>(spokenVolume_);
-                voice.radius = spokenRadius_;
-                for (int k = 0; k < 3; ++k)
-                    voice.pos[k] = spokenPos_[k];
-            }
-            // (Too far off to be heard, it still takes its time.)
-            wordVoice_ = v;
-            wordLeftMs_ = static_cast<std::int32_t>(lasts) + 20;
-            return;
+            // ... and the word after it is fetched while this one is said.
+            if (speech.at < speech.count)
+                readAhead(speech, level.view.sentenceWords[speech.words[speech.at]].sound);
         }
-        spokenCount_ = spokenAt_ = 0;
     }
 
     void Sound::loopsTick()
     {
         const LevelView &view = level.view;
-        constexpr int kLoops = 4;
-        // The four loudest of the loops that are on, where the camera is.
-        int want[kLoops], wantVolume[kLoops], wantPan[kLoops];
+        // The loudest of the loops that are on, where the camera is: up to
+        // kLoops of them while there are voices for it, and never fewer than
+        // the layer's own share (the mixer sees to both).
+        int want[kLoops], wantVolume[kLoops], wantPan[kLoops], wantWeight[kLoops];
         int wanted = 0;
         for (std::uint32_t i = 0; i < view.logicCount; ++i)
         {
             const LogicRecord &record = view.logic[i];
-            if (record.kind != static_cast<std::uint8_t>(LogicKind::Ambient) ||
-                !(record.flags & kLogicToggle) || !game.logic.states[i].running ||
-                game.logic.states[i].dead || record.extra[0] >= static_cast<std::uint32_t>(count_) ||
-                clips_[record.extra[0]].data == nullptr)
+            const bool ambient = record.kind == static_cast<std::uint8_t>(LogicKind::Ambient) &&
+                                 (record.flags & kLogicToggle);
+            // (Something that turns hums for as long as it does.)
+            const bool turning = record.kind == static_cast<std::uint8_t>(LogicKind::Rotating) &&
+                                 view.logicSoundCount > i && view.logicSounds[i].move != kNoSound;
+            if (!ambient && !turning)
                 continue;
-            int volume = static_cast<int>(record.extra[2]), pan = 64;
-            if (record.extra[1] != 0)
+            const std::uint32_t sample = ambient ? record.extra[0] : view.logicSounds[i].move;
+            const bool on = game.logic.states[i].running && !game.logic.states[i].dead;
+            if (!on && played_ != nullptr)
+                played_[i >> 5] &= ~(1u << (i & 31));
+            if (!on || sample >= static_cast<std::uint32_t>(count_) || clips_[sample].data == nullptr)
+                continue;
+            // Something that does not go round is played once when it is
+            // switched on, as the game plays it, and that is all.
+            if (clips_[sample].header.repeat != MM_SREPEAT_FORWARD && played_ != nullptr &&
+                (played_[i >> 5] & (1u << (i & 31))))
+                continue;
+            int volume = ambient ? static_cast<int>(record.extra[2]) : 100, pan = 64;
+            if (turning && record.brush != kNoBrush)
+            {
+                const MoverHull &hull = game.logic.movers[record.brush];
+                const fx at[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,
+                                  (hull.mins[2] + hull.maxs[2]) / 2};
+                place(at, volume, kRadiusLarge, volume, pan);
+            }
+            else if (ambient && record.extra[1] != 0)
+            {
                 place(record.move, volume, static_cast<int>(record.extra[1]), volume, pan);
+            }
             if (mixer_.scaled(SoundLayer::Ambience, volume) < 3)
                 continue;
+            // What is playing already is not put out by something only a
+            // little louder: two of a loudness would change places ten
+            // times a second.
+            int weight = volume;
+            for (int v = 0; v < Mixer::kVoices; ++v)
+            {
+                if (mixer_.voices[v].active && mixer_.voices[v].layer == SoundLayer::Ambience &&
+                    mixer_.voices[v].tag == static_cast<int>(i))
+                    weight += 12;
+            }
             int at = wanted < kLoops ? wanted : kLoops - 1;
-            if (wanted >= kLoops && volume <= wantVolume[at])
+            if (wanted >= kLoops && weight <= wantWeight[at])
                 continue;
-            while (at > 0 && wantVolume[at - 1] < volume)
+            while (at > 0 && wantWeight[at - 1] < weight)
             {
                 want[at] = want[at - 1];
                 wantVolume[at] = wantVolume[at - 1];
                 wantPan[at] = wantPan[at - 1];
+                wantWeight[at] = wantWeight[at - 1];
                 --at;
             }
             want[at] = static_cast<int>(i);
             wantVolume[at] = volume;
             wantPan[at] = pan;
+            wantWeight[at] = weight;
             if (wanted < kLoops)
                 ++wanted;
         }
         // Those already playing stay on their voices (and are only told of
         // a change worth telling); the rest stop; the new ones start.
-        bool placed[kLoops] = {false, false, false, false};
+        bool placed[kLoops] = {};
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
             MixVoice &mix = mixer_.voices[v];
@@ -569,7 +826,9 @@ namespace hlrt
             }
             if (found < 0)
             {
-                stop(v);
+                // (What does not go round is left to finish.)
+                if (mix.leftMs < 0)
+                    retire(v);
                 continue;
             }
             placed[found] = true;
@@ -592,12 +851,24 @@ namespace hlrt
         {
             if (placed[n])
                 continue;
-            const int sample = static_cast<int>(view.logic[want[n]].extra[0]);
+            const LogicRecord &record = view.logic[want[n]];
+            const bool ambient = record.kind == static_cast<std::uint8_t>(LogicKind::Ambient);
+            const int sample = static_cast<int>(ambient ? record.extra[0] : view.logicSounds[want[n]].move);
             const Clip &clip = clips_[sample];
-            // (Something that does not loop is played through, and again
-            // when it is over, for as long as it is on.)
-            start(SoundLayer::Ambience, sample, clip, wantVolume[n], wantPan[n], clip.header.repeat == MM_SREPEAT_FORWARD,
-                  want[n]);
+            const bool round = clip.header.repeat == MM_SREPEAT_FORWARD;
+            const int v = start(SoundLayer::Ambience, sample, clip, wantVolume[n], wantPan[n], round, want[n],
+                                ambient && record.pad != 0 ? record.pad : 100);
+            if (v >= 0 && !round && played_ != nullptr)
+                played_[want[n] >> 5] |= 1u << (want[n] & 31);
+        }
+        // What something made for as long as it moved, and is no longer
+        // there to say it has stopped.
+        for (int v = 0; v < Mixer::kVoices; ++v)
+        {
+            const MixVoice &mix = mixer_.voices[v];
+            if (mix.active && mix.layer == SoundLayer::World && mix.leftMs < 0 && mix.tag >= 0 &&
+                mix.tag < static_cast<int>(view.logicCount) && game.logic.states[mix.tag].dead)
+                stop(v);
         }
     }
 
@@ -643,21 +914,42 @@ namespace hlrt
     {
         if (paused == paused_)
             return;
-        paused_ = paused;
+        killFading();
         lastVblank_ = Global::vblanks();
-        if (!paused)
-        {
-            loopsDue_ = 0;
-            return;
-        }
-        // Everything of the game's own stops where it is. (The loops start
-        // again when it goes on; a line goes on from its next word.)
+        // Everything of the game's own stops where it is, and goes on from
+        // there: slowed to the slowest a channel goes, and silent, for as
+        // long as the game stands still (Sound.hpp).
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
-            if (mixer_.voices[v].active && mixer_.voices[v].layer != SoundLayer::Ui)
-                stop(v);
+            const Voice &voice = voices_[v];
+            if (!mixer_.voices[v].active || mixer_.voices[v].layer == SoundLayer::Ui || voice.handle == 0)
+                continue;
+            if (paused)
+            {
+                // (A channel's clock is sixteen bits of the 16.7 MHz bus:
+                // 256 Hz is as slow as it goes. A little above that.)
+                const int slow = (300 * 1024) / (voice.hz > 0 ? voice.hz : 11025) + 1;
+                NEA_SfxSetVolume(voice.handle, 0);
+                NEA_SfxSetRate(voice.handle, static_cast<mm_hword>(slow));
+            }
+            else
+            {
+                NEA_SfxSetRate(voice.handle, voice.rate);
+                NEA_SfxSetVolume(voice.handle, static_cast<mm_word>(voice.shown * 2));
+            }
         }
-        wordVoice_ = -1;
+        if (paused)
+        {
+            // (The music is put down as it is across a load, and taken up
+            // from the same moment.)
+            holdMusic();
+            paused_ = true;
+        }
+        else
+        {
+            paused_ = false;
+            resumeMusic();
+        }
     }
 
     void Sound::startMusic(int track)
@@ -782,7 +1074,8 @@ namespace hlrt
             setDsp(false);
         }
         // What has run its time is over: its voice is maxmod's again.
-        const std::uint32_t ended = mixer_.tick(ms);
+        fadeTick();
+        const std::uint32_t ended = mixer_.tick(ms, paused_);
         for (int v = 0; v < Mixer::kVoices; ++v)
         {
             if (!((ended >> v) & 1))
@@ -813,6 +1106,10 @@ namespace hlrt
             const SoundEvent &event = queue.events[i];
             if (event.flags & kSoundSentence)
                 say(event);
+            else if (event.flags & kSoundLoopOff)
+                stopLoop(event.tag);
+            else if (event.flags & kSoundLoopOn)
+                playLoop(event);
             else
                 playOnce(event);
         }

@@ -19,6 +19,8 @@
 #include "hlds/BspFile.hpp"
 #include "hlds/Cooker.hpp"
 #include "hlds/EntityParser.hpp"
+#include "hlds/Materials.hpp"
+#include "hlds/Pack.hpp"
 #include "hlds/TextureCook.hpp"
 
 namespace fs = std::filesystem;
@@ -40,6 +42,34 @@ namespace hlds
     fs::path Converter::dataDir(const fs::path &cardRoot)
     {
         return cardRoot / "_nds" / "hl_nds" / "data";
+    }
+
+    fs::path Converter::stageDir() const
+    {
+        if (!options_.stageRoot.empty())
+            return dataDir(options_.stageRoot);
+        // (A card root given with a slash at its end has no last name.)
+        fs::path card = options_.cardRoot;
+        if (!card.has_filename())
+            card = card.parent_path();
+        fs::path beside = card;
+        beside += "-stage";
+        return dataDir(beside);
+    }
+
+    void Converter::packInto(MapResult &result) const
+    {
+        PackReport report;
+        std::string why;
+        if (!packMap(stageDir(), dataDir(options_.cardRoot), result.name, options_.compress, report, why))
+        {
+            result.ok = false;
+            result.error = "the map's archive was not made: " + why;
+            return;
+        }
+        result.archiveKb = static_cast<int>(report.cardBytes / 1024);
+        result.archiveRawKb = static_cast<int>(report.rawBytes / 1024);
+        result.archiveMembers = report.members;
     }
 
     std::string Converter::preflight() const
@@ -187,6 +217,7 @@ namespace hlds
             /// The same with the model as the game has it for its finest
             /// level, for a DSi; empty where that is no more than `bytes`.
             std::vector<std::uint8_t> bytesDsi;
+            std::vector<std::string> eventSounds; ///< CookedModel::eventSounds
             RgbaImage atlas;
             int triangles = 0, fullTriangles = 0; ///< body 0 at its finest, in each
             int far = 0;                          ///< ... and at its coarsest
@@ -223,7 +254,10 @@ namespace hlds
                 std::vector<std::string> clips;
             };
             const Held kHeld[] = {
-                {kViewModelName, !before, {"idle1", "attack1", "attack1miss", "draw"}},
+                // (The crowbar's clips are those the game plays: its three
+                // swings at the air, the two that land, out and away.)
+                {kViewModelName, !before,
+                 {"draw", "holster", "attack1miss", "attack2", "attack3", "attack2hit", "attack3hit"}},
                 {"v_9mmhandgun", !before && map != "c1a1" && map != "c1a1a",
                  {"idle1", "shoot", "reload", "draw"}},
                 {"v_shotgun", !before && !early, {"sm_idle", "shoot", "reload", "draw"}},
@@ -296,7 +330,9 @@ namespace hlds
             ModelCookReport modelReport;
             out = ModelOut();
             out.name = need.name;
-            if (!cookModel(mdl, clips, cooked, modelReport, why, skinTexels) ||
+            const bool cookedOk = cookModel(mdl, clips, cooked, modelReport, why, skinTexels);
+            out.eventSounds = cooked.eventSounds;
+            if (!cookedOk ||
                 !writeModel(cooked, out.bytes, why))
             {
                 if (!quiet)
@@ -392,12 +428,43 @@ namespace hlds
         result.alphaTexelKb = plan.alphaTexels / 1024;
 
         CookOptions cookOptions;
-        cookOptions.lightGamma = options_.lightGamma;
+        cookOptions.lightScale = options_.lightScale;
+        cookOptions.lightPower = options_.lightPower;
         cookOptions.guardedMerges = options_.guardedMerges;
         cookOptions.skyName = skyName;
         for (const auto &model : models)
             cookOptions.models.push_back(model.name);
         cookOptions.viewModel = kViewModelName;
+        // (What the models sound like as they move: the level has to know
+        // where each of those sounds is.)
+        for (const ModelOut &model : models)
+        {
+            for (const std::string &sound : model.eventSounds)
+            {
+                if (std::find(cookOptions.modelSounds.begin(), cookOptions.modelSounds.end(), sound) ==
+                    cookOptions.modelSounds.end())
+                    cookOptions.modelSounds.push_back(sound);
+            }
+        }
+        // What the game's textures are made of, for the sound of a step.
+        MaterialBook materials;
+        {
+            std::vector<std::uint8_t> text;
+            std::string ignored;
+            const fs::path file = findNoCase(options_.gameDir / "sound", "materials.txt");
+            if (!file.empty() && readFile(file, text, ignored))
+                materials = parseMaterials(std::string(text.begin(), text.end()));
+        }
+        cookOptions.materials = &materials;
+        // The game's own graph of the map's nodes, where it came with one.
+        NodGraph nodGraph;
+        {
+            std::vector<std::uint8_t> bytes;
+            std::string ignored;
+            const fs::path file = findNoCase(options_.gameDir / "maps" / "graphs", result.name + ".nod");
+            if (!file.empty() && readFile(file, bytes, ignored) && parseNodGraph(bytes, nodGraph, ignored))
+                cookOptions.nodGraph = &nodGraph;
+        }
         // What the map's people say is looked up in the game's own list.
         SentenceBook book;
         {
@@ -447,7 +514,8 @@ namespace hlds
                                level.logicSounds.data(),
                                static_cast<std::uint32_t>(level.logicSounds.size()),
                                static_cast<std::uint32_t>(level.soundPaths.size()),
-                               reinterpret_cast<bool *>(kept.data()));
+                               reinterpret_cast<bool *>(kept.data()), level.modelSounds.data(),
+                               static_cast<std::uint32_t>(level.modelSounds.size()));
             for (std::size_t n = 0; n < level.soundPaths.size(); ++n)
             {
                 if (level.soundPaths[n].empty())
@@ -543,12 +611,14 @@ namespace hlds
                     const std::string cardName = soundCardName(level.soundPaths[one.index], cooked.rate, loops);
                     // (The hash is of the source and of how it was cooked:
                     // the file is made again only if either changed.)
+                    // (The last: which way of deciding what goes round the
+                    // file was cooked by -- 2: only what has a cue point.)
                     const std::uint32_t settings[] = {static_cast<std::uint32_t>(cooked.rate), loops ? 1u : 0u,
-                                                      hldata::kSoundVersion};
+                                                      hldata::kSoundVersion, 2u};
                     const std::uint32_t hash =
                         one.sourceHash ^
                         hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
-                    const fs::path file = dataDir(options_.cardRoot) / "snd" / (cardName + ".hsn");
+                    const fs::path file = stageDir() / "snd" / (cardName + ".hsn");
                     std::vector<std::uint8_t> existing;
                     std::string why;
                     CookedSound old;
@@ -719,11 +789,11 @@ namespace hlds
             PtexconvEncoder encoder(exe, temp);
             TextureCookReport texReport;
             const bool ok = cookTextures(bsp, wads, plan, encoder,
-                                         dataDir(options_.cardRoot) / "tex", texReport,
+                                         stageDir() / "tex", texReport,
                                          result.error) &&
                             (skyName.empty() ||
                              cookSky(options_.gameDir, skyName, encoder,
-                                     dataDir(options_.cardRoot) / "tex", result.error));
+                                     stageDir() / "tex", result.error));
             // The models' skins: one for each size a model's skin is made
             // in (a map crowded with models has them smaller), shared by
             // every map that uses the model at that size, and encoded again
@@ -737,7 +807,7 @@ namespace hlds
                     hldata::crc32(model.atlas.rgba.data(),
                                   static_cast<std::uint32_t>(model.atlas.rgba.size())) ^
                     hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
-                const fs::path skin = dataDir(options_.cardRoot) / "mdl" /
+                const fs::path skin = stageDir() / "mdl" /
                                       hldata::modelSkinFile(model.name.c_str(), model.atlas.width,
                                                             model.atlas.height);
                 std::vector<std::uint8_t> existing;
@@ -765,7 +835,7 @@ namespace hlds
                 const std::uint32_t hash =
                     one.sourceHash ^
                     hldata::crc32(reinterpret_cast<const std::uint8_t *>(settings), sizeof(settings)) * 131u;
-                const fs::path file = dataDir(options_.cardRoot) / "spr" /
+                const fs::path file = stageDir() / "spr" /
                                       hldata::spriteFile(ref.name, ref.width, ref.height);
                 std::vector<std::uint8_t> existing;
                 std::string ignored;
@@ -794,12 +864,12 @@ namespace hlds
         for (const auto &model : models)
         {
             const fs::path file =
-                dataDir(options_.cardRoot) / "mdl" / result.name / (model.name + ".hmd");
+                stageDir() / "mdl" / result.name / (model.name + ".hmd");
             if (!writeFileAtomic(file, model.bytes, result.error))
                 return result;
             // (A DSi's, beside it -- and none left over from a cook that
             // had one where this has not.)
-            const fs::path dsi = dataDir(options_.cardRoot) / "mdl" / result.name / (model.name + ".dsi.hmd");
+            const fs::path dsi = stageDir() / "mdl" / result.name / (model.name + ".dsi.hmd");
             std::error_code gone;
             if (model.bytesDsi.empty())
                 fs::remove(dsi, gone);
@@ -810,8 +880,12 @@ namespace hlds
 
         // The level last: it is what makes the map loadable, so it lands only
         // once everything it names is on the card.
-        const fs::path outPath = dataDir(options_.cardRoot) / "maps" / (result.name + ".hlm");
-        if (!writeFileAtomic(outPath, bytes, result.error))
+        const fs::path outPath = stageDir() / "maps" / (result.name + ".hlm");
+        // (Beside it, the map's entity text as the game had it: for whoever
+        // reads the stage, not for the console.)
+        const std::vector<std::uint8_t> text(level.entityText.begin(), level.entityText.end());
+        if (!writeFileAtomic(stageDir() / "maps" / (result.name + ".ent"), text, result.error) ||
+            !writeFileAtomic(outPath, bytes, result.error))
             return result;
 
         result.ok = true;
@@ -819,6 +893,12 @@ namespace hlds
         result.surfaces = report.surfaces;
         result.brushes = report.brushes;
         result.logicRecords = report.logicRecords;
+        result.pathNodes = report.paths.nodes;
+        result.pathLinks = report.paths.links;
+        result.pathDoorLinks = report.paths.doorLinks;
+        result.pathRefused = report.paths.refused;
+        result.pathDrops = report.paths.dropLinks;
+        result.pathFromGraph = report.paths.fromGraph;
         result.unsupportedClasses = static_cast<int>(report.unsupported.size());
         for (const auto &entry : report.unsupported)
             result.unsupportedEntities += entry.second;
@@ -834,7 +914,7 @@ namespace hlds
     CommonResult Converter::cookCommon()
     {
         CommonResult result;
-        const fs::path ui = dataDir(options_.cardRoot);
+        const fs::path ui = stageDir();
         std::string why;
         // A file is written only if it is not already what it would be.
         auto put = [&](const fs::path &file, const std::vector<std::uint8_t> &bytes) -> bool
@@ -982,19 +1062,66 @@ namespace hlds
     {
         int failed = 0;
         common_ = cookCommon();
+        {
+            PackReport report;
+            std::string why;
+            if (!packCommon(stageDir(), dataDir(options_.cardRoot), options_.compress, report, why))
+                common_.warnings.push_back("the common archive was not made: " + why);
+        }
         for (std::size_t i = 0; i < names.size(); ++i)
         {
             if (cancel != nullptr && cancel->load())
                 break;
             if (progress)
                 progress(i, names[i]);
-            const MapResult result = cookMap(names[i]);
+            MapResult result = cookMap(names[i]);
+            if (result.ok)
+                packInto(result);
             if (!result.ok)
                 ++failed;
             if (done)
                 done(result);
         }
 
+        if (!writeManifest(error))
+            return failed + 1;
+        return failed;
+    }
+
+    int Converter::packAll(const std::function<void(const MapResult &)> &done, std::string &error)
+    {
+        int failed = 0;
+        PackReport commonReport;
+        std::string why;
+        if (!packCommon(stageDir(), dataDir(options_.cardRoot), options_.compress, commonReport, why))
+            common_.warnings.push_back("the common archive was not made: " + why);
+        std::vector<std::string> names;
+        std::error_code ec;
+        for (auto it = fs::directory_iterator(stageDir() / "maps", ec);
+             !ec && it != fs::directory_iterator(); it.increment(ec))
+        {
+            if (it->path().extension() == ".hlm")
+                names.push_back(it->path().stem().string());
+        }
+        std::sort(names.begin(), names.end());
+        for (const std::string &name : names)
+        {
+            MapResult result;
+            result.name = name;
+            result.ok = true;
+            packInto(result);
+            if (!result.ok)
+                ++failed;
+            if (done)
+                done(result);
+        }
+        if (!writeManifest(error))
+            return failed + 1;
+        return failed;
+    }
+
+    bool Converter::writeManifest(std::string &error) const
+    {
         // The manifest is rebuilt from what is ACTUALLY on the card, not from
         // what this run did: a run of one map must not forget the hundred an
         // earlier run cooked, and a cancelled run must not list maps it never
@@ -1017,20 +1144,23 @@ namespace hlds
         for (auto it = fs::directory_iterator(dir / "maps", ec);
              !ec && it != fs::directory_iterator(); it.increment(ec))
         {
-            if (it->path().extension() != ".hlm")
+            if (it->path().extension() != ".npac")
                 continue;
             std::vector<std::uint8_t> bytes;
             std::string ignored;
+            std::size_t archiveBytes = 0;
             hldata::LevelView view;
-            // Checksum included: a level that does not open is not listed, so
-            // the DS never offers a map it would then refuse.
-            if (!readFile(it->path(), bytes, ignored) ||
+            // Every member inflated, the level put together and its
+            // checksum taken: an archive that does not come back whole is
+            // not listed, so the DS never offers a map it would then refuse.
+            if (!unpackLevel(it->path(), bytes, archiveBytes, ignored) ||
                 view.open(bytes.data(), static_cast<std::uint32_t>(bytes.size())) !=
                     hldata::LevelError::Ok)
                 continue;
             hldata::ManifestMap map;
             map.name = it->path().stem().string();
             map.levelBytes = static_cast<std::uint32_t>(bytes.size());
+            map.archiveBytes = static_cast<std::uint32_t>(archiveBytes);
             map.worstPolygons = view.header->worstPolygons;
             map.worstVertices = view.header->worstVertices;
             map.textureCount = static_cast<std::uint16_t>(view.textureCount);
@@ -1056,7 +1186,7 @@ namespace hlds
 
         if (!manifest.maps.empty() &&
             !writeFileAtomic(dir / "manifest.bin", hldata::writeManifest(manifest), error))
-            return failed + 1;
-        return failed;
+            return false;
+        return true;
     }
 } // namespace hlds

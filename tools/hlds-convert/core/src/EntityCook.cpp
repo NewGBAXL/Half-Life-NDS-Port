@@ -240,11 +240,11 @@ namespace hlds
             }
             else if (cls == "monster_scientist")
             {
-                info = {true, ActorKind::Scientist, "models/scientist.mdl", {"idle1", "walk", "run"}, "idle1"};
+                info = {true, ActorKind::Scientist, "models/scientist.mdl", {"idle1", "walk", "run", "diesimple"}, "idle1"};
             }
             else if (cls == "monster_barney")
             {
-                info = {true, ActorKind::Guard, "models/barney.mdl", {"idle1", "walk", "run"}, "idle1"};
+                info = {true, ActorKind::Guard, "models/barney.mdl", {"idle1", "walk", "run", "diesimple", "shootgun2"}, "idle1"};
             }
             else if (cls == "monster_gman")
             {
@@ -254,7 +254,8 @@ namespace hlds
             {
                 // (The five ways he sits, which he goes between: HlActors.hpp.)
                 info = {true, ActorKind::Sitter, "models/scientist.mdl",
-                        {"sitlookleft", "sitlookright", "sitscared", "sitting2", "sitting3"}, "sitlookleft"};
+                        {"sitlookleft", "sitlookright", "sitscared", "sitting2", "sitting3", "diesimple"},
+                        "sitlookleft"};
             }
             else if (cls == "monster_scientist_dead")
             {
@@ -614,11 +615,19 @@ namespace hlds
             SentenceRecord record{};
             record.firstWord = static_cast<std::uint16_t>(out.sentenceWords.size());
             record.volume = static_cast<std::uint8_t>(std::clamp(sentence->volume, 0, 127));
-            for (const std::string &word : sentence->words)
+            record.pitch = 0;
+            for (std::size_t w = 0; w < sentence->words.size(); ++w)
             {
-                const std::uint16_t index = soundIndex(word, false);
-                if (index != kNoSound)
-                    out.sentenceWords.push_back(index);
+                const std::uint16_t index = soundIndex(sentence->words[w], false);
+                if (index == kNoSound)
+                    continue;
+                const WordSaid said = w < sentence->said.size() ? sentence->said[w] : WordSaid();
+                SentenceWord word{};
+                word.sound = index;
+                word.pitch = static_cast<std::uint8_t>(said.pitch == 100 ? 0 : std::clamp(said.pitch, 30, 255));
+                word.volume = static_cast<std::uint8_t>(std::clamp(said.volume, 0, 100));
+                word.end = static_cast<std::uint8_t>(std::clamp(said.end, 10, 100));
+                out.sentenceWords.push_back(word);
             }
             record.wordCount = static_cast<std::uint8_t>(out.sentenceWords.size() - record.firstWord);
             out.sentences.push_back(record);
@@ -1065,24 +1074,59 @@ namespace hlds
                         record.flags |= kLogicStartOpen;
                 }
             }
-            else if (cls == "infodecal" && named)
+            else if (cls == "infodecal")
             {
-                // A mark that appears when it is told to: the nearest of
-                // the marks the card has to the picture it names.
+                // A mark the map's makers put there: with a name, one that
+                // appears when it is told to; without, one that is there
+                // from the start. The nearest of the marks the card has to
+                // the picture it names (and nothing, for the signs and
+                // letters the card has not got).
                 std::string picture(entity.value("texture"));
                 for (char &c : picture)
                     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                // (Each as big as its picture is in the game's decals.wad,
+                // where a texel is a unit: these are that file's sizes.)
+                static const struct
+                {
+                    const char *name;
+                    int which;
+                    int size;
+                } kMarks[] = {
+                    {"{blood1", kDecalBlood, 48},        {"{blood2", kDecalBlood + 1, 48},   {"{blood3", kDecalBlood + 2, 48},
+                    {"{blood4", kDecalSplash2, 48},      {"{blood5", kDecalSplash2, 64},     {"{blood6", kDecalSplash, 48},
+                    {"{blood7", kDecalBlood, 32},        {"{blood8", kDecalBlood + 1, 16},   {"{bigblood1", kDecalPool, 96},
+                    {"{bigblood2", kDecalPool + 1, 80},  {"{bloodhand1", kDecalHand, 32},    {"{bloodhand2", kDecalHand, 64},
+                    {"{bloodhand3", kDecalHand, 64},     {"{bloodhand4", kDecalHand, 16},    {"{bloodhand5", kDecalHand, 32},
+                    {"{bloodhand6", kDecalHand, 32},     {"{yblood1", kDecalAlien, 48},      {"{yblood2", kDecalAlien2, 32},
+                    {"{yblood3", kDecalAlien, 32},       {"{yblood4", kDecalAlien2, 32},     {"{yblood5", kDecalAlien, 32},
+                    {"{yblood6", kDecalAlien2, 16},      {"{scorch1", kDecalScorch, 96},     {"{scorch2", kDecalScorch, 96},
+                    {"{scorch3", kDecalScorch, 96},      {"{smscorch1", kDecalScorch, 32},   {"{smscorch2", kDecalScorch, 32},
+                    {"{smscorch3", kDecalScorch, 48},    {"{spit1", kDecalSpit, 32},         {"{spit2", kDecalSpit, 32},
+                    {"{crack1", kDecalWallCrack, 48},    {"{crack2", kDecalWallCrack, 96},   {"{crack3", kDecalWallCrack, 64},
+                    {"{crack4", kDecalWallCrack, 64},    {"{dent1", kDecalWallDent, 32},     {"{dent2", kDecalWallDent, 32},
+                    {"{dent3", kDecalWallDent, 32},      {"{dent4", kDecalWallDent, 32},     {"{dent5", kDecalWallDent, 32},
+                    {"{dent6", kDecalWallDent, 32},      {"{break1", kDecalWallCrack, 48},   {"{break2", kDecalWallCrack, 48},
+                    {"{break3", kDecalWallCrack, 48},
+                };
                 int which = -1, half = 12;
-                if (picture.rfind("{yblood", 0) == 0)
-                    which = (picture.back() & 1) ? kDecalAlien : kDecalAlien2;
-                else if (picture.rfind("{blood", 0) == 0 || picture.rfind("{bigblood", 0) == 0)
-                    which = kDecalBlood + (picture.back() % kDecalBloods), half = picture[1] == 'b' && picture[2] == 'i' ? 28 : 16;
-                else if (picture.rfind("{scorch", 0) == 0 || picture.rfind("{smscorch", 0) == 0)
-                    which = kDecalScorch, half = picture[1] == 's' && picture[2] == 'm' ? 16 : 40;
-                else if (picture.rfind("{shot", 0) == 0 || picture.rfind("{bigshot", 0) == 0)
-                    which = kDecalShot, half = 7;
-                else if (picture.rfind("{spit", 0) == 0)
-                    which = kDecalSpit, half = 14;
+                for (const auto &mark : kMarks)
+                {
+                    if (picture == mark.name)
+                    {
+                        which = mark.which;
+                        // (A sixteenth over half: the outer texel of its
+                        // cell is kept clear.)
+                        half = (mark.size * 8 + 7) / 15;
+                    }
+                }
+                // (The rest by what they begin with: a hole is a hole, a
+                // ding a dent.)
+                if (which < 0 && (picture.rfind("{shot", 0) == 0 || picture.rfind("{bigshot", 0) == 0))
+                    which = kDecalShot, half = 8;
+                else if (which < 0 && picture.rfind("{ding", 0) == 0)
+                    which = kDecalWallDent, half = 32;
+                if (which >= 0 && !named)
+                    record.flags |= kLogicStartOpen;
                 if (which >= 0)
                 {
                     make = true;
@@ -1490,6 +1534,10 @@ namespace hlds
                     record.extra[2] = static_cast<std::uint32_t>(
                         std::clamp(std::lround(volume * 12.7), 0L, 127L));
                     record.extra[3] = spoken ? 1 : 0;
+                    // How fast it is played: "pitch", in percent (100, or
+                    // none, is as it was recorded).
+                    const long pitch = std::lround(numberKey(entity, "pitch", 100));
+                    record.pad = pitch >= 30 && pitch <= 255 && pitch != 100 ? static_cast<std::uint16_t>(pitch) : 0;
                     if (looped)
                     {
                         record.flags |= kLogicToggle;
@@ -1559,6 +1607,12 @@ namespace hlds
                     record.extra[2] = static_cast<std::uint32_t>(std::clamp(
                         std::lround(numberKey(entity, "volume", 10) * 12.7), 0L, 127L));
                     record.extra[3] = 1;
+                    // Who says it, where the map names them: the line is
+                    // then heard from where they stand (and is theirs, not
+                    // the voice that is heard everywhere).
+                    const std::string speaker(entity.value("entity"));
+                    if (!speaker.empty() && speaker.rfind("monster_", 0) != 0)
+                        record.netName = nameId(speaker);
                 }
                 else
                 {
@@ -1919,15 +1973,79 @@ namespace hlds
             // What it sounds like: a door's or a button's sounds are numbers
             // into the game's fixed lists; what breaks sounds of what it is
             // made of.
-            LogicSound sound{kNoSound, kNoSound};
-            if (cls == "func_door" || cls == "func_door_rotating")
+            LogicSound sound{kNoSound, kNoSound, kNoSound, kNoSound, kNoSound, kNoSound};
+            // (The game's one list for buttons, and for what a locked door
+            // or button answers with: its buttons.cpp.)
+            auto buttonSound = [&](int number) -> std::uint16_t
             {
-                sound.move = numbered("doors/doormove", static_cast<int>(numberKey(entity, "movesnd")), 10);
+                if (number >= 1 && number <= 11)
+                    return soundIndex("buttons/button" + std::to_string(number) + ".wav", false);
+                if (number == 12)
+                    return soundIndex("buttons/latchlocked1.wav", false);
+                if (number == 13)
+                    return soundIndex("buttons/latchunlocked1.wav", false);
+                if (number == 14)
+                    return soundIndex("buttons/lightswitch2.wav", false);
+                if (number >= 21 && number <= 25)
+                    return soundIndex("buttons/lever" + std::to_string(number - 20) + ".wav", false);
+                return kNoSound;
+            };
+            if (cls == "func_door" || cls == "func_door_rotating" || cls == "func_button" ||
+                cls == "func_rot_button" || cls == "momentary_door")
+            {
+                // (A number into the game's list -- or, in a few maps, the
+                // sound's own name.)
+                auto lockSound = [&](const char *key) -> std::uint16_t
+                {
+                    const std::string value(entity.value(key));
+                    if (value.find(".wav") != std::string::npos || value.find('/') != std::string::npos)
+                        return soundIndex(value, false);
+                    return buttonSound(static_cast<int>(numberKey(entity, key)));
+                };
+                sound.locked = lockSound("locked_sound");
+                sound.unlocked = lockSound("unlocked_sound");
+                // "Access denied" and "access granted" and their like: the
+                // first line of the game's group for the number.
+                static const char *const kLockedLines[] = {"", "NA", "ND", "NF", "NFIRE", "NCHEM", "NRAD", "NCON", "NH", "NG"};
+                static const char *const kUnlockedLines[] = {"", "EA", "ED", "EF", "EFIRE", "ECHEM", "ERAD", "ECON", "EH"};
+                const int line = static_cast<int>(numberKey(entity, "locked_sentence"));
+                if (line >= 1 && line <= 9)
+                {
+                    const int index = sentenceIndex(std::string(kLockedLines[line]) + "0");
+                    if (index >= 0)
+                        sound.lockedLine = static_cast<std::uint16_t>(index);
+                }
+                const int open = static_cast<int>(numberKey(entity, "unlocked_sentence"));
+                if (open >= 1 && open <= 8)
+                {
+                    const int index = sentenceIndex(std::string(kUnlockedLines[open]) + "0");
+                    if (index >= 0)
+                        sound.unlockedLine = static_cast<std::uint16_t>(index);
+                }
+            }
+            if (cls == "func_door" || cls == "func_door_rotating" || cls == "func_water")
+            {
+                // (Asked for as sounds that may go round: those that do are
+                // heard for as long as the door moves.)
+                const int move = static_cast<int>(numberKey(entity, "movesnd"));
+                if (move >= 1 && move <= 10)
+                    sound.move = soundIndex("doors/doormove" + std::to_string(move) + ".wav", true);
                 sound.stop = numbered("doors/doorstop", static_cast<int>(numberKey(entity, "stopsnd")), 8);
             }
-            else if (cls == "func_button")
+            else if (cls == "func_button" || cls == "func_rot_button")
             {
-                sound.move = numbered("buttons/button", static_cast<int>(numberKey(entity, "sounds")), 11);
+                sound.move = buttonSound(static_cast<int>(numberKey(entity, "sounds")));
+            }
+            else if (cls == "func_rotating")
+            {
+                // What it hums like for as long as it turns: a sound of its
+                // own ("message"), or one of the game's fans.
+                const std::string own(entity.value("message"));
+                const int fan = static_cast<int>(numberKey(entity, "sounds"));
+                if (!own.empty())
+                    sound.move = soundIndex(own, true);
+                else if (fan >= 1 && fan <= 5)
+                    sound.move = soundIndex("fans/fan" + std::to_string(fan) + ".wav", true);
             }
             else if (cls == "func_train" || cls == "func_plat" || cls == "func_platrot")
             {
@@ -1946,7 +2064,7 @@ namespace hlds
                 const int move = static_cast<int>(numberKey(entity, "movesnd"));
                 const int stop = static_cast<int>(numberKey(entity, "stopsnd"));
                 if (move >= 1 && move <= 13)
-                    sound.move = soundIndex(kMoves[move], false);
+                    sound.move = soundIndex(kMoves[move], true);
                 if (stop >= 1 && stop <= 8)
                     sound.stop = soundIndex(kStops[stop], false);
             }
@@ -2013,7 +2131,7 @@ namespace hlds
                 relay.name = nameId("\x01item" + std::to_string(e));
                 relay.target = nameId(entity.value("target"));
                 out.records.push_back(relay);
-                heard.push_back(LogicSound{kNoSound, kNoSound});
+                heard.push_back(LogicSound{kNoSound, kNoSound, kNoSound, kNoSound, kNoSound, kNoSound});
                 managerOutputs.emplace_back();
                 trainCorners.push_back(kNoCorner);
                 actor.target = relay.name;
@@ -2180,6 +2298,18 @@ namespace hlds
         };
         use(CommonSound::Step1, CommonSound::Explode);
         use(CommonSound::Ricochet1, CommonSound::BulletFlesh);
+        // (Water and coming down hard are everywhere; rungs where there is
+        // a ladder.)
+        use(CommonSound::Wade1, CommonSound::JumpLand);
+        // (Steps by what is underfoot: all of them here; whoever knows the
+        // map's textures drops those it has no floor for -- Cooker.cpp.)
+        use(CommonSound::Metal1, CommonSound::Tile4);
+        use(CommonSound::CrowbarHit2, CommonSound::GlassHit3);
+        for (const LogicRecord &record : out.records)
+        {
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Ladder))
+                use(CommonSound::Ladder1, CommonSound::Ladder4);
+        }
         // (The newer guns': where the map has them to be held.)
         if (std::find(models.begin(), models.end(), "v_9mmar") != models.end())
             use(CommonSound::Mp5Fire, CommonSound::Launcher);
@@ -2192,6 +2322,11 @@ namespace hlds
         bool soldiers = false;
         for (const ActorRecord &actor : out.actors)
         {
+            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+                actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
+                use(CommonSound::ScientistPain, CommonSound::ScientistDie);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Guard))
+                use(CommonSound::GuardPain, CommonSound::GuardDie);
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Headcrab))
                 use(CommonSound::HeadcrabAlert, CommonSound::HeadcrabBite);
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))

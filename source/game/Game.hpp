@@ -49,6 +49,7 @@ namespace hlrt
         hldata::LampState lamp;
         hldata::LampBeam lampBeam;
         bool lampLit = false;
+        int lampDistance = 0; ///< how far off the lamp's light is, in units
         /// The switches that outlive a map. Not reset by create() or
         /// destroy(): only a new game clears them.
         hldata::Globals globals;
@@ -115,6 +116,8 @@ namespace hlrt
         /// negative: it has been, or is not to be.
         int startMessagesMs_ = -1;
         std::uint32_t stepCount_ = 0;
+        std::uint8_t *linkShut_ = nullptr; ///< ActorWorld::linkShut
+        bool wasDeep_ = false; ///< the player was in water to the waist a frame ago
         std::vector<hldata::SaveMapState> visited_;
     };
 

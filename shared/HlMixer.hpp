@@ -1,14 +1,17 @@
 #pragma once
 
-// Who gets a voice. The console can play fifteen things at once (the music
-// is beside them), and what there is to play is of five kinds -- layers
+// Who gets a voice. The console can play fourteen things at once (sixteen
+// channels, less the music's and the one whose clock a DSi's sound capture
+// keeps time by). Thirteen of them are voices; the fourteenth is kept back
+// for a voice that is being faded out, so that one sound can give way to
+// another without a click. What there is to play is of five kinds -- layers
 // (HlSound.hpp) -- that are not equally worth hearing. These are the rules;
 // what actually makes the noise is the caller's.
 //
 //  * Each layer has a SHARE of the voices that is its own: the player's own
-//    sounds 3, the world's 6, the voice 1, the loops of a place 4, the menu
-//    1. A layer is never left with fewer than its share because another
-//    wanted more.
+//    sounds 3, the world's 4, the voice 2 (two people may speak at once),
+//    the loops of a place 3, the menu 1. A layer is never left with fewer
+//    than its share because another wanted more.
 //  * While voices are free, any layer may have them, over its share or not.
 //  * With none free, a layer still under its share takes one back from a
 //    layer that is over its own: the least of them first (ambience, then the
@@ -17,7 +20,8 @@
 //  * A layer at its share (or over) has only its own to take: the quietest,
 //    if the new sound is at least as loud; otherwise the new sound is not
 //    heard. The voice and the menu always take their own: a new line cuts in
-//    on the last.
+//    on the last (which of two lines gives way is the speaker's business:
+//    whoever plays them stops that one first).
 //
 // Each layer has a volume of its own, 0 to 10, set by the player.
 //
@@ -39,14 +43,14 @@ namespace hldata
 
     struct Mixer
     {
-        static constexpr int kVoices = 15;
+        static constexpr int kVoices = 13;
         MixVoice voices[kVoices];
         std::uint32_t clock = 0;
         std::uint8_t volume[static_cast<int>(SoundLayer::Count)] = {10, 10, 10, 10, 10};
 
         static constexpr int share(SoundLayer layer)
         {
-            constexpr int kShares[] = {3, 6, 1, 4, 1};
+            constexpr int kShares[] = {3, 4, 2, 3, 1};
             return kShares[static_cast<int>(layer)];
         }
         /// Who gives way first: the lowest.
@@ -127,15 +131,38 @@ namespace hldata
         }
         void stop(int v) { voices[v] = MixVoice(); }
 
+        /// The voice that matters least of all that are playing: of the
+        /// layer that gives way first, the quietest, the oldest among
+        /// equals; the menu's never. For when the hardware itself has no
+        /// room (something of its own is on a channel): -1 if there is
+        /// nothing to give up.
+        int weakest() const
+        {
+            int best = -1;
+            for (int v = 0; v < kVoices; ++v)
+            {
+                const MixVoice &voice = voices[v];
+                if (!voice.active || voice.layer == SoundLayer::Ui)
+                    continue;
+                if (best < 0 || rank(voice.layer) < rank(voices[best].layer) ||
+                    (voice.layer == voices[best].layer &&
+                     (voice.gain < voices[best].gain ||
+                      (voice.gain == voices[best].gain && voice.born < voices[best].born))))
+                    best = v;
+            }
+            return best;
+        }
+
         /// `ms` more: what has run its time is over. Returns a bit for each
-        /// voice that ended (the caller lets go of it).
-        std::uint32_t tick(int ms)
+        /// voice that ended (the caller lets go of it). `frozen`: the game
+        /// stands still, and only the menu's sounds run on.
+        std::uint32_t tick(int ms, bool frozen = false)
         {
             std::uint32_t ended = 0;
             for (int v = 0; v < kVoices; ++v)
             {
                 MixVoice &voice = voices[v];
-                if (!voice.active || voice.leftMs < 0)
+                if (!voice.active || voice.leftMs < 0 || (frozen && voice.layer != SoundLayer::Ui))
                     continue;
                 voice.leftMs -= ms;
                 if (voice.leftMs <= 0)

@@ -2,6 +2,8 @@
 
 #include "render/HudDraw.hpp"
 
+#include "render/FrameFreeze.hpp"
+
 #include "Global.hpp"
 #include "HlLamp.hpp"
 #include "HlPlayerMove.hpp"
@@ -110,14 +112,14 @@ namespace hlrt
     {
         if (lampMaterial_ == nullptr)
         {
-            // The lamp's light: a round picture, solid in its middle and
-            // thinning to nothing at its rim, in thirty-two steps (and
+            // The lamp's light: a round picture, solid at its middle and
+            // thinning evenly to nothing at its rim, in thirty-two steps (and
             // nothing at all along its edges: past them the hardware goes
             // on with the edge). Made here: it is not the game's.
             static std::uint8_t texels[kLampTexels * kLampTexels];
-            static const std::uint16_t colours[8] = {RGB15(31, 30, 23), RGB15(31, 30, 23), RGB15(31, 30, 23),
-                                                     RGB15(31, 30, 23), RGB15(31, 30, 23), RGB15(31, 30, 23),
-                                                     RGB15(31, 30, 23), RGB15(31, 30, 23)};
+            // (White: what colour the light is drawn in is the wall's own,
+            // given with each surface -- WorldDraw's lampPass.)
+            static const std::uint16_t colours[8] = {0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF};
             const int mid2 = kLampTexels - 1; // twice the middle
             for (int y = 0; y < kLampTexels; ++y)
             {
@@ -128,7 +130,9 @@ namespace hlrt
                     // short of the edge.)
                     const int far = static_cast<int>(isqrt64(static_cast<std::uint64_t>(dx * dx + dy * dy) << 16)) /
                                     (mid2 - 2);
-                    int solid = far >= 256 ? 0 : (far < 56 ? 31 : 31 * (256 - far) * (256 - far) / (200 * 200));
+                    // (The game's light: brightest at its very middle, and
+                    // less by the same amount for every step out.)
+                    int solid = far >= 256 ? 0 : 31 * (256 - far) / 256;
                     if (x == 0 || y == 0 || x == kLampTexels - 1 || y == kLampTexels - 1)
                         solid = 0;
                     texels[y * kLampTexels + x] = static_cast<std::uint8_t>(solid << 3);
@@ -148,7 +152,7 @@ namespace hlrt
         {
             NEA_Material *material = nullptr;
             NEA_Palette *palette = nullptr;
-            if (TextureCache::loadFile(global.dataPath(kDecalAtlasFile).c_str(), false, kDecalAtlasSize, kDecalAtlasSize,
+            if (TextureCache::loadFile(global.commonPath(kDecalAtlasFile).c_str(), false, kDecalAtlasWidth, kDecalAtlasSize,
                                        1, material, palette))
             {
                 decalMaterial_ = material;
@@ -159,7 +163,7 @@ namespace hlrt
             return;
         NEA_Material *material = nullptr;
         NEA_Palette *palette = nullptr;
-        if (TextureCache::loadFile(global.dataPath(kHudAtlasFile).c_str(), false, kHudAtlasWidth, kHudAtlasHeight, 1,
+        if (TextureCache::loadFile(global.commonPath(kHudAtlasFile).c_str(), false, kHudAtlasWidth, kHudAtlasHeight, 1,
                                    material, palette))
         {
             material_ = material;
@@ -244,10 +248,10 @@ namespace hlrt
 
         // The lamp, at the top right as the game has it: its outline, as
         // much of it filled as there is in it, and its beam while alight.
-        // (Not while it is full and out: then there is nothing to say.)
-        if (lampOn_ || lampPercent_ < 100)
+        // Always there with the suit, as the game's is: dim while it is out.
+        if (lampSuit_)
         {
-            GFX_COLOR = lampPercent_ < 20 ? kRed : kOrange;
+            GFX_COLOR = lampPercent_ < 20 ? kRed : (lampOn_ ? kOrange : RGB15(14, 9, 1));
             const int x = 256 - 8 - kHudLampBeam.w - kHudLampFull.w, y = 6;
             picture(x, y, kHudLampEmpty);
             const int full = kHudLampFull.w * lampPercent_ / 100;
@@ -303,7 +307,7 @@ namespace hlrt
         {
             NEA_Material *material = nullptr;
             NEA_Palette *palette = nullptr;
-            if (!global.hasFat || !TextureCache::loadFile(global.dataPath(kLoadingFile).c_str(), false, kLoadingSize,
+            if (!global.hasFat || !TextureCache::loadFile(global.commonPath(kLoadingFile).c_str(), false, kLoadingSize,
                                                           kLoadingSize, 0, material, palette))
                 return false;
             loadingMaterial_ = material;
@@ -323,13 +327,13 @@ namespace hlrt
                 NEA_Process(drawLoading);
         }
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
-        // In the two-pass modes what is on the screen now is a copy (a
-        // capture in video memory, or a picture in main memory): the texture
-        // can go, and has to -- those modes have no video memory to spare
-        // for it beside a map's own. One pass shows the 3D picture itself,
-        // out of the texture, which therefore stays until hideLoading().
-        if (global.twoPass)
-            hideLoading();
+        // What is on the screen now is kept as a picture (FrameFreeze), as
+        // the last frame of a map is when one map gives way to another, and
+        // the texture goes: nothing drawn out of texture memory is on the
+        // screen while a map's textures are written into it, and the map
+        // has all of video memory to itself.
+        frameFreeze.freeze();
+        hideLoading();
         return true;
     }
 

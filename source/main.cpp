@@ -67,12 +67,15 @@ namespace
 
     std::string currentMap;
 
-    /// How many pictures are handed to the hardware before the curtain goes
-    /// up on them: the first has then been on the screen for one (and, where
-    /// a picture is two passes, both halves of it are in).
+    /// How many frames are handed to the hardware before the curtain goes
+    /// up on a map: the first has then been on the screen for one (and,
+    /// where a picture is two passes, both halves of it are in) -- and the
+    /// map has had a few frames to put itself in order. (Seen: the first
+    /// map's first frames with a pale band across their top, which a
+    /// curtain of two frames let through.)
     int curtainFrames()
     {
-        return global.twoPass ? 5 : 2;
+        return global.twoPass ? 14 : 12;
     }
 
     /// A line in perf.txt about the map being played: what the hardware made
@@ -95,6 +98,54 @@ namespace
             }
         }
     }
+
+#ifdef HLDS_PROFILE
+    /// Where a load went: a line in perf.txt, a stage at a time, in
+    /// milliseconds. (The card's share of each can only be judged on a card.)
+    struct LoadClock
+    {
+        static constexpr int kStages = 8;
+        const char *names[kStages] = {};
+        std::uint32_t ms[kStages] = {};
+        int count = 0;
+        std::uint32_t last = hlrt::DebugLog::Perf::now();
+
+        void mark(const char *name)
+        {
+            const std::uint32_t now = hlrt::DebugLog::Perf::now();
+            if (count < kStages)
+            {
+                names[count] = name;
+                // (The timer counts the 33.5 MHz bus clock.)
+                ms[count++] = static_cast<std::uint32_t>((std::uint64_t(now - last) * 2u) / 67000u);
+            }
+            last = hlrt::DebugLog::Perf::now();
+        }
+        void write(const char *map)
+        {
+            std::FILE *log = std::fopen(global.dataPath("perf.txt").c_str(), "a");
+            if (log == nullptr)
+                return;
+            std::uint32_t total = 0;
+            std::fprintf(log, "load: %s", map);
+            for (int i = 0; i < count; ++i)
+            {
+                std::fprintf(log, " %s %lu", names[i], static_cast<unsigned long>(ms[i]));
+                total += ms[i];
+            }
+            std::fprintf(log, " = %lu ms (check %lu), heap %lu\n", static_cast<unsigned long>(total),
+                         static_cast<unsigned long>(hlrt::level.checkMs),
+                         static_cast<unsigned long>(global.heapHeadroom()));
+            std::fclose(log);
+        }
+    };
+#else
+    struct LoadClock
+    {
+        void mark(const char *) {}
+        void write(const char *) {}
+    };
+#endif
 
     void drawScene()
     {
@@ -146,13 +197,14 @@ namespace
     LoadResult loadLevel(const std::string &name, const hldata::Arrival *arrival,
                          std::string &error)
     {
-        const std::string path = global.mapsDir() + name + ".hlm";
         hldata::LevelHeader header{};
-        if (!hlrt::Level::peekHeader(path, header))
+        LoadClock clock;
+        if (!hlrt::Level::peekHeader(name, header))
         {
             error = "Map not on the card:";
             return LoadResult::NotOnCard;
         }
+        clock.mark("peek");
         hlrt::bottomScreen.showMessage("LOADING", name.c_str());
         // The last picture of the map being left stays on the screen while
         // this one loads, if there is one and the way of drawing does not
@@ -206,14 +258,29 @@ namespace
         if (!kept && hlrt::hudDraw.showLoading())
             hlrt::screenFade.curtainUp();
 
-        if (!hlrt::level.load(path, error))
+        clock.mark("down");
+        // The map's archive in the place of the last one's: everything
+        // from here to the end of the load is read out of it.
+        if (!global.mountMap(name))
+        {
+            error = "Map not found on the card.";
             return LoadResult::Failed;
+        }
+        if (!hlrt::level.load(error))
+            return LoadResult::Failed;
+        clock.mark("level");
         // Textures before models: if video memory runs short it is a model
         // that goes without its skin, not a wall. Models before the game:
         // actors are set up from their models.
         hlrt::modelDraw.forgetPoses();
-        if (!hlrt::worldDraw.create() || !hlrt::textureCache.create() || !hlrt::spriteCache.create() ||
-            !hlrt::modelCache.create(name.c_str()) || !hlrt::game.create())
+        bool made = hlrt::worldDraw.create() && hlrt::textureCache.create();
+        clock.mark("tex");
+        made = made && hlrt::spriteCache.create();
+        clock.mark("spr");
+        made = made && hlrt::modelCache.create();
+        clock.mark("mdl");
+        made = made && hlrt::game.create();
+        if (!made)
         {
             error = "Not enough memory for this map.";
             return LoadResult::Failed;
@@ -227,7 +294,10 @@ namespace
         hlrt::player.spawn();
         if (arrival != nullptr)
             hlrt::game.applyArrival(*arrival);
+        clock.mark("game");
         hlrt::sound.load();
+        clock.mark("snd");
+        clock.write(name.c_str());
         if (hlrt::player.debugTrack >= 0)
         {
             hlrt::game.logic.musicRequest = hlrt::player.debugTrack;
@@ -259,7 +329,7 @@ namespace
         save = hldata::SaveData();
         hldata::LevelHeader header{};
         if (!hlrt::SaveGame::read(save, slot) ||
-            !hlrt::Level::peekHeader(global.mapsDir() + save.map + ".hlm", header))
+            !hlrt::Level::peekHeader(save.map, header))
             return false;
         hlrt::game.adoptProgress(save);
         const std::string map = save.map; // loadLevel changes currentMap, which this may be
@@ -341,7 +411,7 @@ namespace
     }
 
     /// Show the keyboard, take a line, run it. The game stands still
-    /// meanwhile (the sound goes on).
+    /// meanwhile, and its sound with it (the caller's pause is still on).
     std::string commandLine()
     {
         std::string typed;
@@ -384,6 +454,8 @@ int main(int argc, char *argv[])
     (void)argv;
 
     global.Init();
+    // (Before the first load, which is timed too.)
+    hlrt::DebugLog::Perf::begin();
     hlrt::screenFade.curtainDown();
     // How many models at once: what there is time for. Measured: with five
     // soldiers in sight a DS's frame is already 15 ms of its 16.7, each
@@ -403,7 +475,7 @@ int main(int argc, char *argv[])
     hldata::LevelHeader header{};
     const bool haveHeader =
         status == Global::DataStatus::Ok &&
-        hlrt::Level::peekHeader(global.mapsDir() + startMap + ".hlm", header);
+        hlrt::Level::peekHeader(startMap, header);
     global.InitVideo(haveHeader ? videoFor(settings.renderMode, header) : Global::Video::SinglePass);
 
     if (status != Global::DataStatus::Ok)
@@ -431,11 +503,9 @@ int main(int argc, char *argv[])
     if (hlrt::hwMathCheck(4096) != 0)
         hlrt::bottomScreen.showMessage("HARDWARE MATHS", "does not agree: see perf.txt");
 #endif
-    hlrt::DebugLog::Perf::begin();
     std::uint32_t lastVblank = Global::vblanks();
     std::uint32_t lastPass = lastVblank;
     bool paused = false;
-                        hlrt::sound.setPaused(false);
 
     while (true)
     {
@@ -479,6 +549,8 @@ int main(int argc, char *argv[])
                         logPerformance();
                         hlrt::gpuStats.beginMap();
                         paused = false;
+                        // (After the card has been written to: the sound
+                        // goes on once nothing stands in its way.)
                         hlrt::sound.setPaused(false);
                         hlrt::bottomScreen.showPad();
                     }
@@ -500,9 +572,13 @@ int main(int argc, char *argv[])
                     {
                         // The debug command line. Whatever it has to say is
                         // left on the screen until the pad is next drawn.
+                        // (The sound stands still with the game for as long
+                        // as the keyboard is up, as on the menu's other
+                        // pages; a map the line asks for is loaded with it
+                        // still, and heard once the line is done with.)
+                        const std::string said = commandLine();
                         paused = false;
                         hlrt::sound.setPaused(false);
-                        const std::string said = commandLine();
                         hlrt::bottomScreen.showPad();
                         if (!said.empty())
                             hlrt::bottomScreen.showMessage(said.c_str(), "START, then RESUME");
@@ -511,7 +587,6 @@ int main(int argc, char *argv[])
                     else if (item == Menu::Action::Resume || hlrt::input.startPressed)
                     {
                         paused = false;
-                        hlrt::sound.setPaused(false);
                         settings.save();
                         // A changed mode takes effect here, on the way out of
                         // the menu, and only on a frame boundary (pass 0): the
@@ -538,6 +613,10 @@ int main(int argc, char *argv[])
                             hlrt::screenFade.curtainUp(curtainFrames());
                             lastVblank = Global::vblanks();
                         }
+                        // (Once the card has been written to and the
+                        // pictures are back: nothing then stands in the
+                        // sound's way.)
+                        hlrt::sound.setPaused(false);
                         hlrt::bottomScreen.showPad();
                     }
                 }

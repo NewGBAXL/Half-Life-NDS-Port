@@ -1,7 +1,7 @@
 #pragma once
 
 // The DSi's DSP, as the game uses it: the music in stereo, and the echo of
-// the room (the program is teak/, its arithmetic shared/dsp/hl_dsp.h).
+// the room (the program is teak/, assembly; its model shared/dsp/hl_dsp.h).
 //
 // Nothing here exists on a DS, or on a DSi running the game without DSi
 // rights: start() says no, and everything else does nothing. Sound then plays

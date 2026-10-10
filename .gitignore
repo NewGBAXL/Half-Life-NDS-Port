@@ -96,6 +96,9 @@ Testing/
 # Local emulator SD card root. Holds converted game data, which must never be
 # committed: the converter makes it from the user's own copy of Half-Life.
 sdroot/
+# ... and the converter's own files beside it, which the card's archives are
+# made from (the stage: see README, "Converting the game").
+sdroot-stage/
 *.log
 
 # Made by tools/dspsim/embed.py from the DSP program

@@ -1,3 +1,4 @@
+#include "HlDrawPlan.hpp"
 #include "render/ModelDraw.hpp"
 
 #include <nds.h>
@@ -169,15 +170,24 @@ namespace hlrt
         int lamp = 0;
         if (game.lamp.on && id != -1)
         {
-            // By how near it is and how near the beam's middle (its chest,
-            // more or less, is what counts).
+            // The game's lamp shines on whoever the view meets as it does
+            // on a wall: so the light is where THEY are, if the middle of
+            // the view is near them (their chest, more or less, is what
+            // counts) -- or where it has fallen on the wall, if they stand
+            // in that.
             const int d[3] = {fxToInt(actor.pos[0] - camera.pos[0]), fxToInt(actor.pos[1] - camera.pos[1]),
                               fxToInt(actor.pos[2] - camera.pos[2]) + 36};
             const int along = (d[0] * camera.forward[0] + d[1] * camera.forward[1] + d[2] * camera.forward[2]) >> 12;
             if (along > 0 && along < kLampReach)
             {
                 const int square = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along;
-                lamp = lampOn(along, static_cast<int>(isqrt64(static_cast<std::uint64_t>(square > 0 ? square : 0))));
+                const int aside = static_cast<int>(isqrt64(static_cast<std::uint64_t>(square > 0 ? square : 0)));
+                lamp = lampOn(along, aside, along);
+                if (game.lampLit)
+                {
+                    const int onWall = lampOn(along, aside, game.lampDistance);
+                    lamp = onWall > lamp ? onWall : lamp;
+                }
             }
         }
         GFX_LIGHT_COLOR = RGB15(bright, bright, bright); // light 0
@@ -276,103 +286,108 @@ namespace hlrt
         int *order = order_;
         const ActorWorld &actors = game.actors;
 
-        // Who can be seen, nearest first. (`reach` is nearer the true
-        // distance than the sum the order goes by: it is what a level of
-        // detail is chosen from.)
-        std::int32_t distance[kMaxDrawn], reach[kMaxDrawn];
+        // Who can be seen, in the order they are to be had: enemies, then
+        // the people, then what there is to pick up, then the rest; each
+        // kind nearest first (shared/HlDrawPlan.hpp). More are looked at
+        // than can be drawn, so that it is the right ones that are.
+        constexpr int kLooked = kDrawMost * 2;
+        int seen[kLooked];
+        std::uint8_t seenClass[kLooked];
+        std::int32_t reach[kLooked];
+        int looked = 0;
+        for (int c = 0; c < kDrawClasses; ++c)
+            cutClass_[c] = 0;
         for (int i = 0; actors.states != nullptr && i < actors.count; ++i)
         {
             const ActorState &actor = actors.states[i];
             const ModelView *model = actor.active ? actorModel(actors, actor) : nullptr;
             if (model == nullptr)
                 continue;
-            const int radius = model->header->radius;
-            // A ball round its middle, which for something standing is about
-            // half its height up.
-            // (Hung from a ceiling, it is all below where it is fixed.)
-            const int up = isTurret(actor.kind) && (actor.flags & kActorCeiling) ? -model->header->maxs[2]
-                                                                                 : model->header->maxs[2];
-            const std::int16_t centre[3] = {
-                static_cast<std::int16_t>(fxToInt(actor.pos[0])),
-                static_cast<std::int16_t>(fxToInt(actor.pos[1])),
-                static_cast<std::int16_t>(fxToInt(actor.pos[2]) + (up >> 1))};
-            // Seen if the leaf its middle is in can be seen, or the one its
-            // head is in: someone standing in a doorway has their middle in
-            // the frame and their head in the room.
-            const std::int16_t top[3] = {
-                centre[0], centre[1],
-                static_cast<std::int16_t>(fxToInt(actor.pos[2]) + up)};
-            if (!worldDraw.ballVisible(centre, radius) && !worldDraw.ballVisible(top, radius))
+            // In view if any part of it is: a ball round its middle and one
+            // round its head, for something standing; all the way down its
+            // tongue, for a barnacle.
+            const DrawPoints points = actorViewPoints(actor, model->header->maxs[2], model->header->radius);
+            bool visible = false;
+            for (int k = 0; k < points.count && !visible; ++k)
+                visible = worldDraw.ballVisible(points.at[k], model->header->radius);
+            if (!visible)
                 continue;
-            const std::int32_t dx = fxToInt(actor.pos[0] - camera.pos[0]);
-            const std::int32_t dy = fxToInt(actor.pos[1] - camera.pos[1]);
-            const std::int32_t dz = fxToInt(actor.pos[2] - camera.pos[2]);
-            const std::int32_t far = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) + (dz < 0 ? -dz : dz);
-            int at = found < limit ? found : limit - 1;
-            if (found >= limit && far >= distance[at])
+            // (How far off: the longest of the three ways and half the
+            // rest, which is near enough the true distance, and is what a
+            // level of detail is chosen from. To the nearest of its points:
+            // a barnacle is as near as its tongue is.)
+            std::int32_t far = 0x7FFFFFFF;
+            for (int k = 0; k < points.count; ++k)
             {
-                ++cut;
+                const std::int32_t dx = points.at[k][0] - fxToInt(camera.pos[0]);
+                const std::int32_t dy = points.at[k][1] - fxToInt(camera.pos[1]);
+                const std::int32_t dz = points.at[k][2] - fxToInt(camera.pos[2]);
+                const std::int32_t ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy, az = dz < 0 ? -dz : dz;
+                const std::int32_t most = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
+                const std::int32_t one = most + (ax + ay + az - most) / 2;
+                far = one < far ? one : far;
+            }
+            const int kind = drawClass(actor);
+            int at = looked < kLooked ? looked : kLooked - 1;
+            if (looked >= kLooked && !drawBefore(kind, far, seenClass[at], reach[at]))
+            {
+                ++cutClass_[kind];
                 continue;
             }
-            if (found >= limit)
-                ++cut; // the furthest so far gives up its place
-            while (at > 0 && distance[at - 1] > far)
+            if (looked >= kLooked)
+                ++cutClass_[seenClass[at]]; // the last so far gives up its place
+            while (at > 0 && drawBefore(kind, far, seenClass[at - 1], reach[at - 1]))
             {
-                order[at] = order[at - 1];
-                distance[at] = distance[at - 1];
+                seen[at] = seen[at - 1];
+                seenClass[at] = seenClass[at - 1];
                 reach[at] = reach[at - 1];
                 --at;
             }
-            order[at] = i;
-            distance[at] = far;
-            {
-                const std::int32_t ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy, az = dz < 0 ? -dz : dz;
-                const std::int32_t most = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
-                reach[at] = most + (far - most) / 2;
-            }
-            if (found < limit)
-                ++found;
+            seen[at] = i;
+            seenClass[at] = static_cast<std::uint8_t>(kind);
+            reach[at] = far;
+            if (looked < kLooked)
+                ++looked;
         }
 
-        // What the player holds comes first: it is always in view.
+        // What the player holds is always in view.
         const ModelView *held = game.held.active && !player.noclip ? actorModel(actors, game.held) : nullptr;
-        // (At its finest, unless that is the game's own mesh and the frame
-        // is already too full: then the level under it.)
         // (The player's say: with model detail high, a step of pressure is
         // borne before any model is made coarser for it.)
         const int weight = modelDetailWeight(settings.graphics.modelDetail);
         const int pressure = settings.graphics.modelDetail == 2 ? (worldDraw.pressure() > 0 ? worldDraw.pressure() - 1 : 0)
                                                                 : worldDraw.pressure();
-        heldLevel_ = 0;
+        DrawHeld inHand;
         if (held != nullptr)
         {
-            if (pressure > 0 && held->levelCount() > 1 && held->header->polygons > kWholeModel)
-                heldLevel_ = 1;
+            inHand.active = true;
+            const int levels = held->levelCount();
+            inHand.levels = static_cast<std::uint8_t>(levels > kDrawLevels ? kDrawLevels : levels);
             for (int b = 0; b < held->header->batchCount; ++b)
             {
-                if (held->batches[b].level != heldLevel_)
+                const int level = held->batches[b].level;
+                if (level >= kDrawLevels)
                     continue;
-                polygons += held->batches[b].polygons;
-                vertices += held->batches[b].vertices;
+                inHand.polygons[level] += held->batches[b].polygons;
+                inHand.vertices[level] += held->batches[b].vertices;
             }
-            heldDrawn_ = true;
+            // (At its finest, unless that is the game's own mesh and the
+            // frame is already too full: then the level under it.)
+            inHand.want = pressure > 0 && levels > 1 && held->header->polygons > kWholeModel ? 1 : 0;
         }
-        // Then the actors, nearest first, for as long as they fit in the
-        // share of a pass that models may have: the rest are not drawn this
-        // frame.
-        //
-        // Each at a level of detail: the coarsest whose error is under a
-        // pixel and a half at the model's distance (a unit is 127 pixels
-        // over the distance in units, so a sixteenth of a unit of error is
-        // good from five and a third times as many units away); a level
-        // coarser again for each step of pressure, for all but the nearest;
-        // and coarser still, if that is what it takes to fit.
-        int kept = 0;
-        for (int n = 0; n < found; ++n)
+
+        // Each actor at a level of detail: the coarsest whose error is
+        // under a pixel and a half at the model's distance (a unit is 127
+        // pixels over the distance in units, so a sixteenth of a unit of
+        // error is good from five and a third times as many units away).
+        // What is then made of them -- who is drawn, who coarser, what
+        // gives way -- is HlDrawPlan's.
+        DrawCandidate candidates[kLooked];
+        for (int n = 0; n < looked; ++n)
         {
-            const ActorState &actor = actors.states[order[n]];
+            const ActorState &actor = actors.states[seen[n]];
             const ModelView &model = *actorModel(actors, actor);
-            const int levels = model.levelCount();
+            const int levels = model.levelCount() > kDrawLevels ? kDrawLevels : model.levelCount();
             int level = 0;
             for (int l = levels - 1; l > 0; --l)
             {
@@ -385,46 +400,51 @@ namespace hlrt
             // (A model that was at a coarser level a moment ago stays at
             // it until it is a tenth nearer than where it would take it up:
             // otherwise one standing at the line flickers between two.)
-            const int last = lastLevel_[order[n] & 255] - 1;
+            const int last = lastLevel_[seen[n] & 255] - 1;
             if (last > level && last < levels && model.header->levelError[last] * weight * 9 <= reach[n] * 3 * 10)
                 level = last;
-            // The game's own mesh (a DSi's finest) is for whoever is
-            // nearest, in a frame with room.
-            if (level == 0 && levels > 1 && model.header->polygons > kWholeModel && (kept > 0 || pressure > 0))
-                level = 1;
-            if (kept > 0)
-                level = level + pressure < levels ? level + pressure : levels - 1;
-            // (Under pressure the share is less -- WorldDraw::pressure -- but
-            // whoever is nearest is always let in.)
-            const int share = 4 - (pressure > 2 ? 2 : pressure);
-            int p = 0, v = 0;
-            bool fits = false;
-            for (; level < levels && !fits; ++level)
+            DrawCandidate &one = candidates[n];
+            one.kind = seenClass[n];
+            one.levels = static_cast<std::uint8_t>(levels);
+            one.want = static_cast<std::uint8_t>(level);
+            for (int l = 0; l < levels; ++l)
             {
-                p = v = 0;
+                int p = 0, v = 0;
                 for (int b = 0; b < model.header->batchCount; ++b)
                 {
-                    if (!model.batchInBody(model.batches[b], actor.body, actor.skin, level))
+                    if (!model.batchInBody(model.batches[b], actor.body, actor.skin, l))
                         continue;
                     p += model.batches[b].polygons;
                     v += model.batches[b].vertices;
                 }
-                fits = !(polygons + p > kMaxPolygons || vertices + v > kMaxVertices ||
-                         (kept > 0 &&
-                          (polygons + p > kMaxPolygons * share / 4 || vertices + v > kMaxVertices * share / 4)));
+                one.polygons[l] = static_cast<std::uint16_t>(p);
+                one.vertices[l] = static_cast<std::uint16_t>(v);
             }
-            if (!fits)
+        }
+        const DrawPlan chosen =
+            planModels(candidates, looked, limit, inHand, pressure, kMaxPolygons, kMaxVertices, kWholeModel);
+        heldLevel_ = chosen.heldLevel;
+        heldDrawn_ = held != nullptr;
+        polygons = chosen.polygons;
+        vertices = chosen.vertices;
+        grown_ = chosen.grown;
+        strained_ = chosen.strained;
+        int kept = 0;
+        for (int n = 0; n < looked; ++n)
+        {
+            if (!chosen.drawn[n] || kept >= kMaxDrawn)
             {
-                lastLevel_[order[n] & 255] = 0;
-                ++cut;
+                lastLevel_[seen[n] & 255] = 0;
                 continue;
             }
-            --level;
-            polygons += p;
-            vertices += v;
-            lastLevel_[order[n] & 255] = static_cast<std::uint8_t>(level + 1);
-            level_[kept] = static_cast<std::uint8_t>(level);
-            order[kept++] = order[n];
+            lastLevel_[seen[n] & 255] = static_cast<std::uint8_t>(chosen.level[n] + 1);
+            level_[kept] = chosen.level[n];
+            order[kept++] = seen[n];
+        }
+        for (int c = 0; c < kDrawClasses; ++c)
+        {
+            cutClass_[c] += chosen.cut[c];
+            cut += cutClass_[c];
         }
         found = kept;
 
@@ -432,8 +452,9 @@ namespace hlrt
         // there is room in the models' share (they are the first thing to
         // go when there is not: nothing under pressure, and never more than
         // a third of the share).
+        // (... and nothing when an enemy has had to be made room for.)
         gibFound_ = 0;
-        if (worldDraw.pressure() < 2)
+        if (worldDraw.pressure() < 2 && !strained_)
         {
             int gibPolygons = 0;
             for (int i = 0; i < kMaxGibs; ++i)

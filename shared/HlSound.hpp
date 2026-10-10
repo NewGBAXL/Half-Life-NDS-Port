@@ -212,6 +212,56 @@ namespace hldata
         FallPain,  ///< landing too hard
         Shell,     ///< a spent casing on the floor
         BulletFlesh, ///< a round going into something that bleeds
+        Ladder1,   ///< the player's hands and feet on a ladder's rungs
+        Ladder2,
+        Ladder3,
+        Ladder4,
+        Wade1,     ///< ... through water up to the waist or over it, and going in and out of it
+        Wade2,
+        Wade3,
+        Wade4,
+        Slosh1,    ///< ... through water that is only round the feet
+        Slosh2,
+        Slosh3,
+        Slosh4,
+        JumpLand,  ///< coming down hard, but not hard enough to be hurt
+        ScientistPain, ///< what a scientist and a guard say of being hurt and killed
+        ScientistDie,
+        GuardPain,
+        GuardDie,
+        Metal1,    ///< the player's step on metal, dirt, a vent, a grate, tiles (HlMaterial.hpp)
+        Metal2,
+        Metal3,
+        Metal4,
+        Dirt1,
+        Dirt2,
+        Dirt3,
+        Dirt4,
+        Duct1,
+        Duct2,
+        Duct3,
+        Duct4,
+        Grate1,
+        Grate2,
+        Grate3,
+        Grate4,
+        Tile1,
+        Tile2,
+        Tile3,
+        Tile4,
+        NpcStep1,  ///< somebody else's footsteps (their models say when: HlModel.hpp)
+        NpcStep2,
+        NpcStep3,
+        NpcStep4,
+        CrowbarHit2,   ///< the crowbar's other clang, and its other two thuds
+        CrowbarFlesh2,
+        CrowbarFlesh3,
+        WoodHit1,      ///< what wood, and glass, sound like struck
+        WoodHit2,
+        WoodHit3,
+        GlassHit1,
+        GlassHit2,
+        GlassHit3,
         Count
     };
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -244,7 +294,24 @@ namespace hldata
             "hgrunt/gr_mgun2.wav",    "hgrunt/gr_reload1.wav",   "hgrunt/gr_pain1.wav",
             "hgrunt/gr_pain3.wav",    "hgrunt/gr_die1.wav",      "hgrunt/gr_die2.wav",
             "weapons/ric1.wav",       "weapons/ric4.wav",        "player/pl_fallpain3.wav",
-            "player/pl_shell1.wav",   "weapons/bullet_hit1.wav"};
+            "player/pl_shell1.wav",   "weapons/bullet_hit1.wav", "player/pl_ladder1.wav",
+            "player/pl_ladder2.wav",  "player/pl_ladder3.wav",   "player/pl_ladder4.wav",
+            "player/pl_wade1.wav",    "player/pl_wade2.wav",     "player/pl_wade3.wav",
+            "player/pl_wade4.wav",    "player/pl_slosh1.wav",    "player/pl_slosh2.wav",
+            "player/pl_slosh3.wav",   "player/pl_slosh4.wav",    "player/pl_jumpland2.wav",
+            "scientist/sci_pain1.wav", "scientist/sci_die1.wav", "barney/ba_pain1.wav",
+            "barney/ba_die1.wav",     "player/pl_metal1.wav",    "player/pl_metal2.wav",
+            "player/pl_metal3.wav",   "player/pl_metal4.wav",    "player/pl_dirt1.wav",
+            "player/pl_dirt2.wav",    "player/pl_dirt3.wav",     "player/pl_dirt4.wav",
+            "player/pl_duct1.wav",    "player/pl_duct2.wav",     "player/pl_duct3.wav",
+            "player/pl_duct4.wav",    "player/pl_grate1.wav",    "player/pl_grate2.wav",
+            "player/pl_grate3.wav",   "player/pl_grate4.wav",    "player/pl_tile1.wav",
+            "player/pl_tile2.wav",    "player/pl_tile3.wav",     "player/pl_tile4.wav",
+            "common/npc_step1.wav",   "common/npc_step2.wav",    "common/npc_step3.wav",
+            "common/npc_step4.wav",   "weapons/cbar_hit2.wav",   "weapons/cbar_hitbod2.wav",
+            "weapons/cbar_hitbod3.wav", "debris/wood1.wav",      "debris/wood2.wav",
+            "debris/wood3.wav",       "debris/glass1.wav",       "debris/glass2.wav",
+            "debris/glass3.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }
@@ -273,7 +340,8 @@ namespace hldata
     /// long and said once: those are read off the card as they are spoken.
     inline void soundsKept(const LogicRecord *logic, std::uint32_t logicCount,
                            const LogicSound *logicSounds, std::uint32_t logicSoundCount,
-                           std::uint32_t soundCount, bool *kept)
+                           std::uint32_t soundCount, bool *kept, const ModelSound *modelSounds = nullptr,
+                           std::uint32_t modelSoundCount = 0)
     {
         for (std::uint32_t i = 0; i < soundCount; ++i)
             kept[i] = false;
@@ -285,12 +353,22 @@ namespace hldata
                 logic[i].extra[3] == 0 && logic[i].extra[0] < soundCount)
                 kept[logic[i].extra[0]] = true;
         }
+        // (What the map's models sound like as they move.)
+        for (std::uint32_t i = 0; modelSounds != nullptr && i < modelSoundCount; ++i)
+        {
+            if (modelSounds[i].sound < soundCount)
+                kept[modelSounds[i].sound] = true;
+        }
         for (std::uint32_t i = 0; i < logicSoundCount; ++i)
         {
             if (logicSounds[i].move < soundCount)
                 kept[logicSounds[i].move] = true;
             if (logicSounds[i].stop < soundCount)
                 kept[logicSounds[i].stop] = true;
+            if (logicSounds[i].locked < soundCount)
+                kept[logicSounds[i].locked] = true;
+            if (logicSounds[i].unlocked < soundCount)
+                kept[logicSounds[i].unlocked] = true;
         }
     }
 
@@ -315,9 +393,15 @@ namespace hldata
         std::int16_t radius = kRadiusLarge;
         fx pos[3] = {0, 0, 0};
         SoundLayer layer = SoundLayer::World;
+        std::uint8_t pitch = 100; ///< percent of the speed it was recorded at
+        std::uint16_t tag = 0;    ///< with kSoundLoopOn / kSoundLoopOff: whose loop it is
     };
     inline constexpr std::uint8_t kSoundHere = 1;     ///< at the listener: no place, no fading
     inline constexpr std::uint8_t kSoundSentence = 2; ///< `sound` is an index into Sentences
+    /// What something makes for as long as it moves: goes round (if the
+    /// sound is one that does) until kSoundLoopOff is heard with its tag.
+    inline constexpr std::uint8_t kSoundLoopOn = 4;
+    inline constexpr std::uint8_t kSoundLoopOff = 8; ///< `sound` is not looked at
 
     inline constexpr int kMaxSoundEvents = 24;
 
@@ -328,9 +412,10 @@ namespace hldata
         SoundEvent events[kMaxSoundEvents];
         int count = 0;
 
-        void add(std::uint16_t sound, const fx *pos, int volume, int radius, std::uint8_t flags = 0)
+        void add(std::uint16_t sound, const fx *pos, int volume, int radius, std::uint8_t flags = 0,
+                 int pitch = 100, std::uint16_t tag = 0)
         {
-            if (sound == kNoSound || count >= kMaxSoundEvents)
+            if ((sound == kNoSound && !(flags & kSoundLoopOff)) || count >= kMaxSoundEvents)
                 return;
             SoundEvent &event = events[count++];
             event.sound = sound;
@@ -339,6 +424,9 @@ namespace hldata
             event.radius = static_cast<std::int16_t>(radius);
             for (int i = 0; i < 3; ++i)
                 event.pos[i] = pos != nullptr ? pos[i] : 0;
+            // (0: not said, which is as it was recorded.)
+            event.pitch = static_cast<std::uint8_t>(pitch <= 0 ? 100 : (pitch > 255 ? 255 : pitch));
+            event.tag = tag;
             // What is spoken is a voice; what is heard at the listener is
             // the player's own; the rest is the world's.
             event.layer = (flags & kSoundSentence) ? SoundLayer::Voice

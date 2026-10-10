@@ -73,15 +73,34 @@ public:
     std::size_t heapHeadroom() const;
 
     // SD data paths (only meaningful when hasFat). Mirrors the layout the asset
-    // converter writes: <drive>/_nds/hl_nds/data/{maps,tex,...}.
+    // converter writes: <drive>/_nds/hl_nds/data/.
+    //
+    // What the game reads is in archives (Nitro Engine Advanced's NPAC, each
+    // mounted as a drive of its own): one a map, holding all the map loads
+    // in the order it loads it, and one for what belongs to no map. Opening a
+    // file on a card is slow; a map used to be two hundred of them. Loose
+    // beside the archives: what the game writes (saves, settings) and the
+    // music, which is played off the card as it goes.
     std::string dataDir() const { return fatDeviceCPP + "_nds/hl_nds/data/"; }
-    /// Cooked levels (.hlm), one per map.
-    std::string mapsDir() const { return dataDir() + "maps/"; }
-    /// tex4x4 textures (.htx), shared by every map that names them.
-    std::string texDir() const { return dataDir() + "tex/"; }
+    /// A map's archive: maps/<name>.npac.
+    std::string mapArchive(const std::string &name) const { return dataDir() + "maps/" + name + ".npac"; }
+    /// Inside the archive of the map being played: "level.0", "tex/...",
+    /// "spr/...", "mdl/...", "snd/...".
+    std::string mapPath(const std::string &rel) const { return "map:/" + rel; }
+    std::string texDir() const { return mapPath("tex/"); }
+    /// Inside the card's common archive: "ui/...", "snd/...".
+    std::string commonPath(const std::string &rel) const { return "common:/" + rel; }
     /// Written by the game, never by the converter.
     std::string savesDir() const { return dataDir() + "saves/"; }
     std::string dataPath(const std::string &rel) const { return dataDir() + rel; }
+
+    /// Put a map's archive in the place of whichever is mounted. False if
+    /// it is not on the card (and then none is).
+    bool mountMap(const std::string &name);
+    void unmountMap();
+    /// The common archive, if it is not mounted already. (The 3D engine
+    /// lets go of every archive when it is brought up again: InitVideo.)
+    void mountCommon();
 
     /// Why the game cannot start. Everything below Ok means the card does not
     /// carry a usable conversion, which would otherwise show up as a black
@@ -106,6 +125,7 @@ public:
 
 private:
     bool videoReady_ = false;
+    std::string mapMounted_; ///< the map whose archive is the "map" drive, if any
 };
 
 extern Global global;

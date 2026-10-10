@@ -97,6 +97,35 @@ void Global::InitVideo(Video want)
 
     // (No text console: what there is to read is drawn on the touch screen,
     // in the game's own letters -- ui/TouchCanvas.)
+
+    // Bringing the engine up again closed its archives.
+    mountCommon();
+    if (!mapMounted_.empty() && !NEA_NpacIsMounted("map"))
+        NEA_NpacMount("map", mapArchive(mapMounted_).c_str());
+}
+
+bool Global::mountMap(const std::string &name)
+{
+    unmountMap();
+    if (!hasFat || NEA_NpacMount("map", mapArchive(name).c_str()) != 0)
+        return false;
+    mapMounted_ = name;
+    return true;
+}
+
+void Global::unmountMap()
+{
+    if (NEA_NpacIsMounted("map"))
+        NEA_NpacUnmount("map");
+    mapMounted_.clear();
+}
+
+void Global::mountCommon()
+{
+    // (A card with no common archive is a game without its own letters and
+    // pictures, which is said where each is missed, not here.)
+    if (hasFat && !NEA_NpacIsMounted("common"))
+        NEA_NpacMount("common", (dataDir() + "common.npac").c_str());
 }
 
 std::size_t Global::heapHeadroom() const

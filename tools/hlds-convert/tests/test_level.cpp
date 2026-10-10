@@ -141,8 +141,7 @@ namespace
         check(view.entityCount == 1 && view.entities[0].origin[2] == fxFromInt(40) &&
                   view.entities[0].angles[1] == 16384,
               "entities");
-        check(std::string(view.entityText, view.entityTextSize) == level.entityText,
-              "entity text");
+        check(view.entityTextSize == 0, "no entity text: that stays on the PC");
     }
 
     void testFileFaults()

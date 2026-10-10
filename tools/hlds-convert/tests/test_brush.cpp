@@ -141,7 +141,8 @@ namespace
         std::string error;
         CookedLevel level;
         CookOptions options;
-        options.lightGamma = 1.0;
+        options.lightScale = 1.0;
+        options.lightPower = 1.0;
         c.ok = bsp.parse(buildBoxRoom(room), error) &&
                cookLevel(bsp, options, TexturePlan(), level, c.report, error) &&
                writeLevel(level, c.bytes, error) &&

@@ -42,18 +42,27 @@ namespace hlds
     class LightBake
     {
     public:
-        /// The curve applied to every baked colour: out = in^(1/gamma). Raw
-        /// lightmap values are meant to go through the game's own gamma ramp
-        /// and look far too dark without one.
-        static constexpr double kDefaultGamma = 1.8;
+        /// What is made of every lightmap value v (0..1) on its way to a
+        /// vertex: scale * v^power, cut off at full. This is the game's own
+        /// way with its lightmaps as MEASURED -- the real game photographed
+        /// beside the port at the same places with tools/ref/measure.py,
+        /// and each patch of wall solved for its texture and its light: the
+        /// game shows light a third stronger than the file has it, and
+        /// lifts it by the same power it lifts its textures by (0.8: its
+        /// "texture gamma" of 2 on a screen of 2.5). The plain power that
+        /// was here before (v^(1/1.8)) came out a quarter too dark all the
+        /// way up; a plain scale, which is what a reimplementation of the
+        /// renderer suggests, no better.
+        static constexpr double kDefaultScale = 338.0 / 256.0;
+        static constexpr double kDefaultPower = 0.8;
 
         LightBake(const BspFile &bsp, const std::vector<Entity> &entities,
-                  double gamma = kDefaultGamma);
+                  double scale = kDefaultScale, double power = kDefaultPower);
 
         LightExtents extents(const BspFace &face) const;
         /// A face's texture coordinates at vertex i, in source texels.
         void texCoords(const BspFace &face, int i, double &s, double &t) const;
-        /// The light at texture coordinate (s, t) of `face`, gamma applied.
+        /// The light at texture coordinate (s, t) of `face`, scaled.
         Rgb sample(const BspFace &face, double s, double t) const;
 
         bool styleIsOn(int style) const;

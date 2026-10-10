@@ -65,6 +65,9 @@ namespace hldata
         std::int16_t clipPython = 0;
         std::int16_t ammo357 = 0;
         std::int16_t ammoAr = 0;
+        /// The lamp: alight or not, and what is left in it (0..100000).
+        std::uint8_t lampOn = 0;
+        std::int32_t lampCharge = 99000;
 
         std::vector<std::uint32_t> globalHash;
         std::vector<std::uint8_t> globalState;
@@ -84,13 +87,13 @@ namespace hldata
         {
             ar &map &origin[0] &origin[1] &origin[2] &velocity[0] &velocity[1] &velocity[2] &yaw
                 &pitch &ducked &health &weapons &weapon &clipGlock &clipShotgun &ammo9mm &ammoBuck
-                &armor &grenades &clipMp5 &clipPython &ammo357 &ammoAr &globalHash &globalState &train &trainPos[0] &trainPos[1]
+                &armor &grenades &clipMp5 &clipPython &ammo357 &ammoAr &lampOn &lampCharge &globalHash &globalState &train &trainPos[0] &trainPos[1]
                 &trainPos[2] &trainYaw &trainSpeed &trainSelfDriven &maps;
         }
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 4;
+    inline constexpr std::uint16_t kSaveVersion = 5;
     /// A save is a few hundred bytes; one that claims to be more than this is
     /// not one.
     inline constexpr std::uint32_t kSaveMaxBytes = 32 * 1024;

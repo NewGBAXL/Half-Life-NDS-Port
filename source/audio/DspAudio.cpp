@@ -14,7 +14,7 @@
 extern "C"
 {
 // Only the numbers: the arithmetic in this header is the DSP's, not ours.
-#include "dsp/hl_dsp.h"
+#include "dsp/hl_dsp_proto.h"
 }
 
 extern const std::uint32_t hlDspProgramBytes;

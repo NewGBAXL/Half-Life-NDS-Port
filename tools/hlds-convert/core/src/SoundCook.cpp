@@ -1,5 +1,7 @@
 #include "hlds/SoundCook.hpp"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -228,11 +230,12 @@ namespace hlds
             stepState(code, value, index);
             out.data[4 + i / 2] |= static_cast<std::uint8_t>(code << ((i & 1) * 4));
         }
-        if (loops)
+        // It goes round only if its file says where from (a cue point): a
+        // sound without one is played through and is over, as the game
+        // plays it, whatever asked for it to be switched on and off.
+        if (loops && wav.loopStart >= 0)
         {
-            int from = wav.loopStart >= 0
-                           ? static_cast<int>((static_cast<std::int64_t>(wav.loopStart) * rate) / wav.rate)
-                           : 0;
+            const int from = static_cast<int>((static_cast<std::int64_t>(wav.loopStart) * rate) / wav.rate);
             // The word the sample is in; never the header's (the chip takes
             // its state for the loop as it passes the point, and has none
             // before the first sample).
@@ -329,7 +332,52 @@ namespace hlds
 
     SentenceBook parseSentences(const std::string &text)
     {
+        // The game's own way of writing a line (its sound.cpp, VOX_*):
+        //
+        //     NAME folder/word word(p120) (p90 v80) word, word(e75) word.
+        //
+        // The folder is said once, with the first word. Marks in brackets
+        // straight after a word are that word's alone; brackets standing by
+        // themselves hold for every word after them. p: pitch, v: volume, e:
+        // where the word is cut off -- all in percent; s (where it starts)
+        // and t (how much it is squeezed) are read past. A comma and a full
+        // stop are pauses, and the pauses are sounds.
         SentenceBook book;
+        // Pauses a folder has not got are the announcer's.
+        static const char *const kWithComma[] = {"ambience/", "barney/", "fvox/", "hgrunt/", "scientist/", "vox/"};
+        static const char *const kWithPeriod[] = {"fvox/", "hgrunt/", "vox/"};
+        auto pauseIn = [](const std::string &folder, bool period)
+        {
+            bool has = false;
+            if (period)
+            {
+                for (const char *with : kWithPeriod)
+                    has = has || folder == with;
+            }
+            else
+            {
+                for (const char *with : kWithComma)
+                    has = has || folder == with;
+            }
+            return (has ? folder : std::string("vox/")) + (period ? "_period.wav" : "_comma.wav");
+        };
+        auto marks = [](const std::string &inside, WordSaid &said)
+        {
+            for (std::size_t i = 0; i < inside.size(); ++i)
+            {
+                const char letter = static_cast<char>(std::tolower(static_cast<unsigned char>(inside[i])));
+                if (letter != 'p' && letter != 'v' && letter != 'e' && letter != 's' && letter != 't')
+                    continue;
+                const int value = std::atoi(inside.c_str() + i + 1);
+                if (letter == 'p' && value >= 30 && value <= 255)
+                    said.pitch = value;
+                else if (letter == 'v' && value >= 0 && value <= 100)
+                    said.volume = value;
+                else if (letter == 'e' && value >= 10 && value <= 100)
+                    said.end = value;
+            }
+        };
+
         std::size_t at = 0;
         while (at < text.size())
         {
@@ -341,63 +389,78 @@ namespace hlds
             const std::size_t comment = line.find("//");
             if (comment != std::string::npos)
                 line.resize(comment);
-            // What is in brackets says how a word is spoken (pitch, speed,
-            // where it is cut): none of it is kept.
-            std::string plain;
-            int depth = 0;
-            for (char c : line)
-            {
-                if (c == '(')
-                    ++depth;
-                else if (c == ')')
-                    depth = std::max(0, depth - 1);
-                else if (depth == 0)
-                    plain.push_back(c == '\t' || c == '\r' ? ' ' : c);
-            }
-            std::vector<std::string> tokens;
-            std::string token;
-            for (char c : plain + " ")
-            {
-                if (c == ' ')
-                {
-                    if (!token.empty())
-                        tokens.push_back(token);
-                    token.clear();
-                }
-                else
-                {
-                    token.push_back(c);
-                }
-            }
-            if (tokens.size() < 2)
+            for (char &c : line)
+                c = c == '\t' || c == '\r' ? ' ' : c;
+            std::size_t i = line.find_first_not_of(' ');
+            if (i == std::string::npos)
+                continue;
+            const std::size_t nameEnd = line.find(' ', i);
+            if (nameEnd == std::string::npos)
                 continue;
             std::string name;
-            for (char c : tokens[0])
-                name.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+            for (std::size_t k = i; k < nameEnd; ++k)
+                name.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(line[k]))));
+
             Sentence sentence;
+            WordSaid standing; // what the last brackets by themselves said
             // The folder is said once, with the first word, and holds for
             // the line; with none, the words are the announcer's.
             std::string folder = "vox/";
-            for (std::size_t n = 1; n < tokens.size(); ++n)
+            i = nameEnd;
+            while (i < line.size())
             {
+                if (line[i] == ' ')
+                {
+                    ++i;
+                    continue;
+                }
+                if (line[i] == '(')
+                {
+                    // Brackets by themselves: for the words that follow.
+                    const std::size_t close = line.find(')', i);
+                    const std::size_t stop = close == std::string::npos ? line.size() : close;
+                    marks(line.substr(i + 1, stop - i - 1), standing);
+                    i = stop + 1;
+                    continue;
+                }
+                if (line[i] == ',' || line[i] == '.')
+                {
+                    sentence.words.push_back(pauseIn(folder, line[i] == '.'));
+                    sentence.said.push_back(WordSaid());
+                    ++i;
+                    continue;
+                }
+                // A word: up to a space, a bracket or a pause.
                 std::string word;
-                for (char c : tokens[n])
-                    word.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                while (i < line.size() && line[i] != ' ' && line[i] != '(' && line[i] != ',' && line[i] != '.')
+                    word.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(line[i++]))));
                 const std::size_t slash = word.rfind('/');
                 if (slash != std::string::npos)
                 {
                     folder = word.substr(0, slash + 1);
                     word = word.substr(slash + 1);
                 }
-                // Commas and full stops are pauses, which are sounds too
-                // ("_comma", "_period") -- left out: a line is its words.
-                while (!word.empty() && (word.back() == ',' || word.back() == '.'))
-                    word.pop_back();
+                WordSaid said = standing;
+                if (i < line.size() && line[i] == '(')
+                {
+                    // Its own marks, on top of the standing ones.
+                    const std::size_t close = line.find(')', i);
+                    const std::size_t stop = close == std::string::npos ? line.size() : close;
+                    // (After a folder alone -- "hgrunt/(p110 t40) clik" --
+                    // they are brackets by themselves.)
+                    marks(line.substr(i + 1, stop - i - 1), word.empty() ? standing : said);
+                    i = stop + 1;
+                }
                 if (word.empty())
                     continue;
                 sentence.words.push_back(folder + word + ".wav");
+                sentence.said.push_back(said);
             }
-            if (!sentence.words.empty())
+            // (A line of pauses alone is no line.)
+            bool spoken = false;
+            for (const std::string &word : sentence.words)
+                spoken = spoken || word.find("/_") == std::string::npos;
+            if (spoken)
                 book.lines[name] = std::move(sentence);
         }
         return book;

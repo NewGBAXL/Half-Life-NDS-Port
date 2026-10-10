@@ -36,10 +36,11 @@ namespace hlrt
         /// `weapon` is a kWeapon*; `extra` what it has besides, or -1.
         void setStatus(bool suit, int health, int armor, int weapon, int clip, int spare, int extra);
         /// The lamp: alight or not, and how much is in it (0..100).
-        void setLamp(bool on, int percent)
+        void setLamp(bool on, int percent, bool suit = true)
         {
             lampOn_ = on;
             lampPercent_ = percent;
+            lampSuit_ = suit;
         }
         /// Being hurt: how red the screen is (0..256) and how strongly each
         /// of the four marks round its middle shows where from (front,
@@ -77,6 +78,7 @@ namespace hlrt
         void *loadingPalette_ = nullptr;
         bool suit_ = false;
         bool lampOn_ = false;
+        bool lampSuit_ = false; ///< the suit is worn: its lamp is shown, alight or not
         int flash_ = 0;
         int pain_[4] = {0, 0, 0, 0};
         int lampPercent_ = 100;

@@ -8,6 +8,22 @@
 
 namespace hlds
 {
+    std::uint8_t brightened(std::uint8_t value)
+    {
+        return static_cast<std::uint8_t>(std::lround(255.0 * std::pow(value / 255.0, kTextureGamma)));
+    }
+    void brighten(RgbaImage &image)
+    {
+        std::uint8_t table[256];
+        for (int i = 0; i < 256; ++i)
+            table[i] = brightened(static_cast<std::uint8_t>(i));
+        for (std::size_t i = 0; i < image.rgba.size(); ++i)
+        {
+            if ((i & 3) != 3)
+                image.rgba[i] = table[image.rgba[i]];
+        }
+    }
+
     RgbaImage toRgba(const IndexedImage &image, bool colourKey)
     {
         RgbaImage out;

@@ -170,6 +170,11 @@ namespace hlrt
                     logicHurt(state, cost);
                     game.heard.add(CommonSound::FallPain, nullptr);
                 }
+                else if (speed > 290)
+                {
+                    // (Half of what would hurt: the game's thud.)
+                    game.heard.add(CommonSound::JumpLand, nullptr, 100);
+                }
             }
             if (state.hurt > 0)
             {
@@ -182,6 +187,23 @@ namespace hlrt
                     right = static_cast<fx>((static_cast<std::int64_t>(d[0]) * s - static_cast<std::int64_t>(d[1]) * c) >> 12);
                 }
                 viewHurt(view, state.hurt, forward, right);
+                // What hit them came from somewhere: their own blood, a
+                // splash of it in front of them and a stain on whatever
+                // is behind.
+                if (state.hurtKnown && state.hurt >= 3)
+                {
+                    fx away[3] = {state.origin[0] - state.hurtFrom[0], state.origin[1] - state.hurtFrom[1], 0};
+                    const fx far = fxLength(away);
+                    if (far > 0)
+                    {
+                        for (int k = 0; k < 2; ++k)
+                            away[k] = static_cast<fx>((static_cast<std::int64_t>(away[k]) << kFxShift) / far);
+                        const fx at[3] = {state.origin[0] - away[0] * 20, state.origin[1] - away[1] * 20,
+                                          state.origin[2] + state.viewHeight - fxFromInt(14)};
+                        effectAdd(game.actors, kEffectBlood, at, nullptr, 0, 250);
+                        markBlood(game.actors, game.world, state.origin, away, false, state.hurt >= 25);
+                    }
+                }
                 state.hurt = 0;
             }
             const fx flat[3] = {state.velocity[0], state.velocity[1], 0};
