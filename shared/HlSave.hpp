@@ -82,21 +82,49 @@ namespace hldata
 
         std::vector<SaveMapState> maps;
 
+        /// The whole state of the map the player is in, as HlSaveState.hpp
+        /// writes it (an archive of its own, with its own checks): every
+        /// door, trigger and actor as it was. Empty: none -- the map is
+        /// then begun again, with only what is above put right.
+        std::vector<std::uint8_t> state;
+
         template <class Ar>
         void serialize(Ar &ar)
         {
             ar &map &origin[0] &origin[1] &origin[2] &velocity[0] &velocity[1] &velocity[2] &yaw
                 &pitch &ducked &health &weapons &weapon &clipGlock &clipShotgun &ammo9mm &ammoBuck
                 &armor &grenades &clipMp5 &clipPython &ammo357 &ammoAr &lampOn &lampCharge &globalHash &globalState &train &trainPos[0] &trainPos[1]
-                &trainPos[2] &trainYaw &trainSpeed &trainSelfDriven &maps;
+                &trainPos[2] &trainYaw &trainSpeed &trainSelfDriven &maps &state;
         }
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 5;
-    /// A save is a few hundred bytes; one that claims to be more than this is
-    /// not one.
-    inline constexpr std::uint32_t kSaveMaxBytes = 32 * 1024;
+    inline constexpr std::uint16_t kSaveVersion = 6;
+    /// A save with a map's whole state in it is tens of kilobytes; one that
+    /// claims to be more than this is not one.
+    inline constexpr std::uint32_t kSaveMaxBytes = 256 * 1024;
+
+    // What kind of save a file is.
+    inline constexpr std::uint8_t kSaveKindAuto = 0;    ///< the game's own: an autosave point, or arriving in a map
+    inline constexpr std::uint8_t kSaveKindQuick = 1;   ///< the menu's SAVE
+    inline constexpr std::uint8_t kSaveKindManual = 2;  ///< one of the player's six
+    inline constexpr std::uint8_t kSaveKindArrival = 3; ///< on coming into the map: what dying again and again goes back to
+
+    /// What a save says of itself, at its head, where it can be read without
+    /// the rest: for the list.
+    struct SaveHeading
+    {
+        std::uint32_t serial = 0;      ///< goes up with every save made: the highest is the most recent
+        std::uint32_t playSeconds = 0; ///< how long has been played
+        /// When, by the console's clock; year 0 if it could not be read.
+        std::uint16_t year = 0;
+        std::uint8_t month = 0, day = 0, hour = 0, minute = 0;
+        std::uint8_t kind = kSaveKindAuto;
+        std::uint8_t health = 0;
+        char map[32] = {};     ///< lower-case, no extension
+        char chapter[44] = {}; ///< the chapter's title, as the game shows it
+    };
+    static_assert(sizeof(SaveHeading) == 92); // (no padding in it: it is checksummed as it lies)
 
     struct SaveHeader
     {
@@ -104,9 +132,18 @@ namespace hldata
         std::uint16_t version;
         std::uint16_t levelVersion; ///< a save is of maps cooked in this format
         std::uint32_t payloadBytes;
-        std::uint32_t crc32;
+        std::uint32_t crc32;        ///< of the payload
+        std::uint32_t headingCrc;   ///< of the heading, which follows this
+        std::uint32_t spare;
     };
-    static_assert(sizeof(SaveHeader) == 16);
+    static_assert(sizeof(SaveHeader) == 24);
+    inline constexpr std::size_t kSaveHeadBytes = sizeof(SaveHeader) + sizeof(SaveHeading);
+
+    // What a file turned out to be.
+    inline constexpr int kSaveNone = 0;  ///< no save: not there, or not one
+    inline constexpr int kSaveGood = 1;
+    inline constexpr int kSaveOther = 2; ///< a save, of another version of the game or of its maps
+    inline constexpr int kSaveBad = 3;   ///< damaged
 
     // ------------------------------------------------------------- dying
     //
@@ -137,7 +174,7 @@ namespace hldata
         return loop.quick >= 3 ? kBackArrival : kBackLatest;
     }
 
-    inline std::vector<std::uint8_t> writeSave(const SaveData &data)
+    inline std::vector<std::uint8_t> writeSave(const SaveData &data, const SaveHeading &heading = SaveHeading())
     {
         constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
         yas::mem_ostream os;
@@ -152,29 +189,61 @@ namespace hldata
         header.payloadBytes = static_cast<std::uint32_t>(buf.size);
         header.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf.data),
                              static_cast<std::uint32_t>(buf.size));
-        std::vector<std::uint8_t> out(sizeof(header) + buf.size);
+        header.headingCrc = crc32(reinterpret_cast<const std::uint8_t *>(&heading), sizeof(heading));
+        std::vector<std::uint8_t> out(kSaveHeadBytes + buf.size);
         std::memcpy(out.data(), &header, sizeof(header));
-        std::memcpy(out.data() + sizeof(header), buf.data, buf.size);
+        std::memcpy(out.data() + sizeof(header), &heading, sizeof(heading));
+        std::memcpy(out.data() + kSaveHeadBytes, buf.data, buf.size);
         return out;
+    }
+
+    /// What the first bytes of a file say it is (kSave*), and its heading
+    /// if it has a whole one. `size` is how many bytes of it were read: at
+    /// least kSaveHeadBytes of a save.
+    inline int readSaveHeading(const std::uint8_t *bytes, std::size_t size, SaveHeading &out)
+    {
+        SaveHeader header;
+        if (size < sizeof(header))
+            return kSaveNone;
+        std::memcpy(&header, bytes, sizeof(header));
+        if (std::memcmp(header.magic, kSaveMagic, sizeof(header.magic)) != 0)
+            return kSaveNone;
+        if (header.version != kSaveVersion || header.levelVersion != kLevelVersion)
+            return kSaveOther;
+        if (size < kSaveHeadBytes || header.payloadBytes > kSaveMaxBytes ||
+            crc32(bytes + sizeof(header), sizeof(SaveHeading)) != header.headingCrc)
+            return kSaveBad;
+        std::memcpy(&out, bytes + sizeof(header), sizeof(out));
+        // (They are shown: they end where they end.)
+        out.map[sizeof(out.map) - 1] = 0;
+        out.chapter[sizeof(out.chapter) - 1] = 0;
+        return kSaveGood;
+    }
+
+    /// Whether these bytes are a whole save of this version: every check
+    /// that can be made without reading the archive.
+    inline bool saveWhole(const std::uint8_t *bytes, std::size_t size)
+    {
+        SaveHeading heading;
+        SaveHeader header;
+        if (readSaveHeading(bytes, size, heading) != kSaveGood)
+            return false;
+        std::memcpy(&header, bytes, sizeof(header));
+        return header.payloadBytes == size - kSaveHeadBytes &&
+               crc32(bytes + kSaveHeadBytes, header.payloadBytes) == header.crc32;
     }
 
     /// False for anything that is not a save of this version, damaged or not;
     /// `out` is then untouched.
-    inline bool readSave(const std::uint8_t *bytes, std::size_t size, SaveData &out)
+    inline bool readSave(const std::uint8_t *bytes, std::size_t size, SaveData &out, SaveHeading *heading = nullptr)
     {
         constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
-        SaveHeader header;
-        if (size < sizeof(header) || size > kSaveMaxBytes)
+        if (size > kSaveMaxBytes + kSaveHeadBytes || !saveWhole(bytes, size))
             return false;
-        std::memcpy(&header, bytes, sizeof(header));
-        if (std::memcmp(header.magic, kSaveMagic, sizeof(header.magic)) != 0 ||
-            header.version != kSaveVersion || header.levelVersion != kLevelVersion ||
-            header.payloadBytes != size - sizeof(header) ||
-            crc32(bytes + sizeof(header), header.payloadBytes) != header.crc32)
-            return false;
+        const std::uint32_t payload = static_cast<std::uint32_t>(size - kSaveHeadBytes);
 
         SaveData read;
-        yas::mem_istream is(bytes + sizeof(header), header.payloadBytes);
+        yas::mem_istream is(bytes + kSaveHeadBytes, payload);
         yas::binary_iarchive<yas::mem_istream, flags> ia(is);
         ia &read;
 
@@ -190,6 +259,8 @@ namespace hldata
             if (!plain)
                 return false;
         }
+        if (heading != nullptr)
+            readSaveHeading(bytes, size, *heading);
         out = std::move(read);
         return true;
     }

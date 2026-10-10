@@ -24,7 +24,11 @@ removed when the run is over.)
 - **The script** is `tools/emu/xin.py`'s, the same that drives the port in
   the emulator: `sleep <s>`, `key <name> <s>`, `shot <png>`, `burst <dir>
   <n>`. `a` is attack on both sides; the arrows walk and turn; F6, F7 and F9
-  take the crowbar, the pistol and the shotgun in the real game.
+  take the crowbar, the pistol and the shotgun in the real game; `4`, `5`
+  and `6` the hand grenade, the MP5 and the .357; `z` is the second trigger
+  on both sides (R on the console), `t` the real game's reload (the port's
+  is a tap on its RELOAD button, `tap 225 257`, and its weapons a tap on
+  their slots, `tap 65 422` for the pistol and 42 more for each one after).
 - **How bright it is.** The side folder's game is given the player's own
   video settings (`brightness`, `gamma`, `gl_overbright`, `texgamma`,
   `lightgamma`, read from `valve/config.cfg` and never written back), so

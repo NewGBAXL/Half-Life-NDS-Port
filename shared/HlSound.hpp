@@ -262,6 +262,18 @@ namespace hldata
         GlassHit1,
         GlassHit2,
         GlassHit3,
+        // The guns' other sounds, as the game has them (where a map has the
+        // gun to be held): the shotgun's both barrels, its pump and its
+        // other shell going in; the MP5's other shot and other launch; the
+        // .357's other shot; a grenade's other two knocks.
+        ShotgunDouble,
+        ShotgunPump,
+        ShotgunReload3,
+        Mp5Fire1,
+        Launcher2,
+        PythonFire2,
+        GrenadeBounce2,
+        GrenadeBounce3,
         Count
     };
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -311,7 +323,9 @@ namespace hldata
             "common/npc_step4.wav",   "weapons/cbar_hit2.wav",   "weapons/cbar_hitbod2.wav",
             "weapons/cbar_hitbod3.wav", "debris/wood1.wav",      "debris/wood2.wav",
             "debris/wood3.wav",       "debris/glass1.wav",       "debris/glass2.wav",
-            "debris/glass3.wav"};
+            "debris/glass3.wav",      "weapons/dbarrel1.wav",    "weapons/scock1.wav",
+            "weapons/reload3.wav",    "weapons/hks1.wav",        "weapons/glauncher2.wav",
+            "weapons/357_shot2.wav",  "weapons/grenade_hit2.wav", "weapons/grenade_hit3.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

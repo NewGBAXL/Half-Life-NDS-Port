@@ -59,24 +59,38 @@ namespace hlrt
         // and degrees, starts there instead (tools/emu/play.sh writes it).
         if (std::FILE *file = std::fopen(global.dataPath("debug_start.txt").c_str(), "r"))
         {
-            int x, y, z, yaw, track = -1;
-            if (std::fscanf(file, "%d %d %d %d %d", &x, &y, &z, &yaw, &track) >= 4)
+            int x, y, z, yaw, track = -1, die = 0;
+            if (std::fscanf(file, "%d %d %d %d %d %d", &x, &y, &z, &yaw, &track, &die) >= 4)
             {
-                // (A fifth number is a track of music to start with.)
+                // (A fifth number is a track of music to start with; a
+                // sixth, the seconds until the player dies -- once: not
+                // again when they are back.)
                 debugTrack = track;
+                static bool died = false;
+                if (die > 0 && !died)
+                {
+                    died = true;
+                    debugDieMs = die * 1000;
+                }
                 state.origin[0] = fxFromInt(x);
                 state.origin[1] = fxFromInt(y);
                 state.origin[2] = fxFromInt(z);
                 camera.yaw = static_cast<std::uint16_t>((yaw * 65536) / 360);
                 // ... and armed, wherever that is.
+                // (With everything there is to hold: what is tried there is
+                // as often a weapon as a place.)
                 state.inv.have = kHaveSuit | (1u << kWeaponCrowbar) | (1u << kWeaponGlock) | (1u << kWeaponShotgun) |
-                                 (1u << kWeaponGrenade);
+                                 (1u << kWeaponGrenade) | (1u << kWeaponMp5) | (1u << kWeaponPython);
                 state.inv.grenades = 5;
                 state.inv.current = kWeaponCrowbar;
                 state.inv.clipGlock = 17;
                 state.inv.clipShotgun = 8;
+                state.inv.clipMp5 = 50;
+                state.inv.clipPython = 6;
                 state.inv.ammo9mm = 68;
                 state.inv.ammoBuck = 32;
+                state.inv.ammo357 = 12;
+                state.inv.ammoAr = 3;
             }
             std::fclose(file);
         }

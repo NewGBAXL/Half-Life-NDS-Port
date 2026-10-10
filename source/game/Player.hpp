@@ -33,6 +33,7 @@ namespace hlrt
         void spawn();
         /// A development aid: the track of music debug_start.txt asks for, or -1.
         int debugTrack = -1;
+        int debugDieMs = -1; ///< debug_start.txt: until the player dies of it (ms); -1: they do not
 
         /// Turn the view, move (against Game::world), and put the camera at the
         /// eyes. `vblanks` is how many sixtieths of a second this frame covers.

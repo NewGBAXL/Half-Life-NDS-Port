@@ -1,3 +1,5 @@
+#include <ctime>
+
 #include "global_header.hpp"
 
 #include "DebugLog.hpp"
@@ -312,31 +314,75 @@ namespace
         return LoadResult::Ok;
     }
 
-    void saveNow(int slot = hlrt::SaveGame::kLatest)
+    /// Until what was last said on the touch screen gives way to the pad
+    /// again (a blank count; 0: nothing is waiting to).
+    std::uint32_t saidUntil = 0;
+    void say(const char *line, const char *under = "")
     {
-        if (hlrt::level.loaded() && !hlrt::player.noclip && hlrt::player.state.health > 0)
-            hlrt::SaveGame::write(hlrt::game.snapshot(currentMap), slot);
+        hlrt::bottomScreen.showMessage(line, under);
+        saidUntil = Global::vblanks() + 90;
+    }
+
+    /// The game as it is, into `slot` (a kSlot*). Said on the screen either
+    /// way: that it was saved, or that the card would not take it.
+    bool saveNow(int slot, bool quiet = false)
+    {
+        if (!hlrt::level.loaded() || hlrt::player.noclip || hlrt::player.state.health <= 0)
+            return false;
+        hldata::SaveHeading heading = hlrt::game.heading(currentMap);
+        // (When, by the console's clock, if it has the time.)
+        const std::time_t now = std::time(nullptr);
+        const std::tm *when = std::localtime(&now);
+        if (when != nullptr && when->tm_year + 1900 >= 2005)
+        {
+            heading.year = static_cast<std::uint16_t>(when->tm_year + 1900);
+            heading.month = static_cast<std::uint8_t>(when->tm_mon + 1);
+            heading.day = static_cast<std::uint8_t>(when->tm_mday);
+            heading.hour = static_cast<std::uint8_t>(when->tm_hour);
+            heading.minute = static_cast<std::uint8_t>(when->tm_min);
+        }
+        const bool saved = hlrt::SaveGame::write(hlrt::game.snapshot(currentMap), slot, heading);
+        if (!saved)
+            say("COULD NOT SAVE", "the card would not take it");
+        else if (!quiet)
+            say(slot == hldata::kSlotAuto ? "AUTOSAVED" : "SAVED");
+        return saved;
     }
     /// What a death goes back to, and when the game last went back.
     hldata::DeathLoop deathLoop;
     std::uint32_t wentBack = 0;
 
-    /// Go to where the save on the card says. False -- with nothing changed
-    /// -- if there is none, or its map is not on the card.
-    bool loadSave(std::string &error, int slot = hlrt::SaveGame::kLatest)
+    /// Go to where the save in `slot` says: its map begun, and the whole of
+    /// its state laid over it. False -- with nothing changed -- if there is
+    /// none, or its map is not on the card.
+    bool loadSave(std::string &error, int slot)
     {
         static hldata::SaveData save; // not on the stack: it holds vectors of vectors
         save = hldata::SaveData();
         hldata::LevelHeader header{};
-        if (!hlrt::SaveGame::read(save, slot) ||
+        if (slot < 0 || !hlrt::SaveGame::read(save, slot) ||
             !hlrt::Level::peekHeader(save.map, header))
             return false;
         hlrt::game.adoptProgress(save);
         const std::string map = save.map; // loadLevel changes currentMap, which this may be
-        if (loadLevel(map, nullptr, error) != LoadResult::Ok)
+        // (Whoever came into that map with the player comes into it again.)
+        static hldata::Arrival came;
+        const bool arrived = hlrt::Game::arrivalOf(save, came);
+        if (loadLevel(map, arrived ? &came : nullptr, error) != LoadResult::Ok)
             haltWith("Cannot go on:", error.c_str(), map.c_str());
         hlrt::game.placeFromSave(save);
+        // Every door, trigger and actor as it was -- or, from a save that
+        // has not that (or not for this map as it is cooked now), the map
+        // as it begins with the player put back.
+        if (!hlrt::game.layState(save))
+            say("LOADED", "the map from its beginning");
+        save = hldata::SaveData(); // (tens of kilobytes: not kept)
         return true;
+    }
+    /// The most recent save of those the player is shown; -1: none.
+    int latestSave()
+    {
+        return hldata::saveMostRecent(hlrt::SaveGame::index());
     }
 
     /// The debug command line: a line typed on libnds's on-screen keyboard,
@@ -486,10 +532,48 @@ int main(int argc, char *argv[])
     // (Before any map: a map's sounds are handed to it as they are read.)
     hlrt::sound.init();
     std::string error;
-    // A game in progress is gone back to; otherwise a new one starts.
-    if ((debugging || !loadSave(error)) &&
-        loadLevel(startMap, nullptr, error) != LoadResult::Ok)
-        haltWith("Cannot start:", error.c_str(), startMap.c_str());
+    hlrt::menu.setSaves(&hlrt::SaveGame::index());
+    // The title: go on with the last save, load another, or begin. (A card
+    // set up to start somewhere for a test goes straight there.)
+    bool begun = false;
+    if (!debugging)
+    {
+        if (hlrt::hudDraw.showLoading())
+            hlrt::screenFade.curtainUp();
+        hlrt::menu.openTitle();
+        while (!begun)
+        {
+            swiWaitForVBlank();
+            hlrt::input.poll();
+            hlrt::sound.frame();
+            using hlrt::Menu;
+            const Menu::Action item = hlrt::menu.frame();
+            if (item == Menu::Action::Continue || item == Menu::Action::Load)
+            {
+                begun = loadSave(error, hlrt::menu.slot());
+                if (!begun)
+                    hlrt::menu.openTitle(); // (it could not be: the title again)
+            }
+            else if (item == Menu::Action::NewGame)
+            {
+                break;
+            }
+        }
+        settings.save();
+    }
+    if (!begun)
+    {
+        hlrt::game.resetProgress();
+        if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
+            haltWith("Cannot start:", error.c_str(), startMap.c_str());
+        // (Somewhere to come back to from the first: the game's own save,
+        // not one of the player's.)
+        if (!debugging)
+        {
+            saveNow(hldata::kSlotAuto, true);
+            saveNow(hldata::kSlotArrival, true);
+        }
+    }
 
 #ifdef HLDS_PROFILE
     // (A build that measures also checks the hardware's arithmetic.)
@@ -543,28 +627,42 @@ int main(int argc, char *argv[])
                 {
                     using hlrt::Menu;
                     const Menu::Action item = hlrt::menu.frame();
-                    if (item == Menu::Action::Save)
+                    if (item == Menu::Action::Save || item == Menu::Action::SaveTo)
                     {
-                        saveNow();
+                        // The quick one, or the one of the player's six
+                        // that was picked.
+                        hlrt::bottomScreen.showPad();
+                        saveNow(item == Menu::Action::Save ? hldata::kSlotQuick : hlrt::menu.slot());
                         logPerformance();
                         hlrt::gpuStats.beginMap();
                         paused = false;
                         // (After the card has been written to: the sound
                         // goes on once nothing stands in its way.)
                         hlrt::sound.setPaused(false);
-                        hlrt::bottomScreen.showPad();
+                    }
+                    else if (item == Menu::Action::Load)
+                    {
+                        paused = false;
+                        hlrt::sound.setPaused(false);
+                        if (!loadSave(error, hlrt::menu.slot()))
+                        {
+                            hlrt::bottomScreen.showPad();
+                            say("COULD NOT LOAD", "that save cannot be read");
+                        }
+                        deathLoop = hldata::DeathLoop();
+                        lastVblank = Global::vblanks();
                     }
                     else if (item == Menu::Action::NewGame)
                     {
+                        // (No save of the player's is touched: only the
+                        // game's own, which are this game's from here.)
                         paused = false;
                         hlrt::sound.setPaused(false);
                         hlrt::game.resetProgress();
                         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
                             haltWith("Cannot start:", error.c_str(), startMap.c_str());
-                        saveNow();
-                        // (... and the coming-in to go back to is this one,
-                        // not the last game's.)
-                        saveNow(hlrt::SaveGame::kArrival);
+                        saveNow(hldata::kSlotAuto, true);
+                        saveNow(hldata::kSlotArrival, true);
                         deathLoop = hldata::DeathLoop();
                         lastVblank = Global::vblanks();
                     }
@@ -644,8 +742,8 @@ int main(int argc, char *argv[])
                     const bool went =
                         back == hldata::kBackStart
                             ? false
-                            : (back == hldata::kBackArrival && loadSave(error, hlrt::SaveGame::kArrival)) ||
-                                  loadSave(error);
+                            : (back == hldata::kBackArrival && loadSave(error, hldata::kSlotArrival)) ||
+                                  loadSave(error, latestSave()) || loadSave(error, hldata::kSlotArrival);
                     if (!went)
                     {
                         const std::string again = currentMap;
@@ -658,7 +756,13 @@ int main(int argc, char *argv[])
                 if (hlrt::game.logic.saveRequested)
                 {
                     hlrt::game.logic.saveRequested = false;
-                    saveNow();
+                    saveNow(hldata::kSlotAuto);
+                }
+                // What was said on the touch screen has been read.
+                if (saidUntil != 0 && !paused && Global::vblanks() > saidUntil)
+                {
+                    saidUntil = 0;
+                    hlrt::bottomScreen.showPad();
                 }
 
                 // The way into the next map was taken this frame. What
@@ -673,8 +777,11 @@ int main(int argc, char *argv[])
                     switch (loadLevel(next, &arrival, error))
                     {
                     case LoadResult::Ok:
-                        saveNow(); // every new map is somewhere to come back to
-                        saveNow(hlrt::SaveGame::kArrival);
+                        // Every new map is somewhere to come back to: the
+                        // game's own save, and the one a run of deaths
+                        // goes back to.
+                        saveNow(hldata::kSlotAuto);
+                        saveNow(hldata::kSlotArrival, true);
                         break;
                     case LoadResult::NotOnCard:
                         // Not converted: say so, and do not ask again every

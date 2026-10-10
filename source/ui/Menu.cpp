@@ -26,6 +26,12 @@ namespace hlrt
         {
             kResume,
             kSave,
+            kSaveGame,
+            kLoadGame,
+            kContinue,
+            kYes,
+            kNo,
+            kSlot, ///< a line of the list (which, by its row)
             kNewGame,
             kOptions,
             kCommand,
@@ -55,9 +61,19 @@ namespace hlrt
             Id id;
             const char *label;
         };
-        const Row kMain[] = {{Kind::Button, kResume, "RESUME"},   {Kind::Button, kSave, "SAVE"},
-                             {Kind::Button, kNewGame, "NEW GAME"}, {Kind::Button, kOptions, "OPTIONS"},
+        const Row kMain[] = {{Kind::Button, kResume, "RESUME"},       {Kind::Button, kSave, "QUICK SAVE"},
+                             {Kind::Button, kSaveGame, "SAVE GAME"}, {Kind::Button, kLoadGame, "LOAD GAME"},
+                             {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"},
                              {Kind::Button, kCommand, "COMMAND"}};
+        const Row kTitleRows[] = {{Kind::Button, kContinue, "CONTINUE"}, {Kind::Button, kLoadGame, "LOAD GAME"},
+                                  {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"}};
+        const Row kConfirmRows[] = {{Kind::Button, kYes, "YES"}, {Kind::Button, kNo, "NO"}};
+        // The list of saves: its lines are made when it is shown (they say
+        // what is in each), then BACK.
+        Row listRows[kSlotsListed + 1];
+        char listText[kSlotsListed][72];
+        bool listDead[kSlotsListed];
+        char question[40];
         const Row kOptionRows[] = {{Kind::Button, kGraphics, "GRAPHICS"}, {Kind::Value, kDsp, "DSi sound"},
                                    {Kind::Slider, kMusic, "Music"},     {Kind::Slider, kEffects, "Effects"},
                                    {Kind::Slider, kVoices, "Voices"},   {Kind::Slider, kAmbience, "Ambience"},
@@ -84,7 +100,7 @@ namespace hlrt
         {
             int x, top, width, height, pitch;
         };
-        constexpr Layout kMainLayout = {28, 40, 200, 24, 29};
+        constexpr Layout kMainLayout = {28, 34, 200, 19, 22};
         constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
         constexpr int kTrackLeft = 100, kTrackWidth = 132;
 
@@ -108,6 +124,21 @@ namespace hlrt
                 count = static_cast<int>(sizeof(kMain) / sizeof(kMain[0]));
                 return kMain;
             }
+            if (page == 3)
+            {
+                count = static_cast<int>(sizeof(kTitleRows) / sizeof(kTitleRows[0]));
+                return kTitleRows;
+            }
+            if (page == 4)
+            {
+                count = kSlotsListed + 1;
+                return listRows;
+            }
+            if (page == 5)
+            {
+                count = 2;
+                return kConfirmRows;
+            }
             if (page == 1)
             {
                 count = static_cast<int>(sizeof(kOptionRows) / sizeof(kOptionRows[0]));
@@ -125,9 +156,70 @@ namespace hlrt
         return count;
     }
 
+    void Menu::openTitle()
+    {
+        open();
+        title_ = true;
+        page_ = Page::Title;
+        draw();
+    }
+
+    /// The list, to load from or to save into: a line for each save, saying
+    /// what it is and what is in it.
+    void Menu::showSaves(bool saving)
+    {
+        static const char *const kNames[kSlotsListed] = {"AUTO", "QUICK", "1", "2", "3", "4", "5", "6"};
+        saving_ = saving;
+        const FontView &font = touchCanvas.font(kFontSmall);
+        for (int i = 0; i < kSlotsListed; ++i)
+        {
+            const SaveSlot none;
+            const SaveSlot &slot = saves_ != nullptr ? saves_->slots[i] : none;
+            // What it is, the chapter (as much of its title as there is
+            // room for), and when: the day and the time if the console's
+            // clock said, else how long had been played.
+            std::string line = std::string(kNames[i]) + "  " + saveLine(slot);
+            if (slot.status == kSaveGood)
+            {
+                const SaveHeading &h = slot.heading;
+                char when[24];
+                if (h.year != 0)
+                    std::snprintf(when, sizeof(when), "  %02u/%02u %02u:%02u", h.day, h.month, h.hour, h.minute);
+                else
+                    std::snprintf(when, sizeof(when), "  %u:%02u", static_cast<unsigned>(h.playSeconds / 3600),
+                                  static_cast<unsigned>(h.playSeconds / 60 % 60));
+                std::string what = h.chapter[0] != 0 ? h.chapter : h.map;
+                const std::string head = std::string(kNames[i]) + "  ";
+                while (what.size() > 3 && textWidth(font, (head + what + when).c_str()) > kOptionLayout.width - 8)
+                    what.pop_back();
+                line = head + what + when;
+            }
+            while (line.size() > 4 && textWidth(font, line.c_str()) > kOptionLayout.width - 8)
+                line.pop_back();
+            std::snprintf(listText[i], sizeof(listText[i]), "%s", line.c_str());
+            // To save into: one of the player's six. To load: one that is
+            // there and whole.
+            listDead[i] = saving ? i < kSlotManual : slot.status != kSaveGood;
+            listRows[i] = Row{Kind::Button, kSlot, listText[i]};
+        }
+        listRows[kSlotsListed] = Row{Kind::Button, kBack, "BACK"};
+        asker_ = page_ == Page::Saves ? asker_ : page_;
+        page_ = Page::Saves;
+        draw();
+    }
+
+    void Menu::ask(Action action, const char *text)
+    {
+        asked_ = action;
+        std::snprintf(question, sizeof(question), "%s", text);
+        page_ = Page::Confirm;
+        draw();
+    }
+
     void Menu::open()
     {
         bottomScreen.release();
+        title_ = false;
         page_ = Page::Main;
         active_ = -1;
         // (The touch that opened it, if there was one, is not a press.)
@@ -139,10 +231,12 @@ namespace hlrt
     {
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
-        if (page_ == Page::Main)
+        if (page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm)
         {
-            const FontView &title = touchCanvas.font(kFontTitle);
-            drawTextCentred(canvas, title, 128, 10, "PAUSED", inkFor(title, kUiOrange));
+            const FontView &title = touchCanvas.font(page_ == Page::Confirm ? kFontMedium : kFontTitle);
+            drawTextCentred(canvas, title, 128, page_ == Page::Confirm ? 14 : 8,
+                            page_ == Page::Main ? "PAUSED" : (page_ == Page::Title ? "HALF-LIFE" : question),
+                            inkFor(title, kUiOrange));
         }
         for (int row = 0; row < rowCount(); ++row)
             drawRow(row, false);
@@ -151,15 +245,19 @@ namespace hlrt
     void Menu::drawRow(int row, bool down)
     {
         Canvas &canvas = touchCanvas.canvas();
-        const bool main = page_ == Page::Main;
+        const bool main = page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm;
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
         const Layout &at = main ? kMainLayout : kOptionLayout;
         const int y = at.top + row * at.pitch;
         const FontView &font = touchCanvas.font(main ? kFontMedium : kFontSmall);
         const int textY = y + (at.height - font.height()) / 2;
-        // (A DS has no DSP to switch: the row is there, and says so.)
-        const bool dead = item.id == kDsp && !DspAudio::available();
+        // (A DS has no DSP to switch: the row is there, and says so. A save
+        // that cannot be loaded, or is not the player's to write, likewise;
+        // and CONTINUE with nothing to continue.)
+        const bool dead = (item.id == kDsp && !DspAudio::available()) || (item.id == kSlot && listDead[row]) ||
+                          (item.id == kContinue && (saves_ == nullptr || saveMostRecent(*saves_) < 0)) ||
+                          (item.id == kCommand && title_);
         if (item.kind == Kind::Slider)
         {
             canvas.fill(at.x, y, at.width, at.height, kUiBack);
@@ -225,7 +323,8 @@ namespace hlrt
 
     int Menu::rowAt(int x, int y) const
     {
-        const Layout &at = page_ == Page::Main ? kMainLayout : kOptionLayout;
+        const Layout &at = page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm ? kMainLayout
+                                                                                                    : kOptionLayout;
         if (x < at.x || x >= at.x + at.width || y < at.top)
             return -1;
         const int row = (y - at.top) / at.pitch;
@@ -257,15 +356,72 @@ namespace hlrt
         {
         case kResume:  return Action::Resume;
         case kSave:    return Action::Save;
-        case kNewGame: return Action::NewGame;
         case kCommand: return Action::Command;
+        case kNewGame:
+            // (From the title there is nothing to lose. No save is touched
+            // either way: a new game only begins.)
+            if (title_)
+                return Action::NewGame;
+            asker_ = page_;
+            ask(Action::NewGame, "NEW GAME?");
+            break;
+        case kContinue:
+            if (saves_ != nullptr && saveMostRecent(*saves_) >= 0)
+            {
+                slot_ = saveMostRecent(*saves_);
+                return Action::Continue;
+            }
+            break;
+        case kSaveGame:
+            showSaves(true);
+            break;
+        case kLoadGame:
+            showSaves(false);
+            break;
+        case kSlot:
+            if (listDead[row])
+            {
+                drawRow(row, false);
+                break;
+            }
+            slot_ = row;
+            if (saving_)
+            {
+                // One with a save in it is asked about first.
+                if (saves_ != nullptr && saves_->slots[row].status != kSaveNone)
+                    ask(Action::SaveTo, "OVERWRITE?");
+                else
+                    return Action::SaveTo;
+            }
+            else if (title_)
+            {
+                return Action::Load;
+            }
+            else
+            {
+                ask(Action::Load, "LOAD? UNSAVED IS LOST");
+            }
+            break;
+        case kYes:
+        {
+            const Action action = asked_;
+            asked_ = Action::None;
+            return action;
+        }
+        case kNo:
+            page_ = asker_ == Page::Saves || asked_ == Action::SaveTo || asked_ == Action::Load ? Page::Saves : asker_;
+            asked_ = Action::None;
+            draw();
+            break;
         case kOptions:
             page_ = Page::Options;
             draw();
             break;
         case kBack:
-            // (From the graphics, back to the options they are among.)
-            page_ = page_ == Page::Graphics ? Page::Options : Page::Main;
+            // (From the graphics, back to the options they are among; from
+            // the list, to where it was asked for.)
+            page_ = page_ == Page::Graphics ? Page::Options
+                                            : (page_ == Page::Saves ? asker_ : (title_ ? Page::Title : Page::Main));
             settings.save();
             draw();
             break;

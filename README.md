@@ -67,9 +67,40 @@ Working:
 - Water: swimming, sinking, jumping out onto a ledge, drowning, slime and
   lava; liquid surfaces sway. The sky, as a box of six pictures behind the
   world.
-- Saving: at every level change, at the map's own save points, and from the
-  pause menu. The game continues from the save when the console is switched
-  on again.
+- Saving, as the game has it. **Eight saves**: AUTOSAVE, which the game
+  writes itself at a map's own save points and on arriving in a map; QUICK,
+  the pause menu's one-touch save; and six that are the player's to choose
+  and overwrite. A save holds **the whole of the map** it was made in --
+  every door, lift, train and trigger as it was, every actor where it
+  stood and what it was doing, who came into the map with the player,
+  what was in flight, the marks on the walls -- so loading goes on from
+  that moment, not from the map's beginning (15 to 60 KB a save). At
+  start there is a **title**: CONTINUE (the most recent save), LOAD GAME
+  (the list, each line with how long was played, the map, the day and
+  time by the console's clock, and the chapter -- which the converter
+  works out for every map from the game's own: each chapter is named by
+  the map that opens it), NEW GAME (which touches none of the player's saves), OPTIONS.
+  A write is said on the screen (SAVED, AUTOSAVED, or that the card would
+  not take it) and is safe against the console being switched off in the
+  middle of it: the new file takes the old one's place only when it is
+  whole, and what is found half-way at the next start is put right.
+  How it is made (`shared/HlSaveFiles.hpp`, `shared/HlSaveState.hpp`):
+  the state is written with yas a field at a time, never as memory lies;
+  no list of fields is kept by hand -- each structure is taken apart
+  whole, and one that has gained a field does not build until its count
+  is corrected (`shared/HlFields.hpp`), so a new field cannot be left out
+  of a save by forgetting; and nothing is read that is not shown first to
+  be this build's own writing of this cooked map (a fingerprint of the
+  layout, the map's checksum and counts, the exact length, under the
+  file's own checksum). The test that guards it (`test_savestate`) plays a
+  real map for a while with things made to happen, saves, lays the save
+  over the same map begun afresh, plays both on, and requires them equal
+  to the byte: all 95 maps of the campaign pass it. What a save does not
+  hold: the maps on either side of the one the player is in keep only
+  what is broken, killed and picked up there; a sound half played and an
+  effect on the screen start again (the music goes on from where it was); a save is of one build of the game and one cooking of its maps
+  (another's is listed as "from another version", not loaded); the saves
+  of the game's earlier builds (`slot0.sav`, `slot1.sav`) are not read.
 - Models: the game's studio models, cooked to a DS format (one skin texture a
   model, animation as keys) and skinned by the hardware's matrix stack, at
   several levels of detail (below).
@@ -235,7 +266,29 @@ Working:
 - The MP5 and the .357, found where the game leaves them. The MP5 fires ten
   rounds a second from a clip of fifty (9 mm, which it shares with the
   pistol), and **R** launches a grenade that goes off at what it touches;
-  the .357 is six rounds of forty. With any other gun in hand, R reloads.
+  the .357 is six rounds of forty.
+- The guns and the hand grenade behave as the game's do, from its own
+  weapon source (`helpSrc/`) and its view models: **L** is the trigger and
+  **R** the game's second one. The pistol fires every 0.3 s, and every
+  0.2 s and ten times as wild on R; its last round and its two reloads
+  (with a round still in it, and without) have the hand's own clips. The
+  shotgun is pumped half a second after it fires, which is when the spent
+  case comes out; R fires both barrels (two shells, twelve pellets, a
+  second and a half); it is loaded a shell at a time, half a second each,
+  and the trigger breaks that off. The MP5 and the .357 have each their
+  two shots at the game's pitches. A hand grenade has its pin pulled by
+  the trigger and is thrown when the trigger is let go -- harder the
+  higher it is aimed, with one of three throws -- and goes off three
+  seconds after the PIN, in the hand if it is still there. Every gun but
+  the pistol only clicks under water; an empty one clicks once for a pull
+  of the trigger. Rounds go off line by the game's cone (most of them near
+  the middle), not anywhere in a square. Left alone, the hand does what
+  the game's does, by its odds. A reload's sounds are in the hand's own
+  animation, as the game has them -- the magazine out, and in -- and are
+  played from there. All of it is in `shared/HlMonsters.hpp`
+  (`weaponsTick`), run by the host tests. Reloading is the touch screen's
+  RELOAD, a touch on the weapon in hand, or pulling the trigger on an
+  empty gun; R reloads only the .357, which has no second trigger.
 - What is taken far past dead comes apart: into the game's own pieces (the
   skull and four more for a person, four for an alien), which fly, tumble,
   bounce, lie, and are gone after a while. A body caught in a blast does
@@ -292,7 +345,9 @@ Working:
   sound a quarter of a second for ten of menu); the menu's clicks are
   heard meanwhile. The music, on a DS, is a maxmod stream fed from the
   card.
-- The pause menu has two pages: RESUME, SAVE, NEW GAME, OPTIONS, COMMAND;
+- The pause menu: RESUME, QUICK SAVE, SAVE GAME (the list, to pick one of
+  the six -- one with a save in it asks first), LOAD GAME (the list of all
+  eight; asks first), NEW GAME (asks first), OPTIONS, COMMAND;
   and under OPTIONS the rendering mode, the DSi's sound, a volume slider
   each for the music, the effects, the voices and the ambience, which
   side the touch screen's buttons are, and the
@@ -308,8 +363,7 @@ Working:
   bottom a slot for each weapon, always in the same place, with the
   game's own picture of it (cooked from your `sprites/320hud1.spr`), the
   one in hand lit with its rounds under it. A touch on a slot takes that
-  weapon; a touch on the one in hand reloads it, as RELOAD does (the MP5
-  too, which R cannot reload while it has grenades to launch). One table (`shared/HlTouchLayout.hpp`) says where everything
+  weapon; a touch on the one in hand reloads it, as RELOAD does. One table (`shared/HlTouchLayout.hpp`) says where everything
   is, to the code that draws and the code that tests a touch alike. For
   a stylus in the left hand, "Buttons: left" in the options mirrors it.
 - Light that changes. The world's light is baked into its vertices, but
@@ -432,7 +486,7 @@ Working:
 - Two things that could hold the game for good are closed. A player
   stuck fast in something (nothing got them out but a few units' nudge)
   is, after half a second, put somewhere clear up to 128 units off. And
-  dying goes back to the latest save -- but three deaths on end, each
+  dying goes back to the most recent save of any kind -- but three deaths on end, each
   within twenty seconds of going back, go back to the save made on
   coming into the map instead (a second save file), and failing that to
   the map's start: a save made a moment before certain death is no
@@ -562,13 +616,13 @@ The converter counts what it does not handle rather than refusing a map.
 | Stylus drag | look around |
 | D-pad, or A B X Y | move |
 | L | fire, or swing the crowbar |
-| R | the MP5's grenade launcher; with any other gun, reload |
+| R | the second trigger: the pistol's fast fire, both barrels of the shotgun, the MP5's grenade launcher (the .357: reload) |
 | Touch a weapon's slot | take that weapon; the one in hand: reload it |
 | Touch RELOAD | reload |
 | Touch JUMP, or tap the pad twice | jump (hold it, or the second tap, to keep it held) |
 | Touch DUCK | crouch |
 | Touch USE | press a button, open a use-only door, charge at a wall unit |
-| Start, or touch MENU | pause menu: resume, save, new game, options (graphics: rendering mode, fog, detail; DSi sound, volumes, buttons left or right, view bob, debug readout), debug command line |
+| Start, or touch MENU | pause menu: resume, quick save, save game, load game, new game, options (graphics: rendering mode, fog, detail; DSi sound, volumes, buttons left or right, view bob, debug readout), debug command line |
 | Select, or touch the lamp | the suit's lamp |
 
 The pause menu's COMMAND opens a debug command line on the on-screen
@@ -678,9 +732,26 @@ moment -- a door shut costs a little and is opened by whoever opens doors,
 a locked one or something not yet broken is no way. Monsters go to where
 they last saw the player, give up after a while and go home; soldiers take
 cover they can reach. Scientists and guards follow the player on USE and
-stay on USE again; a scientist runs out of sight of what would kill him, a
-guard shoots it, and shoots a player who has shot him twice
-(`shared/HlPeople.hpp`). The map's entity text, which the console never
+stay on USE again; a scientist runs out of sight of what would kill him.
+A guard fights it, after the game's own guard: he keeps the enemy he has
+until it is dead or six seconds out of sight (and takes another only in
+place of none, of one he cannot see, or of one twice as far off); he
+turns to it as fast as the game turns him, draws, and fires only when he
+faces it with nothing in the way -- not the player, not a wall -- a real
+round with the game's two degrees of wander, one to each of his firing
+clips; hidden from him, he goes to where he saw it last; he follows only
+when he has nothing to fight, and a standing guard stands again
+afterwards. He leaves alone what a scene is playing and what the map
+keeps caged. The player's rounds turn him by the game's rule: in a fight
+they are strays; with no enemy about, one plainly aimed at him -- or a
+second of any kind -- makes him an enemy, who follows nobody
+(`shared/HlPeople.hpp`, `test_people`). What he does not do yet: monsters
+still have eyes only for the player, so nothing fights him back; turrets
+and barnacles he ignores; he says nothing. (A save keeps his grudge and
+his drawn pistol with everything else.) People stand on what is under them, brushes included, go where a
+lift they stand on goes, and fall when it breaks or is gone; the places
+that hurt hurt them as they hurt the player -- which is what c1a1's
+falling lift is made of: three scientists on a floor that breaks. The map's entity text, which the console never
 read, stays in the stage (`maps/<map>.ent`) instead of in the level.
 
 The loose files the archives are made from stay on the PC, in a **stage**

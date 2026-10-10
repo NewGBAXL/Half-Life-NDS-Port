@@ -48,6 +48,11 @@ bind F8 "god"
 bind F9 "weapon_shotgun"
 bind F10 "impulse 100"
 bind e "impulse 100"
+bind z "+attack2"
+bind t "+reload"
+bind 4 "weapon_handgrenade"
+bind 5 "weapon_9mmAR"
+bind 6 "weapon_357"
 crosshair 1
 cl_bob 0
 fps_max 60

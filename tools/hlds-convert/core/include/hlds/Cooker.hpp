@@ -54,6 +54,9 @@ namespace hlds
         const SentenceBook *sentences = nullptr;
         /// The game's titles.txt, parsed; null if it was not read.
         const TitlesBook *titles = nullptr;
+        /// The name in titles.txt of the title of the chapter this map is
+        /// part of; empty if it is not known.
+        std::string chapter;
     };
 
     struct CookReport

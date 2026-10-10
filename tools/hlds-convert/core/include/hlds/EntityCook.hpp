@@ -93,10 +93,13 @@ namespace hlds
     /// `book` is the game's sentences.txt, if it was there to be read: the
     /// lines the map speaks are looked up in it. `titles` is its titles.txt,
     /// likewise: what the map's messages say and how they are shown.
+    /// `chapter` is the name, in titles.txt, of the title of the chapter the
+    /// map is part of (Converter works it out: chapterOf); empty if unknown.
     void cookLogic(const BspFile &bsp, const std::vector<Entity> &entities,
                    const std::vector<int> &brushRecordOfEntity,
                    const std::vector<std::string> &models, LogicCook &out,
-                   const SentenceBook *book = nullptr, const TitlesBook *titles = nullptr);
+                   const SentenceBook *book = nullptr, const TitlesBook *titles = nullptr,
+                   const std::string &chapter = std::string());
 
     /// How far a door or button travels: the engine's formula, from the
     /// direction it moves in, the size of its brush and its "lip".

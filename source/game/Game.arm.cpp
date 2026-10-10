@@ -1,6 +1,7 @@
 #include "game/Game.hpp"
 
 #include "HlMaterial.hpp"
+#include "HlSaveState.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -73,6 +74,17 @@ namespace hlrt
         // placeFromSave says so).
         startMessagesMs_ = 500;
         const LevelView &view = level.view;
+        // (Every map says which chapter it is part of -- the converter saw
+        // to it -- for whoever lists the saves.)
+        for (std::uint32_t i = 0; i < view.messageCount; ++i)
+        {
+            if (!(view.messages[i].flags & kMessageChapter))
+                continue;
+            std::snprintf(chapter_, sizeof(chapter_), "%s", view.strings + view.messages[i].text);
+            for (char &c : chapter_)
+                c = c == '\n' || c == '\r' ? ' ' : c;
+            break;
+        }
 
         // + 1: a level with no brushes or no logic still gets a valid pointer.
         brushStates_ =
@@ -240,6 +252,7 @@ namespace hlrt
     bool Game::applyArrival(const Arrival &arrival)
     {
         const LevelView &view = level.view;
+        came_ = arrival; // (for a save of this map: who came along is in it)
         if (!hldata::applyArrival(logic, view.landmarks, view.landmarkCount, view.nameHashes,
                                   view.nameCount, player.state, arrival, view.modelRefs))
             return false;
@@ -252,6 +265,10 @@ namespace hlrt
     {
         globals = Globals();
         visited_.clear();
+        playMs_ = 0;
+        chapter_[0] = 0;
+        came_ = Arrival();
+        lamp = LampState();
     }
 
     void Game::rememberMap(std::uint32_t mapHash)
@@ -372,7 +389,94 @@ namespace hlrt
             break;
         }
         save.maps = visited_;
+
+        // The whole of this map, as it is (HlSaveState.hpp); before it, how
+        // the player came into it; after it, what is the console's own.
+        hldata::appendState(save.state, came_);
+        const std::vector<std::uint8_t> state = takeMapState(logic, player.state, level.view.header->crc32);
+        save.state.insert(save.state.end(), state.begin(), state.end());
+        hldata::appendState(save.state, weapon_);
+        hldata::appendState(save.state, player.view);
+        Kept kept{};
+        kept.playMs = playMs_;
+        kept.music = sound.musicTrack();
+        kept.musicMs = sound.musicMs();
+        std::memcpy(kept.chapter, chapter_, sizeof(kept.chapter));
+        save.state.insert(save.state.end(), reinterpret_cast<const std::uint8_t *>(&kept),
+                          reinterpret_cast<const std::uint8_t *>(&kept) + sizeof(kept));
         return save;
+    }
+
+    bool Game::arrivalOf(const SaveData &save, Arrival &out)
+    {
+        std::size_t at = 0;
+        Arrival read;
+        if (!hldata::readState(save.state.data(), save.state.size(), at, read) || !read.valid)
+            return false;
+        out = read;
+        return true;
+    }
+
+    SaveHeading Game::heading(const std::string &map) const
+    {
+        SaveHeading h;
+        std::snprintf(h.map, sizeof(h.map), "%s", map.c_str());
+        std::snprintf(h.chapter, sizeof(h.chapter), "%s", chapter_);
+        h.playSeconds = playSeconds();
+        h.health = static_cast<std::uint8_t>(player.state.health < 0 ? 0 : (player.state.health > 255 ? 255 : player.state.health));
+        return h;
+    }
+
+    bool Game::layState(const SaveData &save)
+    {
+        const std::uint8_t *bytes = save.state.data();
+        const std::size_t size = save.state.size();
+        std::size_t at = 0;
+        Arrival came;
+        if (!hldata::readState(bytes, size, at, came))
+            return false;
+        const std::size_t length = hldata::mapStateLength(bytes + at, size - at);
+        // (All of it or none: the map's state, then the console's own, to
+        // the last byte.)
+        WeaponState weapon;
+        ViewState view;
+        if (length == 0 || size - at - length != hldata::stateBytes(weapon) + hldata::stateBytes(view) + sizeof(Kept) ||
+            !layMapState(bytes + at, length, logic, player.state, level.view.header->crc32))
+            return false;
+        at += length;
+        hldata::readState(bytes, size, at, weapon_);
+        weapon_.anim = nullptr;
+        hldata::readState(bytes, size, at, player.view);
+        Kept kept;
+        std::memcpy(&kept, bytes + at, sizeof(kept));
+        playMs_ = kept.playMs;
+        std::memcpy(chapter_, kept.chapter, sizeof(chapter_));
+        chapter_[sizeof(chapter_) - 1] = 0;
+        came_ = came;
+        // What the map did as it began afresh is not what is to be heard
+        // or shown now: what was going on when it was saved is.
+        heard.count = 0;
+        logic.shownCount = 0;
+        logic.saveRequested = false;
+        logic.pendingChange = -1;
+        // The music that was playing, from where it was.
+        logic.musicRequest = -1;
+        sound.setMusic(kept.music, kept.musicMs);
+        startMessagesMs_ = -1;
+        topText.clear();
+        // (What was on its way somewhere goes on sounding as it goes.)
+        for (int i = 0; i < logic.recordCount; ++i)
+        {
+            const MoveState move = states_[i].move;
+            if (!states_[i].dead && (move == MoveState::GoingUp || move == MoveState::GoingDown))
+                detail::recordSound(logic, i, false);
+        }
+        // The lights that change are worked out again, and the weapon in
+        // hand taken up again.
+        std::memset(styleValues_, 0xFF, sizeof(styleValues_));
+        inHand_ = -1;
+        lastHealth_ = player.state.health;
+        return true;
     }
 
     void Game::adoptProgress(const SaveData &save)
@@ -443,6 +547,15 @@ namespace hlrt
             vblanks = 1;
         if (vblanks > kMaxVblanks)
             vblanks = kMaxVblanks;
+        playMs_ += static_cast<std::uint64_t>(vblanks) * 1000 / 60;
+        // (A development aid: debug_start.txt's sixth number, the seconds
+        // after which the player dies, once -- for seeing what dying goes
+        // back to.)
+        if (player.debugDieMs > 0 && (player.debugDieMs -= vblanks * 1000 / 60) <= 0)
+        {
+            player.debugDieMs = -1;
+            logicHurt(player.state, 1000);
+        }
 
         if (!player.noclip)
         {
@@ -596,10 +709,11 @@ namespace hlrt
                 }
             }
             logic.brokeCount = 0;
-            // A round fired throws its casing out of the breech: to the
-            // right, up a little, and it falls.
-            if ((did & kWeaponFired) &&
-                (inHand_ == kWeaponGlock || inHand_ == kWeaponMp5 || inHand_ == kWeaponShotgun))
+            // A spent case out of the breech: to the right, up a little,
+            // and it falls. (When the weapon says: at the shot for the
+            // pistol and the MP5, at the pump for the shotgun -- both
+            // barrels' at once.)
+            for (int n = 0; (did & kWeaponShell) && n < weapon_.shells; ++n)
             {
                 static std::uint32_t toss = 3;
                 toss = toss * 1664525u + 1013904223u;
@@ -627,20 +741,11 @@ namespace hlrt
                 takeInHand();
             if (held.active)
             {
-                // What the weapon's own code says the hand does (the
-                // crowbar's swings, its being put away); else by what was
-                // done.
+                // What the weapon's own code says the hand does.
+                // (All of it is the weapon's own code's to say: which shot,
+                // which reload, the pump, the pin, how it is held still.)
                 if (weapon_.anim != nullptr)
                     actorPlay(actors, held, nameHash(weapon_.anim), true);
-                else if (did & kWeaponSecondary)
-                    actorPlay(actors, held, nameHash("grenade"), true);
-                else if (did & kWeaponFired)
-                    actorPlay(actors, held,
-                              nameHash(inHand_ == kWeaponGrenade ? "throw1"
-                                                                 : (inHand_ == kWeaponPython ? "fire1" : "shoot")),
-                              true);
-                else if (did & kWeaponReload)
-                    actorPlay(actors, held, nameHash("reload"), true);
             }
             weapon_.anim = nullptr;
             actors.got = 0;
@@ -694,7 +799,9 @@ namespace hlrt
         // goes back to being held still.
         if (held.active)
         {
-            actorAdvance(actors, held, (vblanks * 1000 + 30) / 60);
+            // (... with the sounds its clip has in it: a magazine out and
+            // in, where the hand does it.)
+            weaponHandTick(logic, held, (vblanks * 1000 + 30) / 60);
             // (The crowbar has no way of being held still but as its last
             // swing left it, or its being taken out: the game never plays
             // it another.)

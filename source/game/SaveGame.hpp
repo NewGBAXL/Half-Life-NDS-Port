@@ -1,19 +1,20 @@
 #pragma once
 
-// The save file on the card: reading it and writing it. What is IN a save is
-// shared/HlSave.hpp's business and Game's; this is only the file.
+// The saves on the card: the files themselves. Which files there are, how
+// one is written safely and the list of them are shared/HlSaveFiles.hpp's
+// business (and run in the host tests); what is IN a save is HlSave.hpp's,
+// HlSaveState.hpp's and Game's. This is only "a folder on the card".
 
-#include "HlSave.hpp"
+#include "HlSaveFiles.hpp"
 
 namespace hlrt::SaveGame
 {
-    /// Which save: the latest, or the one made on coming into the map
-    /// (HlSave.hpp: what a death goes back to).
-    inline constexpr int kLatest = 0;
-    inline constexpr int kArrival = 1;
-    /// Read the save, if there is one and it is whole.
-    bool read(hldata::SaveData &out, int slot = kLatest);
-    /// Write it: to a file of another name first, which then takes the
-    /// save's place, so that switching off half-way leaves the old save.
-    bool write(const hldata::SaveData &save, int slot = kLatest);
+    /// The list of saves: read once (what a write left half-way is put
+    /// right then), and kept up as saves are made.
+    const hldata::SaveIndex &index();
+    /// Read the save in `slot` (a kSlot*), if there is one and it is whole.
+    bool read(hldata::SaveData &out, int slot);
+    /// Write it. False if the card would not take it: the save that was
+    /// there is then there still.
+    bool write(const hldata::SaveData &save, int slot, const hldata::SaveHeading &heading);
 } // namespace hlrt::SaveGame

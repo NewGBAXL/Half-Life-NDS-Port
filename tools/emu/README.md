@@ -49,3 +49,7 @@ again.
 
 The window is 256 wide; the top screen starts at about y = 55 and the touch
 screen at about y = 247.
+
+`EMU_START` may have a fifth number (a music track to start with; -1 for
+none) and a sixth: the seconds after which the player dies, once -- for
+seeing which save dying goes back to (`EMU_START="1120 2112 836 180 -1 50"`).

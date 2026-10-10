@@ -523,7 +523,13 @@ namespace hldata
             const bool guard = actor.kind == static_cast<std::uint8_t>(ActorKind::Guard);
             if (-actor.health < personHealth(actor.kind))
             {
-                detail::monsterSound(w, actor, guard ? CommonSound::GuardPain : CommonSound::ScientistPain);
+                // (A cry no more than twice a second or so, as the game's
+                // guard: not one for every pellet.)
+                if (actor.painMs <= 0)
+                {
+                    actor.painMs = 600;
+                    detail::monsterSound(w, actor, guard ? CommonSound::GuardPain : CommonSound::ScientistPain);
+                }
                 return;
             }
             detail::monsterSound(w, actor, guard ? CommonSound::GuardDie : CommonSound::ScientistDie);
@@ -1453,7 +1459,15 @@ namespace hldata
                             to[i] = t.endPos[i];
                         }
                         if (!gib && w.heard != nullptr && fxLength(shot.velocity) > fxFromInt(60))
-                            w.heard->add(CommonSound::GrenadeBounce, shot.pos, 100, kRadiusMedium);
+                        {
+                            // (One of its three knocks, and quiet: the
+                            // game's are a quarter of full.)
+                            w.actors->seed = w.actors->seed * 1664525u + 1013904223u;
+                            const int which = static_cast<int>((w.actors->seed >> 12) % 3);
+                            w.heard->add(which == 0 ? CommonSound::GrenadeBounce
+                                                    : (which == 1 ? CommonSound::GrenadeBounce2 : CommonSound::GrenadeBounce3),
+                                         shot.pos, 48, kRadiusMedium);
+                        }
                     }
                     for (int i = 0; i < 3; ++i)
                         shot.pos[i] = t.startSolid ? shot.pos[i] : to[i];
@@ -2270,11 +2284,131 @@ namespace hldata
 
     /// Everything in this file that happens by itself, for `ms` more
     /// milliseconds. After logicTick (which moves the actors' clips on).
+    namespace detail
+    {
+        /// One of the people and what is under them. They stand on brushes
+        /// as on the world -- a lift's floor, a pane -- go where a brush
+        /// they stand on goes, and FALL when it breaks or is no longer
+        /// there, as far as there is to fall. (Someone the map stood where
+        /// nothing at all is under them is left there, as before: only
+        /// whoever had ground can lose it.)
+        inline void peopleGround(LogicWorld &w, ActorState &actor, int ms)
+        {
+            const MoveWorld &world = *w.world;
+            if (actor.hurtMs > 0)
+                actor.hurtMs -= ms;
+            if (actor.groundMover == -2)
+            {
+                const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 + 1)};
+                const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 - 24)};
+                const Trace tr = traceAll(world, false, from, to);
+                actor.groundMover = -1;
+                if (!tr.startSolid && !tr.allSolid && tr.fraction < kFractionOne && tr.mover >= 0)
+                {
+                    actor.groundMover = tr.mover;
+                    actor.pos[2] = tr.endPos[2] - fxFromInt(36);
+                    for (int k = 0; k < 3; ++k)
+                        actor.groundAt[k] = w.brushStates[tr.mover].pos[k];
+                }
+            }
+            if (actor.airborne)
+            {
+                // (The game's gravity, 800 units a second each second.)
+                actor.velocity[2] -= fxFromInt(800) * ms / 1000;
+                const fx step = static_cast<fx>((static_cast<std::int64_t>(actor.velocity[2]) * ms) / 1000);
+                const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36)};
+                const fx to[3] = {from[0], from[1], from[2] + step};
+                const Trace tr = traceAll(world, false, from, to);
+                if (tr.startSolid || tr.allSolid)
+                {
+                    actor.airborne = false; // (nowhere to fall: it stays)
+                    actor.velocity[2] = 0;
+                    actor.groundMover = -1;
+                }
+                else if (tr.fraction < kFractionOne)
+                {
+                    actor.pos[2] = tr.endPos[2] - fxFromInt(36);
+                    actor.airborne = false;
+                    actor.velocity[2] = 0;
+                    actor.groundMover = tr.mover;
+                    if (tr.mover >= 0)
+                    {
+                        for (int k = 0; k < 3; ++k)
+                            actor.groundAt[k] = w.brushStates[tr.mover].pos[k];
+                    }
+                }
+                else
+                {
+                    actor.pos[2] += step;
+                }
+                return;
+            }
+            if (actor.groundMover < 0 || actor.groundMover >= w.brushCount)
+                return;
+            const BrushState &under = w.brushStates[actor.groundMover];
+            if (!under.active || !w.movers[actor.groundMover].solid)
+            {
+                // What they stood on is gone.
+                actor.groundMover = -1;
+                actor.airborne = true;
+                actor.velocity[2] = 0;
+                return;
+            }
+            // ... or has moved: so have they.
+            for (int k = 0; k < 3; ++k)
+            {
+                actor.pos[k] += under.pos[k] - actor.groundAt[k];
+                actor.groundAt[k] = under.pos[k];
+            }
+        }
+
+        /// The places that hurt (trigger_hurt) hurt whoever is in them, not
+        /// the player alone: half a second's worth every half second.
+        inline void hurtPlaces(LogicWorld &w)
+        {
+            ActorWorld &a = *w.actors;
+            for (int r = 0; r < w.recordCount; ++r)
+            {
+                const LogicRecord &record = w.records[r];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::TriggerHurt))
+                    continue;
+                const LogicState &state = w.states[r];
+                if (state.dead || state.running || !logicMasterAllows(w, r))
+                    continue;
+                const int damage = static_cast<std::int32_t>(record.extra[0]) / 2;
+                if (damage <= 0)
+                    continue;
+                for (int i = 0; i < a.count; ++i)
+                {
+                    ActorState &actor = a.states[i];
+                    if (!actor.active || actor.hurtMs > 0 || actor.ai >= kAiDying || actor.script >= 0 ||
+                        !canBeHurt(actor.kind))
+                        continue;
+                    // (Its box against the place's: about a person's.)
+                    const int x = fxToInt(actor.pos[0]), y = fxToInt(actor.pos[1]), z = fxToInt(actor.pos[2]);
+                    if (x + 16 < record.mins[0] || x - 16 > record.maxs[0] || y + 16 < record.mins[1] ||
+                        y - 16 > record.maxs[1] || z + 72 < record.mins[2] || z > record.maxs[2])
+                        continue;
+                    actor.hurtMs = 500;
+                    monsterHurt(w, i, damage, false);
+                }
+            }
+        }
+    } // namespace detail
+
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
     {
         if (w.actors == nullptr || w.world == nullptr)
             return;
         ActorWorld &a = *w.actors;
+        // (Looked at eight times a second: nothing stays in such a place
+        // for less.)
+        a.hurtLookMs -= ms;
+        if (a.hurtLookMs <= 0 && w.records != nullptr && w.states != nullptr)
+        {
+            a.hurtLookMs = 125;
+            detail::hurtPlaces(w);
+        }
         for (int k = 0; k < 3; ++k)
             a.foe[k] = player.origin[k];
         if (a.noiseMs > 0)
@@ -2345,7 +2479,18 @@ namespace hldata
             }
             if (isPerson(actor.kind))
             {
-                // (No scene has them: they follow, run, or shoot.)
+                // (No scene has them: they stand on what is under them, and
+                // follow, run, or shoot.)
+                if (actor.script < 0 && actor.kind != static_cast<std::uint8_t>(ActorKind::Sitter) &&
+                    w.brushStates != nullptr && w.movers != nullptr)
+                {
+                    detail::peopleGround(w, actor, ms);
+                    if (actor.airborne)
+                    {
+                        actorPlaceBox(a, i);
+                        continue;
+                    }
+                }
                 if (actor.script < 0 && actor.ai < kAiDying)
                     detail::personTick(w, player, i, ms);
                 continue;
@@ -2362,7 +2507,8 @@ namespace hldata
 
     // ------------------------------------------------------------- weapons
 
-    /// What each gun is, in numbers: the game's.
+    /// What each gun is, in numbers: the game's (its weapons' own source,
+    /// dlls/*.cpp and cl_dll/ev_hldm.cpp).
     struct GunKind
     {
         int holds;     ///< rounds in a clip
@@ -2370,19 +2516,27 @@ namespace hldata
         int refireMs;
         int damage;    ///< of a round, or of a pellet
         int pellets;
-        int spread;    ///< how far a round may go off line, in 4096ths either way
+        int cone;      ///< how far a round may go off line, in 4096ths: the game's cone
         int range;
-        CommonSound fire, reload;
+        bool wet;      ///< fires under water (the pistol alone does)
+        int emptyMs;   ///< the wait after a click
+        CommonSound fire[2]; ///< one or the other
+        int pitch, pitchWide; ///< of the shot: from `pitch` percent, `pitchWide` steps up
+        const char *shoot;    ///< the hand's clip for a shot
     };
+    // The game's cones, in 4096ths: 0.01 and 0.1 (the pistol's two), one
+    // degree, three, ten.
+    inline constexpr int kConePistol = 41, kConePistolFast = 410, kCone1 = 36, kCone3 = 107, kCone10 = 357;
     inline const GunKind &gunKind(std::uint8_t weapon)
     {
-        static const GunKind kGlock = {17, 1500, 300, 8, 1, 0, 4096, CommonSound::Pistol, CommonSound::Reload};
-        static const GunKind kShotgun = {8, 500, 750, 5, 6, 357, 2048, CommonSound::Shotgun,
-                                         CommonSound::ShotgunReload};
-        // (Three degrees, and one: the game's cones.)
-        static const GunKind kMp5 = {50, 1500, 100, 5, 1, 107, 4096, CommonSound::Mp5Fire, CommonSound::Reload};
-        static const GunKind kPython = {6, 2000, 750, 40, 1, 36, 4096, CommonSound::PythonFire,
-                                        CommonSound::PythonReload};
+        static const GunKind kGlock = {17,  1500, 300, 8, 1, kConePistol, 4096, true, 200,
+                                       {CommonSound::Pistol, CommonSound::Pistol}, 98, 4, "shoot"};
+        static const GunKind kShotgun = {8,   500, 750, 5, 6, kCone10, 2048, false, 150,
+                                         {CommonSound::Shotgun, CommonSound::Shotgun}, 93, 32, "shoot"};
+        static const GunKind kMp5 = {50,  1500, 100, 5, 1, kCone3, 4096, false, 150,
+                                     {CommonSound::Mp5Fire1, CommonSound::Mp5Fire}, 94, 16, "shoot"};
+        static const GunKind kPython = {6,   2000, 750, 40, 1, kCone1, 4096, false, 150,
+                                        {CommonSound::PythonFire, CommonSound::PythonFire2}, 100, 1, "fire1"};
         return weapon == kWeaponShotgun ? kShotgun
                                         : (weapon == kWeaponMp5 ? kMp5 : (weapon == kWeaponPython ? kPython : kGlock));
     }
@@ -2401,7 +2555,10 @@ namespace hldata
                : inv.current == kWeaponShotgun ? &inv.ammoBuck
                : inv.current == kWeaponPython ? &inv.ammo357 : nullptr;
     }
-    inline constexpr std::uint32_t kWeaponSecondary = 16; ///< weaponsTick: its other fire (the launcher)
+    inline constexpr std::uint32_t kWeaponSecondary = 16; ///< weaponsTick: its other fire (the launcher, both barrels)
+    /// A spent case leaves the gun now (WeaponState::shells of them): at
+    /// the shot for the pistol and the MP5, at the pump for the shotgun.
+    inline constexpr std::uint32_t kWeaponShell = 32;
 
     struct WeaponState
     {
@@ -2424,7 +2581,27 @@ namespace hldata
         fx dentNormal[3] = {0, 0, 0};
         std::int32_t holsterMs = 0;  ///< while it is being put away
         std::uint8_t taking = 0;     ///< ... for this weapon
+        // The guns and the grenade, as the game keeps them:
+        std::uint8_t shells = 0;     ///< how many spent cases kWeaponShell is for
+        std::int32_t pumpMs = 0;     ///< the shotgun: until it is pumped after a shot
+        std::uint8_t pumpShells = 0; ///< ... and how many cases come out then
+        /// The shotgun's loading, a shell at a time: 0 not loading; 1
+        /// between shells (the next goes in when `loadMs` runs out, or the
+        /// pump ends it); 2 a shell is going in.
+        std::uint8_t loading = 0;
+        std::int32_t loadMs = 0;
+        /// The grenade: how long ago its pin was pulled (-1: it is not).
+        /// It goes off three seconds after, in the hand or out of it.
+        std::int32_t pinMs = -1;
+        bool redraw = false;         ///< the next grenade is to be taken out
+        std::int32_t idleMs = 1000;  ///< until the hand next does something of its own
+        bool clicked = false;        ///< the click has been heard for this pull of the trigger
+        /// The weapon these belong to (a kWeapon*): another in hand, by
+        /// whatever means, and they start afresh.
+        std::uint8_t minded = 0;
     };
+    inline constexpr int kGrenadeFuse = 3000;  ///< from the pin, as the game has it
+    inline constexpr int kGrenadePull = 500;   ///< the pin takes this long: no throw sooner
     inline constexpr int kCrowbarReach = 32;  ///< the game's: units along the view
     inline constexpr int kCrowbarBlow = 10;   ///< a whole blow; a follow-up is half
     // What a swing of the crowbar met (detail::crowbarBlow).
@@ -2498,7 +2675,7 @@ namespace hldata
     /// `range` units, and hurts: a monster, or something that breaks. True
     /// if it hurt anything.
     inline bool fireLine(LogicWorld &w, PlayerState &player, const fx *eye, const fx *dir, int range,
-                         int damage, bool bullet, bool mark = true, int *met = nullptr)
+                         int damage, bool bullet, bool mark = true, int *met = nullptr, int from = -1)
     {
         if (met != nullptr)
             *met = kMetNothing;
@@ -2511,7 +2688,9 @@ namespace hldata
         for (int i = 0; a != nullptr && i < a->count; ++i)
         {
             const ActorState &actor = a->states[i];
-            if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying)
+            // (`from`: the actor whose shot it is, if it is not the
+            // player's -- who does not shoot himself.)
+            if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying || i == from)
                 continue;
             fx mins[3], maxs[3];
             targetBox(actor, mins, maxs);
@@ -2541,9 +2720,31 @@ namespace hldata
                 const bool killed = a->states[struck].ai >= kAiDying || !a->states[struck].active;
                 if (met != nullptr)
                     *met = killed ? kMetKilled : kMetFlesh;
-                // (A guard counts the player's shots: at two he shoots back.)
-                if (kind == static_cast<std::uint8_t>(ActorKind::Guard) && w.actors->states[struck].struck < 200)
-                    ++w.actors->states[struck].struck;
+                // A guard and the player's shots, by the game's rule: in a
+                // fight it is taken for a stray one; with nothing else to
+                // shoot at, the first makes him wary -- unless he was
+                // plainly aimed at -- and the next an enemy, who follows
+                // nobody. (`struck`: 0 easy, 1 wary, 2 an enemy.)
+                if (kind == static_cast<std::uint8_t>(ActorKind::Guard) && from < 0)
+                {
+                    ActorState &him = w.actors->states[struck];
+                    if (him.foe < 0 && him.struck < 2)
+                    {
+                        const fx to[3] = {him.pos[0] - eye[0], him.pos[1] - eye[1], him.pos[2] + fxFromInt(36) - eye[2]};
+                        const fx far = fxLength(to);
+                        const std::int64_t along = static_cast<std::int64_t>(to[0]) * dir[0] +
+                                                   static_cast<std::int64_t>(to[1]) * dir[1] +
+                                                   static_cast<std::int64_t>(to[2]) * dir[2];
+                        // (Within about fifteen degrees of where the shot went.)
+                        const bool aimed = far > 0 && along * 100 > static_cast<std::int64_t>(far) * fxLength(dir) * 96;
+                        him.struck = static_cast<std::uint8_t>(him.struck >= 1 || aimed ? 2 : 1);
+                        if (him.struck >= 2)
+                        {
+                            him.ai = 0; // (kPersonIdle: he follows no longer)
+                            him.wasFollowing = false;
+                        }
+                    }
+                }
                 bleed(w, struck, at, dir, killed || damage >= 40);
                 return true;
             }
@@ -2865,7 +3066,8 @@ namespace hldata
             }
             state.reloadMs = 0;
         }
-        if (next || picked)
+        // (A grenade with its pin out is not put down.)
+        if ((next || picked) && state.pinMs < 0)
         {
             const std::uint8_t other = picked ? static_cast<std::uint8_t>(pick) : weaponAfter(inv);
             if (other != inv.current)
@@ -2887,67 +3089,199 @@ namespace hldata
                 return did | kWeaponDrawn;
             }
         }
-        // The other button: the MP5's launcher -- a grenade that goes off
-        // at what it touches, once a second -- and with any other gun (or
-        // an MP5 with nothing to launch), a reload that was not waited for.
-        if (second && !reload && inv.current == kWeaponMp5 && inv.ammoAr > 0)
+        // ---- the guns and the grenade, as the game has them ----
+        if (state.minded != inv.current)
         {
-            if (state.secondMs > 0 || w.actors == nullptr)
-                return did;
-            fx from[3], velocity[3];
-            for (int i = 0; i < 3; ++i)
+            // Another weapon in hand, however it got there.
+            state.minded = inv.current;
+            state.pumpMs = 0;
+            state.loading = 0;
+            state.loadMs = 0;
+            state.pinMs = -1;
+            state.redraw = false;
+            state.idleMs = 1000;
+            state.clicked = false;
+        }
+        auto chance = [&]() -> std::uint32_t
+        {
+            state.seed = state.seed * 1664525u + 1013904223u;
+            return state.seed >> 8;
+        };
+        auto say = [&](CommonSound sound, int pitch = 100, int volume = 127)
+        {
+            if (w.heard != nullptr)
+                w.heard->add(static_cast<std::uint16_t>(sound), nullptr, volume, kRadiusLarge, 0, pitch);
+        };
+        // (Once for each pull of the trigger, as the game's is.)
+        auto click = [&]()
+        {
+            if (!state.clicked)
+                say(CommonSound::Click, 100, 100);
+            state.clicked = true;
+        };
+        if (!attack && !second)
+            state.clicked = false;
+        const bool under = player.waterLevel == 3;
+        const bool isGun = clip != nullptr;
+
+        // The shotgun is pumped a moment after it fires: that is when the
+        // spent case comes out.
+        if (state.pumpMs > 0 && (state.pumpMs -= ms) <= 0)
+        {
+            state.pumpMs = 0;
+            say(CommonSound::ShotgunPump, 95 + static_cast<int>(chance() % 32));
+            state.shells = state.pumpShells;
+            did |= kWeaponShell;
+        }
+
+        // A reload begun: the shotgun's a shell at a time, the others' all
+        // at once when the hand has done.
+        auto startReload = [&]() -> bool
+        {
+            if (!isGun || *clip >= holds || *spare <= 0 || state.cooldownMs > 0)
+                return false;
+            if (inv.current == kWeaponShotgun)
             {
-                from[i] = eye[i] + forward[i] * 16;
-                velocity[i] = forward[i] * 800;
+                state.anim = "start_reload";
+                state.loading = 1;
+                state.loadMs = 600;
+                state.cooldownMs = 1000;
             }
-            if (!projectileAdd(*w.actors, kShotContact, from, velocity, 10000))
-                return did;
-            inv.ammoAr = static_cast<std::int16_t>(inv.ammoAr - 1);
-            state.secondMs = 1000;
-            state.cooldownMs = state.cooldownMs > 1000 ? state.cooldownMs : 1000;
-            if (w.heard != nullptr)
-                w.heard->add(CommonSound::Launcher, nullptr);
-            return did | kWeaponSecondary;
-        }
-        if ((second || reload) && clip != nullptr && *clip < holds && *spare > 0 && state.cooldownMs <= 0)
+            else
+            {
+                // (The sounds of it are the hand's own: its clip has them
+                // where the magazine comes out and goes in.)
+                state.anim = inv.current == kWeaponGlock && *clip > 0 ? "reload_noshot" : "reload";
+                state.reloadMs = gun.reloadMs;
+            }
+            state.idleMs = 3000;
+            did |= kWeaponReload;
+            return true;
+        };
+
+        if (state.loading != 0)
         {
-            state.reloadMs = inv.current == kWeaponShotgun
-                                 ? 500 + 500 * (holds - *clip < *spare ? holds - *clip : *spare)
-                                 : gun.reloadMs;
-            if (w.heard != nullptr)
-                w.heard->add(gun.reload, nullptr);
-            return did | kWeaponReload;
+            // Firing breaks it off, with what is in it.
+            if ((attack || second) && *clip > 0 && state.cooldownMs <= 0)
+            {
+                state.loading = 0;
+            }
+            else
+            {
+                state.loadMs -= ms;
+                while (state.loading != 0 && state.loadMs <= 0)
+                {
+                    if (state.loading == 2)
+                    {
+                        *clip = static_cast<std::int16_t>(*clip + 1);
+                        *spare = static_cast<std::int16_t>(*spare - 1);
+                        state.loading = 1;
+                    }
+                    if (*clip < holds && *spare > 0)
+                    {
+                        state.anim = "reload";
+                        say(chance() & 1 ? CommonSound::ShotgunReload : CommonSound::ShotgunReload3,
+                            85 + static_cast<int>(chance() % 32));
+                        state.loading = 2;
+                        state.loadMs += 500;
+                    }
+                    else
+                    {
+                        // Full, or nothing more to put in: pumped, and done.
+                        state.anim = "pump";
+                        say(CommonSound::ShotgunPump, 95 + static_cast<int>(chance() % 32));
+                        state.loading = 0;
+                        state.loadMs = 0;
+                        state.idleMs = 1500;
+                    }
+                }
+                return did;
+            }
         }
-        if (!attack || state.cooldownMs > 0 || inv.current == kWeaponNone)
-            return did;
 
         if (inv.current == kWeaponGrenade)
         {
-            // Thrown the way they look, a little up: three seconds to live.
-            if (inv.grenades <= 0 || w.actors == nullptr)
-                return did;
-            fx from[3], velocity[3];
-            for (int i = 0; i < 3; ++i)
+            if (state.pinMs < 0)
             {
-                from[i] = eye[i] + forward[i] * 16;
-                velocity[i] = forward[i] * 500 + up[i] * 120;
+                if (state.redraw && state.cooldownMs <= 0)
+                {
+                    // The next one out of the pocket.
+                    state.redraw = false;
+                    state.anim = "draw";
+                    state.idleMs = 10000 + static_cast<int>(chance() % 5000);
+                }
+                if (attack && state.cooldownMs <= 0 && inv.grenades > 0 && w.actors != nullptr)
+                {
+                    state.pinMs = 0;
+                    state.anim = "pinpull";
+                    return did;
+                }
             }
-            if (!projectileAdd(*w.actors, kShotGrenade, from, velocity, 3000))
-                return did;
-            inv.grenades = static_cast<std::int16_t>(inv.grenades - 1);
-            state.cooldownMs = 1000;
-            did |= kWeaponFired;
-            if (inv.grenades == 0)
+            else
             {
-                // The last one: nothing left to hold.
-                inv.have &= static_cast<std::uint8_t>(~(1u << kWeaponGrenade));
-                inv.current = weaponAfter(inv);
-                did |= kWeaponDrawn;
+                state.pinMs += ms;
+                const bool gone = state.pinMs >= kGrenadeFuse;
+                if (gone || (!attack && state.pinMs >= kGrenadePull))
+                {
+                    // How it is thrown, by how high it is aimed: the
+                    // game's own sum. (Looking down is a positive angle
+                    // there; ten degrees are added upward, and the range
+                    // above and below squeezed to fit.)
+                    const fx flat[3] = {forward[0], forward[1], 0};
+                    const fx along = fxLength(flat);
+                    const int upTurns = static_cast<std::int16_t>(fxAtan2Turns(forward[2], along));
+                    const int down = -upTurns * 360 * 16 / 65536; // sixteenths of a degree
+                    const int aimed = -10 * 16 + (down < 0 ? down * 80 / 90 : down * 100 / 90);
+                    int speed = (90 * 16 - aimed) * 13 / 32; // ... times six and a half
+                    speed = speed > 1000 ? 1000 : speed;
+                    fx sine = 0, cosine = 0;
+                    fxSinCos(static_cast<std::uint16_t>(-aimed * 65536 / (360 * 16)), sine, cosine);
+                    fx dir[3] = {0, 0, sine};
+                    if (along > 0)
+                    {
+                        dir[0] = static_cast<fx>((static_cast<std::int64_t>(forward[0]) * cosine) / along);
+                        dir[1] = static_cast<fx>((static_cast<std::int64_t>(forward[1]) * cosine) / along);
+                    }
+                    fx from[3], velocity[3];
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        from[i] = eye[i] + dir[i] * 16;
+                        velocity[i] = gone ? 0 : dir[i] * speed + player.velocity[i];
+                    }
+                    const int left = kGrenadeFuse - state.pinMs;
+                    state.pinMs = -1;
+                    if (w.actors == nullptr || !projectileAdd(*w.actors, kShotGrenade, gone ? eye : from, velocity, left < 1 ? 1 : left))
+                        return did;
+                    inv.grenades = static_cast<std::int16_t>(inv.grenades - 1);
+                    state.anim = speed < 500 ? "throw1" : (speed < 1000 ? "throw2" : "throw3");
+                    state.cooldownMs = 500;
+                    state.redraw = inv.grenades > 0;
+                    did |= kWeaponFired;
+                    if (inv.grenades == 0)
+                    {
+                        // The last one: nothing left to hold.
+                        inv.have &= static_cast<std::uint8_t>(~(1u << kWeaponGrenade));
+                        inv.current = weaponAfter(inv);
+                        did |= kWeaponDrawn;
+                    }
+                    return did;
+                }
+                return did;
+            }
+            // Nothing doing: now and then it is turned over in the hand.
+            if ((state.idleMs -= ms) <= 0 && state.cooldownMs <= 0 && !state.redraw)
+            {
+                const bool fidget = chance() % 4 == 3;
+                state.anim = fidget ? "fidget" : "idle";
+                state.idleMs = fidget ? 2500 : 10000 + static_cast<int>(chance() % 5000);
             }
             return did;
         }
+
         if (inv.current == kWeaponCrowbar)
         {
+            if (!attack || state.cooldownMs > 0)
+                return did;
             // A swing, in the game's order: the swish and one of the three
             // swings at the air, always; then the blow -- a whole one after
             // a second's rest, half of one on the heels of the last -- and
@@ -2970,62 +3304,213 @@ namespace hldata
             detail::crowbarLanded(state, met);
             return did | kWeaponHit;
         }
-        if (*clip <= 0)
+        if (!isGun)
+            return did;
+
+        // A reload asked for outright. (The other button too, for the .357,
+        // which has nothing else to do with it.)
+        if ((reload || (second && inv.current == kWeaponPython)) && startReload())
+            return did;
+
+        // Rounds out of the gun: `rounds` of them, `pellets` in all, each
+        // off line by the game's cone -- the sum of two draws either way,
+        // so that most go near the middle.
+        auto fire = [&](int rounds, int pellets, int cone, int wait, CommonSound sound, int pitch, const char *anim)
         {
-            if (*spare > 0)
+            *clip = static_cast<std::int16_t>(*clip - rounds);
+            say(sound, pitch);
+            if (w.actors != nullptr)
             {
-                state.reloadMs = inv.current == kWeaponShotgun ? 500 + 500 * (holds < *spare ? holds : *spare)
-                                                               : gun.reloadMs;
-                if (w.heard != nullptr)
-                    w.heard->add(gun.reload, nullptr);
-                return did | kWeaponReload;
+                // (Loud enough to turn a head.)
+                for (int i = 0; i < 3; ++i)
+                    w.actors->noise[i] = eye[i];
+                w.actors->noiseMs = 400;
+                // The flash at the gun's end: ahead of the eye, to the
+                // right and a little down, where the gun is held.
+                fx at[3];
+                for (int i = 0; i < 3; ++i)
+                    at[i] = eye[i] + forward[i] * 30 + right[i] * 6 - up[i] * 5;
+                effectAdd(*w.actors, kEffectMuzzle, at, nullptr, 0, 50);
             }
-            state.cooldownMs = 300; // a click
-            if (w.heard != nullptr)
-                w.heard->add(CommonSound::Click, nullptr);
+            bool hit = false;
+            for (int n = 0; n < pellets; ++n)
+            {
+                fx dir[3] = {forward[0], forward[1], forward[2]};
+                if (cone != 0)
+                {
+                    const int x = (static_cast<int>(chance() % 4097) + static_cast<int>(chance() % 4097) - 4096) * cone / 4096;
+                    const int y = (static_cast<int>(chance() % 4097) + static_cast<int>(chance() % 4097) - 4096) * cone / 4096;
+                    for (int i = 0; i < 3; ++i)
+                        dir[i] = forward[i] + ((right[i] * x + up[i] * y) >> kFxShift);
+                }
+                hit = fireLine(w, player, eye, dir, gun.range, gun.damage, true) || hit;
+            }
+            // (What the wait ran over by comes off the next: a gun that
+            // fires ten times a second does, whatever the length of a tick.)
+            state.cooldownMs = wait + (state.cooldownMs > -ms ? state.cooldownMs : -ms);
+            state.anim = anim;
+            state.idleMs = 10000 + static_cast<int>(chance() % 5000);
+            did |= kWeaponFired | (hit ? kWeaponHit : 0);
+        };
+
+        const bool fires = attack || (second && (inv.current == kWeaponGlock || inv.current == kWeaponShotgun ||
+                                                 inv.current == kWeaponMp5));
+        if (fires && state.cooldownMs <= 0 && !(second && inv.current == kWeaponMp5 && !attack && state.secondMs > 0))
+        {
+            // Under water all but the pistol only click.
+            if (under && !gun.wet)
+            {
+                click();
+                state.cooldownMs = gun.emptyMs;
+                return did;
+            }
+            // The other trigger first, as the game looks at it first.
+            if (second && inv.current == kWeaponMp5)
+            {
+                // The launcher: a grenade that goes off at what it touches,
+                // once a second.
+                if (state.secondMs > 0)
+                    return did;
+                if (inv.ammoAr <= 0)
+                {
+                    click();
+                    return did;
+                }
+                if (w.actors == nullptr)
+                    return did;
+                fx from[3], velocity[3];
+                for (int i = 0; i < 3; ++i)
+                {
+                    from[i] = eye[i] + forward[i] * 16;
+                    velocity[i] = forward[i] * 800;
+                }
+                if (!projectileAdd(*w.actors, kShotContact, from, velocity, 10000))
+                    return did;
+                inv.ammoAr = static_cast<std::int16_t>(inv.ammoAr - 1);
+                state.secondMs = 1000;
+                state.cooldownMs = state.cooldownMs > 1000 ? state.cooldownMs : 1000;
+                say(chance() & 1 ? CommonSound::Launcher : CommonSound::Launcher2, 94 + static_cast<int>(chance() % 16));
+                state.anim = "grenade";
+                state.idleMs = 5000;
+                return did | kWeaponSecondary;
+            }
+            if (second && inv.current == kWeaponShotgun)
+            {
+                // Both barrels: two shells, twelve pellets -- or, with one
+                // shell or none, more shells first.
+                if (*clip <= 1)
+                {
+                    if (!startReload())
+                    {
+                        click();
+                        state.cooldownMs = gun.emptyMs;
+                    }
+                    return did;
+                }
+                fire(2, gun.pellets * 2, gun.cone, 1500, CommonSound::ShotgunDouble, 85 + static_cast<int>(chance() % 32),
+                     "shoot_big");
+                state.pumpMs = 950;
+                state.pumpShells = 2;
+                state.idleMs = *clip > 0 ? 6000 : 1500;
+                return did | kWeaponSecondary;
+            }
+            if (*clip <= 0)
+            {
+                // Nothing in it: more put in, if there is more; or the click.
+                if (!startReload())
+                {
+                    click();
+                    state.cooldownMs = gun.emptyMs;
+                }
+                return did;
+            }
+            const bool fast = second && !attack && inv.current == kWeaponGlock;
+            const char *anim = inv.current == kWeaponGlock && *clip == 1 && !fast ? "shoot_empty" : gun.shoot;
+            fire(1, gun.pellets, fast ? kConePistolFast : gun.cone, fast ? 200 : gun.refireMs,
+                 gun.fire[chance() & 1], gun.pitch + static_cast<int>(chance() % gun.pitchWide), anim);
+            if (inv.current == kWeaponShotgun)
+            {
+                state.pumpMs = 500;
+                state.pumpShells = 1;
+                state.idleMs = *clip > 0 ? 5000 : 750;
+            }
+            else if (inv.current != kWeaponPython)
+            {
+                state.shells = 1;
+                did |= kWeaponShell;
+            }
             return did;
         }
-        *clip = static_cast<std::int16_t>(*clip - 1);
-        if (w.heard != nullptr)
-            w.heard->add(gun.fire, nullptr);
-        // (Loud enough to turn a head.)
-        if (w.actors != nullptr)
+
+        // Nothing doing: the hand does something of its own now and then,
+        // each weapon by its own odds (the game's).
+        if (!attack && !second && state.cooldownMs <= 0 && (state.idleMs -= ms) <= 0)
         {
-            for (int i = 0; i < 3; ++i)
-                w.actors->noise[i] = eye[i];
-            w.actors->noiseMs = 400;
-        }
-        // The flash at the gun's end: ahead of the eye, to the right and a
-        // little down, where the gun is held.
-        if (w.actors != nullptr)
-        {
-            fx at[3];
-            for (int i = 0; i < 3; ++i)
-                at[i] = eye[i] + forward[i] * 30 + right[i] * 6 - up[i] * 5;
-            effectAdd(*w.actors, kEffectMuzzle, at, nullptr, 0, 50);
-        }
-        // Each round (each pellet) a little off line, by as much as the gun
-        // is loose.
-        bool hit = false;
-        for (int n = 0; n < gun.pellets; ++n)
-        {
-            fx dir[3] = {forward[0], forward[1], forward[2]};
-            if (gun.spread != 0)
+            const int roll = static_cast<int>(chance() % 100);
+            switch (inv.current)
             {
-                const std::uint32_t wide = static_cast<std::uint32_t>(gun.spread) * 2 + 1;
-                state.seed = state.seed * 1664525u + 1013904223u;
-                const int x = static_cast<int>((state.seed >> 8) % wide) - gun.spread;
-                state.seed = state.seed * 1664525u + 1013904223u;
-                const int y = static_cast<int>((state.seed >> 8) % wide) - gun.spread;
-                for (int i = 0; i < 3; ++i)
-                    dir[i] = forward[i] + ((right[i] * x + up[i] * y) >> kFxShift);
+            case kWeaponGlock:
+                // (Not with nothing in it: its slide is back.)
+                if (*clip != 0)
+                {
+                    state.anim = roll < 30 ? "idle3" : (roll < 60 ? "idle1" : "idle2");
+                    state.idleMs = roll < 30 ? 3060 : (roll < 60 ? 3750 : 2500);
+                }
+                else
+                {
+                    state.idleMs = 1000;
+                }
+                break;
+            case kWeaponPython:
+                state.anim = roll < 50 ? "idle1" : (roll < 70 ? "idle2" : (roll < 90 ? "idle3" : "fidget1"));
+                state.idleMs = roll < 50 ? 2330 : (roll < 70 ? 2000 : (roll < 90 ? 2930 : 5670));
+                break;
+            case kWeaponShotgun:
+                state.anim = roll < 80 ? "deepidle" : (roll < 95 ? "sm_idle" : "idle4");
+                state.idleMs = roll < 80 ? 5000 : 2220;
+                break;
+            default: // the MP5
+                state.anim = roll < 50 ? "longidle" : "idle1";
+                state.idleMs = 10000 + static_cast<int>(chance() % 5000);
+                break;
             }
-            hit = fireLine(w, player, eye, dir, gun.range, gun.damage, true) || hit;
         }
-        // (What the wait ran over by comes off the next: a gun that fires
-        // ten times a second does, whatever the length of a tick.)
-        state.cooldownMs = gun.refireMs + (state.cooldownMs > -ms ? state.cooldownMs : -ms);
-        return did | kWeaponFired | (hit ? kWeaponHit : 0);
+        return did;
+    }
+
+    /// The weapon in hand's own clip moved on by `ms`, and the sounds its
+    /// clip has in it played as they are passed: the game keeps a reload's
+    /// sounds in the animation, where the magazine comes out and goes in.
+    inline void weaponHandTick(LogicWorld &w, ActorState &held, int ms)
+    {
+        if (w.actors == nullptr || !held.active)
+            return;
+        const std::int16_t clipBefore = held.clip;
+        const std::uint32_t before = actorAdvance(*w.actors, held, ms);
+        const ModelView *model = actorModel(*w.actors, held);
+        if (model == nullptr || held.clip < 0 || held.clip != clipBefore || w.heard == nullptr || w.modelSounds == nullptr)
+            return;
+        const ModelClip &clip = model->clips[held.clip];
+        const bool wrapped = held.frame < before;
+        for (int e = 0; e < clip.eventCount; ++e)
+        {
+            const ModelEvent &event = model->events[clip.firstEvent + e];
+            if (event.kind != kEventSound)
+                continue;
+            const std::uint32_t at = static_cast<std::uint32_t>(event.frame) << 8;
+            const bool passed = wrapped ? (at > before || at <= held.frame)
+                                        : ((before < at && at <= held.frame) || (at == 0 && before == 0 && held.frame > 0));
+            if (!passed)
+                continue;
+            for (std::uint32_t n = 0; n < w.modelSoundCount; ++n)
+            {
+                if (w.modelSounds[n].hash == event.target)
+                {
+                    w.heard->add(w.modelSounds[n].sound, nullptr, 127, kRadiusLarge);
+                    break;
+                }
+            }
+        }
     }
 } // namespace hldata
 

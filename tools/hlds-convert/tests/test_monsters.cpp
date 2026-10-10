@@ -8,6 +8,7 @@
 // shot; a monstermaker makes.
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -404,13 +405,15 @@ namespace
         // reloads by itself.
         hold(3000, true, false);
         const int after = inv.clipPython;
-        check(after == 2 && g.times(CommonSound::PythonFire) == 4, "the .357 fires four times in three seconds");
+        check(after == 2 && g.times(CommonSound::PythonFire) + g.times(CommonSound::PythonFire2) == 4,
+              "the .357 fires four times in three seconds, with one or other of its two shots");
         hold(1500, true, false);
         const bool emptied = inv.clipPython == 0;
         hold(3300, true, false);
         std::printf("test_monsters: .357: %d left after 3 s; reloaded to %d with %d spare\n", after, inv.clipPython,
                     inv.ammo357);
-        check(emptied && g.times(CommonSound::PythonReload) == 1 && inv.ammo357 == 0 && inv.clipPython >= 4,
+        // (The sound of the reload is the hand's own: its clip has it.)
+        check(emptied && g.times(CommonSound::PythonReload) == 0 && inv.ammo357 == 0 && inv.clipPython >= 4,
               "... empties at six, and reloads by itself from what is carried");
         // The MP5: ten rounds a second.
         inv.current = kWeaponMp5;
@@ -435,10 +438,19 @@ namespace
         check(gone && g.times(CommonSound::Explode) == heard + 1, "its grenade goes off at the first thing it meets");
         inv.ammoAr = 0;
         const int missing = inv.clipMp5;
-        const std::uint32_t reload = hold(33, false, true);
+        // With nothing to launch the other trigger clicks, once for the
+        // pull; the gun is reloaded by its own button.
+        const int clicks = g.times(CommonSound::Click);
+        const std::uint32_t nothing = hold(400, false, true);
+        check(!(nothing & (kWeaponReload | kWeaponSecondary)) && inv.clipMp5 == missing &&
+                  g.times(CommonSound::Click) == clicks + 1,
+              "the launcher with nothing in it clicks, once");
+        hold(100, false, false);
+        const std::uint32_t reload = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, false, false, 33, false,
+                                                 0, true);
         hold(1700, false, false);
         check((reload & kWeaponReload) && inv.clipMp5 == 50 && inv.ammo9mm == 50 - (50 - missing),
-              "R with nothing to launch reloads the gun in hand");
+              "RELOAD reloads the gun in hand");
     }
 
     /// The bullsquid is wide (the game moves it as its 64-unit hull): there
@@ -1281,8 +1293,21 @@ namespace
             c = static_cast<fx>((static_cast<std::int64_t>(c) << kFxShift) / length);
         const fx right[3] = {to[1], -to[0], 0}, up[3] = {0, 0, kFxOne};
         WeaponState weapon;
-        const std::uint32_t did = weaponsTick(g.logic, g.player, weapon, eye, to, right, up, true, false, 33);
-        check((did & kWeaponFired) && g.player.inv.grenades == 4, "one is thrown");
+        // The pin first; it is thrown when the trigger is let go, and not
+        // before the pin is out.
+        std::uint32_t did = weaponsTick(g.logic, g.player, weapon, eye, to, right, up, true, false, 33);
+        check(!(did & kWeaponFired) && g.player.inv.grenades == 5 && weapon.anim != nullptr &&
+                  std::string(weapon.anim) == "pinpull",
+              "the trigger pulls the pin");
+        weapon.anim = nullptr;
+        did = weaponsTick(g.logic, g.player, weapon, eye, to, right, up, false, false, 33);
+        check(!(did & kWeaponFired), "... and letting go at once does not throw it yet");
+        for (int t = 66; t < 700 && !(did & kWeaponFired); t += 33)
+            did = weaponsTick(g.logic, g.player, weapon, eye, to, right, up, false, false, 33);
+        check((did & kWeaponFired) && g.player.inv.grenades == 4 && weapon.anim != nullptr &&
+                  std::string(weapon.anim) == "throw2",
+              "half a second after the pin, one is thrown: aimed level, the middle throw");
+        weapon.anim = nullptr;
         // The zombie is held where it is -- and, once the grenade has come
         // to rest, stood sixty units from it: this is about the grenade, and
         // where one lands after its bounces is not for a test to say.
@@ -1292,7 +1317,7 @@ namespace
         for (int frame = 0; frame < 30 * 5; ++frame)
         {
             g.player.health = 100;
-            if (frame == 80)
+            if (frame == 65)
             {
                 for (const Projectile &p : g.actors.shots)
                 {
@@ -1333,7 +1358,9 @@ namespace
                     "(health %d, heard %d)\n",
                     burstFrame / 30.0, fxToInt(fxLength(off)), actor.health, g.times(CommonSound::Explode));
         check(flew && !solid, "it flies and bounces, and is never inside the world");
-        check(burstFrame >= 85 && burstFrame <= 95, "... and bursts three seconds on");
+        // (Three seconds from the PIN, half a second of which went before
+        // it left the hand.)
+        check(burstFrame >= 70 && burstFrame <= 80, "... and bursts three seconds after the pin was pulled");
         check(burst && g.times(CommonSound::Explode) == 1, "... which is heard, and hurts what is near");
     }
 
@@ -1390,6 +1417,298 @@ namespace
 
 /// A weapon asked for by name (the touch screen's slots): taken if it is
 /// carried, and only then.
+// The guns and the grenade by the game's own rules (its weapons' source):
+// what each trigger does and how often, which of the hand's clips it asks
+// for, what is heard and at what pitch. No map: nothing is hit.
+static void testGunRules()
+{
+    LogicWorld logic{};
+    MoveWorld world; // (a world of nothing at all)
+    logic.world = &world;
+    SoundQueue heard;
+    logic.heard = &heard;
+    PlayerState player{};
+    WeaponState weapon;
+    Inventory &inv = player.inv;
+    inv.have = static_cast<std::uint8_t>(1u << kWeaponGlock | 1u << kWeaponShotgun | 1u << kWeaponMp5 |
+                                         1u << kWeaponPython | 1u << kWeaponGrenade);
+    const fx eye[3] = {0, 0, 0}, forward[3] = {kFxOne, 0, 0}, right[3] = {0, -kFxOne, 0}, up[3] = {0, 0, kFxOne};
+    int sounds[static_cast<int>(CommonSound::Count)] = {};
+    int lowPitch = 255, highPitch = 0;
+    std::string clips; // every clip the hand was told to play, in order
+    auto step = [&](bool attack, bool second = false, bool reload = false, const fx *aim = nullptr)
+    {
+        const std::uint32_t did =
+            weaponsTick(logic, player, weapon, eye, aim ? aim : forward, right, up, attack, false, 33, second, 0, reload);
+        for (int i = 0; i < heard.count; ++i)
+        {
+            if (heard.events[i].sound < static_cast<int>(CommonSound::Count))
+                ++sounds[heard.events[i].sound];
+            lowPitch = std::min<int>(lowPitch, heard.events[i].pitch);
+            highPitch = std::max<int>(highPitch, heard.events[i].pitch);
+        }
+        heard.count = 0;
+        if (weapon.anim != nullptr)
+            clips += std::string(weapon.anim) + " ";
+        weapon.anim = nullptr;
+        return did;
+    };
+    auto hold = [&](int ms, bool attack, bool second = false)
+    {
+        std::uint32_t did = 0;
+        for (int t = 0; t < ms; t += 33)
+            did |= step(attack, second);
+        return did;
+    };
+    auto fresh = [&](std::uint8_t which)
+    {
+        weapon = WeaponState();
+        weapon.idleMs = 100000; // (the idles have their own check)
+        inv.current = which;
+        for (int &n : sounds)
+            n = 0;
+        clips.clear();
+        lowPitch = 255;
+        highPitch = 0;
+        heard.count = 0;
+    };
+    auto heardOf = [&](CommonSound sound) { return sounds[static_cast<int>(sound)]; };
+    auto count = [&](const char *clip)
+    {
+        int n = 0;
+        const std::string word = std::string(clip) + " ";
+        for (std::size_t at = clips.find(word); at != std::string::npos; at = clips.find(word, at + 1))
+            n += at == 0 || clips[at - 1] == ' ' ? 1 : 0;
+        return n;
+    };
+
+    // The pistol: a round every 0.3 s on the trigger, every 0.2 s on the
+    // other; the last round in it has a clip of its own.
+    fresh(kWeaponGlock);
+    inv.clipGlock = 17;
+    inv.ammo9mm = 0;
+    hold(3000, true);
+    check(inv.clipGlock == 7 && heardOf(CommonSound::Pistol) == 10 && count("shoot") == 10,
+          "the pistol: ten rounds in three seconds");
+    check(lowPitch >= 98 && highPitch <= 101, "... each at the game's pitch, 98 to 101");
+    hold(100, false);
+    hold(1000, false, true);
+    check(inv.clipGlock == 2, "... and five a second on the other trigger");
+    hold(100, false);
+    hold(600, true);
+    check(inv.clipGlock == 0 && count("shoot_empty") == 1, "the last round has a clip of its own");
+    // Empty, and nothing to put in: a click, once for the pull.
+    hold(100, false);
+    const int before = heardOf(CommonSound::Click);
+    hold(1500, true);
+    check(heardOf(CommonSound::Click) == before + 1, "the trigger on an empty gun clicks once, however long it is held");
+    hold(100, false);
+    hold(100, true);
+    check(heardOf(CommonSound::Click) == before + 2, "... and again when it is pulled again");
+    // Its two reloads: one with a round still in it, one without.
+    fresh(kWeaponGlock);
+    inv.clipGlock = 0;
+    inv.ammo9mm = 40;
+    const std::uint32_t began = hold(33, true);
+    check((began & kWeaponReload) && count("reload") == 1 && heardOf(CommonSound::Reload) == 0,
+          "an empty pistol reloads at the trigger: the empty gun's clip, whose sounds are its own");
+    hold(1600, false);
+    check(inv.clipGlock == 17 && inv.ammo9mm == 23, "... a second and a half");
+    inv.clipGlock = 9;
+    clips.clear();
+    step(false, false, true);
+    check(count("reload_noshot") == 1, "with a round still in it, the other reload");
+    // The wild trigger is wild: a tenth either way, where the careful one
+    // is a hundredth. (Counted in an empty world by what the cone would
+    // allow: the two cones themselves.)
+    check(kConePistol == 41 && kConePistolFast == 410 && kCone1 == 36 && kCone3 == 107 && kCone10 == 357,
+          "the game's cones");
+
+    // Under water only the pistol fires.
+    player.waterLevel = 3;
+    fresh(kWeaponGlock);
+    inv.clipGlock = 5;
+    hold(100, true);
+    check(inv.clipGlock == 4, "the pistol fires under water");
+    for (std::uint8_t which : {kWeaponPython, kWeaponMp5, kWeaponShotgun})
+    {
+        fresh(which);
+        inv.clipPython = 6;
+        inv.clipMp5 = 50;
+        inv.clipShotgun = 8;
+        hold(500, true);
+        check(inv.clipPython == 6 && inv.clipMp5 == 50 && inv.clipShotgun == 8 && heardOf(CommonSound::Click) == 1,
+              "the others click under water, and keep their rounds");
+    }
+    player.waterLevel = 0;
+
+    // The shotgun: a shot, and half a second on its pump -- which is when
+    // the spent case comes out.
+    fresh(kWeaponShotgun);
+    inv.clipShotgun = 8;
+    inv.ammoBuck = 20;
+    std::uint32_t did = step(true);
+    check((did & kWeaponFired) && !(did & kWeaponShell) && inv.clipShotgun == 7 && count("shoot") == 1 &&
+              heardOf(CommonSound::Shotgun) == 1 && heardOf(CommonSound::ShotgunPump) == 0,
+          "the shotgun fires: no case yet, no pump yet");
+    int pumped = -1;
+    for (int t = 33; t < 1000 && pumped < 0; t += 33)
+    {
+        if (step(false) & kWeaponShell)
+            pumped = t;
+    }
+    check(pumped >= 462 && pumped <= 528 && weapon.shells == 1 && heardOf(CommonSound::ShotgunPump) == 1,
+          "half a second on it is pumped, and one case comes out");
+    hold(400, false);
+    // Both barrels on the other trigger.
+    did = step(false, true);
+    check((did & kWeaponSecondary) && inv.clipShotgun == 5 && count("shoot_big") == 1 &&
+              heardOf(CommonSound::ShotgunDouble) == 1 && weapon.cooldownMs > 1400,
+          "the other trigger fires both barrels: two shells, a second and a half");
+    pumped = -1;
+    for (int t = 33; t < 1500 && pumped < 0; t += 33)
+    {
+        if (step(false) & kWeaponShell)
+            pumped = t;
+    }
+    check(pumped >= 924 && pumped <= 990 && weapon.shells == 2, "... pumped nearly a second on, two cases out");
+    hold(700, false);
+    // Loaded a shell at a time: the start, then half a second a shell,
+    // then the pump.
+    fresh(kWeaponShotgun);
+    inv.clipShotgun = 5;
+    inv.ammoBuck = 20;
+    did = step(false, false, true);
+    check((did & kWeaponReload) && count("start_reload") == 1 && inv.clipShotgun == 5, "the shotgun's reload begins");
+    hold(600 + 3 * 500 + 200, false);
+    check(inv.clipShotgun == 8 && inv.ammoBuck == 17 && count("reload") == 3 && count("pump") == 1 &&
+              heardOf(CommonSound::ShotgunReload) + heardOf(CommonSound::ShotgunReload3) == 3 &&
+              heardOf(CommonSound::ShotgunPump) == 1 && weapon.loading == 0,
+          "three shells in, one at a time, each heard; then pumped");
+    check(lowPitch >= 85 && highPitch <= 126, "... at the game's pitches");
+    // Broken off by the trigger, with what is in it by then.
+    fresh(kWeaponShotgun);
+    inv.clipShotgun = 2;
+    inv.ammoBuck = 20;
+    step(false, false, true);
+    hold(600 + 500 + 300, false); // (the start, one shell, part of the next)
+    const int loaded = inv.clipShotgun;
+    did = hold(66, true);
+    check(loaded >= 3 && loaded <= 4 && (did & kWeaponFired) && weapon.loading == 0 && inv.clipShotgun == loaded - 1,
+          "the trigger breaks the loading off, and fires what is in it");
+    // One shell and the other trigger: more shells first.
+    fresh(kWeaponShotgun);
+    inv.clipShotgun = 1;
+    inv.ammoBuck = 5;
+    did = step(false, true);
+    check((did & kWeaponReload) && !(did & kWeaponFired), "both barrels with one shell loads instead");
+
+    // The MP5's launcher has two sounds; the gun two; a case for each round.
+    fresh(kWeaponMp5);
+    inv.clipMp5 = 50;
+    inv.ammo9mm = 0;
+    int cases = 0;
+    for (int t = 0; t < 2000; t += 33)
+        cases += step(true) & kWeaponShell ? 1 : 0;
+    check(inv.clipMp5 <= 31 && inv.clipMp5 >= 29 && cases == 50 - inv.clipMp5 &&
+              heardOf(CommonSound::Mp5Fire) > 2 && heardOf(CommonSound::Mp5Fire1) > 2 &&
+              heardOf(CommonSound::Mp5Fire) + heardOf(CommonSound::Mp5Fire1) == cases,
+          "the MP5: ten a second, one or other of its two shots, a case each");
+    check(lowPitch >= 94 && highPitch <= 109, "... pitched as the game pitches them");
+
+    // The .357: no case; the other button reloads it.
+    fresh(kWeaponPython);
+    inv.clipPython = 3;
+    inv.ammo357 = 12;
+    did = step(true);
+    check((did & kWeaponFired) && !(did & kWeaponShell) && count("fire1") == 1, "the .357 throws no case");
+    hold(800, false);
+    did = step(false, true);
+    check((did & kWeaponReload) && count("reload") == 1, "its other button reloads it");
+    hold(2100, false);
+    check(inv.clipPython == 6 && inv.ammo357 == 8, "... two seconds");
+
+    // The grenade: harder the higher it is aimed, by the game's sum; held
+    // three seconds it goes off in the hand; and with its pin out it is
+    // not put down for another weapon.
+    ActorWorld actors;
+    logic.actors = &actors;
+    auto thrown = [&](const fx *aim, int holdMs) -> int
+    {
+        for (Projectile &shot : actors.shots)
+            shot.active = false;
+        fresh(kWeaponGrenade);
+        inv.have |= static_cast<std::uint8_t>(1u << kWeaponGrenade);
+        inv.grenades = 5;
+        for (int t = 0; t < holdMs; t += 33)
+            step(true, false, false, aim);
+        for (int t = 0; t < 200; t += 33)
+            step(false, false, false, aim);
+        for (const Projectile &shot : actors.shots)
+        {
+            if (shot.active)
+                return fxToInt(fxLength(shot.velocity));
+        }
+        return -1;
+    };
+    const int level = thrown(forward, 600);
+    check(level >= 630 && level <= 670 && count("pinpull") == 1 && count("throw2") == 1,
+          "aimed level it leaves at 650 units a second: the middle throw");
+    fx sine = 0, cosine = 0;
+    fxSinCos(static_cast<std::uint16_t>(65536 * 60 / 360), sine, cosine);
+    const fx low[3] = {cosine, 0, -sine};
+    // (Only nearly straight up is it thrown as hard as it goes: at sixty
+    // degrees the game's sum is 996.)
+    fxSinCos(static_cast<std::uint16_t>(65536 * 80 / 360), sine, cosine);
+    const fx high[3] = {cosine, 0, sine};
+    const int far = thrown(high, 600);
+    check(far >= 990 && far <= 1000 && count("throw3") == 1, "aimed high, as hard as it goes: the long throw");
+    const int near = thrown(low, 600);
+    check(near >= 200 && near <= 240 && count("throw1") == 1, "aimed at the feet it is dropped: the short throw");
+    // (How long is left of its three seconds when it goes.)
+    thrown(forward, 1500);
+    int left = 0;
+    for (const Projectile &shot : actors.shots)
+        left = shot.active ? shot.leftMs : left;
+    check(left >= 1400 && left <= 1500, "the three seconds run from the pin, not from the throw");
+    const int held = thrown(forward, 3100);
+    left = -1;
+    for (const Projectile &shot : actors.shots)
+        left = shot.active ? shot.leftMs : left;
+    check(held == 0 && left <= 33 && inv.grenades == 4, "held three seconds, it goes off where it is");
+    fresh(kWeaponGrenade);
+    inv.grenades = 3;
+    step(true);
+    weaponsTick(logic, player, weapon, eye, forward, right, up, true, false, 33, false, kWeaponGlock);
+    check(inv.current == kWeaponGrenade && weapon.pinMs > 0, "with its pin out it is not put down");
+    logic.actors = nullptr;
+
+    // Left alone, the hand does something of its own: each weapon its own
+    // clips, in the game's proportions.
+    for (std::uint8_t which : {kWeaponGlock, kWeaponPython, kWeaponShotgun})
+    {
+        fresh(which);
+        inv.clipGlock = 5;
+        weapon.idleMs = 1000;
+        hold(300000, false);
+        if (which == kWeaponGlock)
+            check(count("idle1") > 5 && count("idle2") > 5 && count("idle3") > 5 && count("shoot") == 0,
+                  "the pistol's three ways of being held");
+        else if (which == kWeaponPython)
+            check(count("idle1") > count("idle2") && count("idle2") > 3 && count("idle3") > 3 && count("fidget1") > 1,
+                  "the .357's: three, and now and then a spin of the cylinder");
+        else
+            check(count("deepidle") > count("sm_idle") && count("sm_idle") > count("idle4"),
+                  "the shotgun's: mostly at rest");
+    }
+    fresh(kWeaponGlock);
+    inv.clipGlock = 0;
+    inv.ammo9mm = 0;
+    weapon.idleMs = 1000;
+    hold(20000, false);
+    check(clips.empty(), "an empty pistol is held still: its slide is back");
+}
+
 static void testPick()
 {
     LogicWorld logic{};
@@ -1466,6 +1785,7 @@ static void testPick()
 int main()
 {
     testPick();
+    testGunRules();
     testSums();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir != nullptr && dir[0] != '\0')

@@ -952,6 +952,42 @@ namespace hlrt
         }
     }
 
+    int Sound::musicTrack() const
+    {
+        return dspAudio.musicPlaying() ? dspAudio.musicTrack() : musicTrack_;
+    }
+
+    std::uint32_t Sound::musicMs() const
+    {
+        if (musicHeld_)
+            return musicHeldMs_;
+        if (dspAudio.musicPlaying())
+            return static_cast<std::uint32_t>((static_cast<std::uint64_t>(dspAudio.musicPair()) * 1000) / kStereoRate);
+        if (music_ == nullptr)
+            return 0;
+        // (As holdMusic reckons it: what has been handed over, less what
+        // the stream still has in hand, less any silence after the end.)
+        const std::uint32_t fed = musicFed_ - musicPast_;
+        const std::uint32_t played = fed > kStreamSamples / 2 ? fed - kStreamSamples / 2 : 0;
+        return static_cast<std::uint32_t>((static_cast<std::uint64_t>(musicSkipped_ + played) * 1000) / kMusicRate);
+    }
+
+    void Sound::setMusic(int track, std::uint32_t ms)
+    {
+        stopMusic();
+        dspAudio.stopMusic();
+        musicHeld_ = false;
+        musicTrack_ = -1;
+        if (track < 0)
+            return;
+        // Put down at that moment, and taken up from it -- at once, or when
+        // the game next goes on, as any music that was put down is.
+        musicHeld_ = true;
+        musicTrack_ = track;
+        musicHeldMs_ = ms;
+        resumeMusic();
+    }
+
     void Sound::startMusic(int track)
     {
         if (dspAudio.musicPlaying() && dspAudio.musicTrack() == track)

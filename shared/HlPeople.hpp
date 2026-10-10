@@ -4,10 +4,14 @@
 //
 // The game lets the player take them along. USE on one and he follows; USE
 // again and he stays. A scientist who sees something that would kill him
-// runs for somewhere it cannot see him; a guard draws and shoots it -- and
-// shoots a player who has shot him twice. That is all of it: they do not
-// talk here beyond what the map's scenes have them say, and the monsters
-// still have eyes only for the player.
+// runs for somewhere it cannot see him. A guard fights it, after the game's
+// own guard (dlls/barney.cpp): he keeps the enemy he has until it is dead
+// or long out of sight, draws before he fires, fires only when he faces it
+// with nothing in the way -- a real round, which can miss -- and goes to
+// where it went when it is hidden; he follows only when he has nothing to
+// fight. He turns on a player who shoots him, by the game's rule. They do
+// not talk here beyond what the map's scenes have them say, and the
+// monsters still have eyes only for the player.
 //
 // They find their way as everything that walks does (HlWalk.hpp): by the
 // map's nodes, through the doors on the way, which they open.
@@ -24,9 +28,12 @@ namespace hldata
     inline constexpr std::uint8_t kPersonFlee = 2;
 
     inline constexpr int kPersonNear = 112;  ///< as close as one who follows comes
-    inline constexpr int kPersonSight = 512; ///< how far off a guard sees what he shoots
+    inline constexpr int kPersonSight = 1024; ///< how far off a guard sees, and shoots: the game's
     inline constexpr int kPersonFright = 384; ///< ... and a scientist what he runs from
-    inline constexpr int kGuardRound = 8;    ///< what one of a guard's shots does
+    inline constexpr int kGuardRound = 5;    ///< what one of a guard's rounds does (the game's, at its middle difficulty)
+    inline constexpr int kGuardCone = 143;   ///< two degrees, in 4096ths: how far a round of his may go off line
+    inline constexpr int kGuardTurn = 65536 * 140 / 360; ///< a second, as the game turns him
+    inline constexpr int kGuardForget = 6000; ///< ms out of sight before an enemy is given up
 
     /// USE, from `eye` along `forward` (Q12, unit): the scientist or guard
     /// in front of the player within arm's reach follows, or stays. True if
@@ -144,6 +151,267 @@ namespace hldata
             return true;
         }
 
+        /// Whether a guard can see `other` from where his eyes are: within
+        /// his sight, with nothing of the world between.
+        inline bool guardSees(LogicWorld &w, const ActorState &me, const fx *body)
+        {
+            const fx d[3] = {body[0] - me.pos[0], body[1] - me.pos[1], body[2] - me.pos[2]};
+            if (fxLength(d) >= fxFromInt(kPersonSight))
+                return false;
+            const fx eye[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(55)};
+            return lineClear(*w.world, eye, body);
+        }
+
+        /// Something for a guard to fight that he has not got already: the
+        /// nearest monster or soldier alive that he can see -- in front of
+        /// him (the game's wide view: all but the 45 degrees behind each
+        /// shoulder), or near enough to be heard. Not what a scene is
+        /// playing, nor what the map keeps caged; not a barnacle. -1: none.
+        inline int guardFoe(LogicWorld &w, const ActorState &me)
+        {
+            const ActorWorld &a = *w.actors;
+            fx sine = 0, cosine = 0;
+            fxSinCos(me.yaw, sine, cosine);
+            int best = -1;
+            fx bestD = fxFromInt(kPersonSight);
+            for (int i = 0; i < a.count; ++i)
+            {
+                const ActorState &other = a.states[i];
+                if (!other.active || other.ai >= kAiDying || !(isMonster(other.kind) || isGrunt(other.kind)) ||
+                    other.kind == static_cast<std::uint8_t>(ActorKind::Barnacle) || other.script >= 0 ||
+                    (other.flags & (kActorPrisoner | kActorDormant)))
+                    continue;
+                const fx d[3] = {other.pos[0] - me.pos[0], other.pos[1] - me.pos[1], other.pos[2] - me.pos[2]};
+                const fx distance = fxLength(d);
+                if (distance >= bestD)
+                    continue;
+                const std::int64_t ahead = static_cast<std::int64_t>(d[0]) * cosine + static_cast<std::int64_t>(d[1]) * sine;
+                if (distance > fxFromInt(128) && ahead * 10 < -static_cast<std::int64_t>(distance) * kFxOne * 7)
+                    continue;
+                const fx body[3] = {other.pos[0], other.pos[1], other.pos[2] + fxFromInt(24)};
+                if (!guardSees(w, me, body))
+                    continue;
+                best = i;
+                bestD = distance;
+            }
+            return best;
+        }
+
+        /// Whether the player stands in a line from `from` to `to`.
+        inline bool playerInLine(const PlayerState &player, const fx *from, const fx *to)
+        {
+            const fx half = fxFromInt(20);
+            const fx mins[3] = {player.origin[0] - half, player.origin[1] - half, playerFeet(player)};
+            const fx maxs[3] = {player.origin[0] + half, player.origin[1] + half, playerFeet(player) + fxFromInt(72)};
+            std::int64_t enter = 0;
+            return lineEntersBox(from, to, mins, maxs, enter) && enter < kFractionOne;
+        }
+
+        /// A guard with something to fight, or his pistol on its way out.
+        /// True if that is what he did this tick (he follows nobody then).
+        inline bool guardTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            ActorState &me = a.states[index];
+            auto alive = [&](int i) { return i >= 0 && i < a.count && a.states[i].active && a.states[i].ai < kAiDying; };
+            const bool enemy = me.struck >= 2 && player.health > 0; // the player is one
+            if (!alive(me.foe))
+                me.foe = -1;
+
+            // A look, four times a second: at the one he has, and for a
+            // better one.
+            if (me.lookMs <= 0)
+            {
+                me.lookMs = 250;
+                if (me.foe >= 0)
+                {
+                    const ActorState &foe = a.states[me.foe];
+                    const fx body[3] = {foe.pos[0], foe.pos[1], foe.pos[2] + fxFromInt(24)};
+                    me.foeSeen = guardSees(w, me, body);
+                    if (me.foeSeen)
+                    {
+                        for (int k = 0; k < 3; ++k)
+                            me.foeAt[k] = foe.pos[k];
+                        me.lostMs = 0;
+                    }
+                    else if ((me.lostMs += 250) > kGuardForget)
+                    {
+                        me.foe = -1;
+                    }
+                }
+                // Another only in place of none, of one he cannot see, or
+                // of one twice as far off: he does not turn from one to
+                // the other and back.
+                const int other = guardFoe(w, me);
+                if (other >= 0 && other != me.foe)
+                {
+                    bool take = me.foe < 0 || !me.foeSeen;
+                    if (!take)
+                    {
+                        const fx mine[3] = {a.states[me.foe].pos[0] - me.pos[0], a.states[me.foe].pos[1] - me.pos[1],
+                                            a.states[me.foe].pos[2] - me.pos[2]};
+                        const fx theirs[3] = {a.states[other].pos[0] - me.pos[0], a.states[other].pos[1] - me.pos[1],
+                                              a.states[other].pos[2] - me.pos[2]};
+                        take = fxLength(theirs) * 2 < fxLength(mine);
+                    }
+                    if (take)
+                    {
+                        me.foe = static_cast<std::int16_t>(other);
+                        me.foeSeen = true;
+                        me.lostMs = 0;
+                        for (int k = 0; k < 3; ++k)
+                            me.foeAt[k] = a.states[other].pos[k];
+                    }
+                }
+                // The player, for one who has turned on them: seen or not.
+                if (me.foe < 0 && enemy)
+                {
+                    const fx body[3] = {player.origin[0], player.origin[1], player.origin[2]};
+                    me.foeSeen = guardSees(w, me, body);
+                    if (me.foeSeen)
+                    {
+                        for (int k = 0; k < 3; ++k)
+                            me.foeAt[k] = k == 2 ? playerFeet(player) : player.origin[k];
+                    }
+                }
+                // Nothing in the way of a round: not the world (seen), and
+                // not the player.
+                if (me.foe >= 0 && me.foeSeen)
+                {
+                    const fx muzzle[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(55)};
+                    const fx body[3] = {a.states[me.foe].pos[0], a.states[me.foe].pos[1],
+                                        a.states[me.foe].pos[2] + fxFromInt(24)};
+                    me.clearShot = !playerInLine(player, muzzle, body);
+                }
+                else
+                {
+                    me.clearShot = me.foe < 0 && enemy && me.foeSeen;
+                }
+            }
+            const bool atPlayer = me.foe < 0 && enemy;
+            if (me.foe < 0 && !(atPlayer && me.foeSeen))
+            {
+                // Nothing to fight. (His pistol stays out, as the game's
+                // guard keeps his.)
+                if (me.gun == 1)
+                {
+                    me.gun = 2;
+                    me.body = 1;
+                }
+                return false;
+            }
+
+            fx body[3];
+            if (atPlayer)
+            {
+                body[0] = player.origin[0];
+                body[1] = player.origin[1];
+                body[2] = player.origin[2];
+            }
+            else
+            {
+                body[0] = a.states[me.foe].pos[0];
+                body[1] = a.states[me.foe].pos[1];
+                body[2] = a.states[me.foe].pos[2] + fxFromInt(24);
+            }
+
+            // Hidden: to where it was last seen, and wait there for it.
+            if (!me.foeSeen)
+            {
+                const fx d[3] = {me.foeAt[0] - me.pos[0], me.foeAt[1] - me.pos[1], 0};
+                if (me.gun < 2 || fxLength(d) < fxFromInt(48))
+                {
+                    monsterClip(a, me, "idle1", false);
+                    return true;
+                }
+                const fx speed = actorClipSpeed(a, me, nameHash("run"), fxFromInt(200));
+                const int went = walkTick(a, *w.world, index, kWalkStanding, me.foeAt, speed, ms, &player, fxFromInt(16),
+                                          fxFromInt(72));
+                monsterClip(a, me, went == kWalkNoWay ? "idle1" : "run", false);
+                return true;
+            }
+
+            // In sight: he stops, turns to it, has his pistol out, and
+            // fires when he faces it with nothing in the way.
+            faceTo(me, body[0] - me.pos[0], body[1] - me.pos[1], ms, kGuardTurn);
+            if (me.gun == 0)
+            {
+                me.gun = 1;
+                me.gunMs = 800; // (the length of his draw)
+                monsterClip(a, me, "draw", true);
+                return true;
+            }
+            if (me.gun == 1)
+            {
+                if ((me.gunMs -= ms) > 0)
+                    return true;
+                me.gun = 2;
+                me.body = 1; // (the pistol in his hand, not at his hip)
+            }
+            fx sine = 0, cosine = 0;
+            fxSinCos(me.yaw, sine, cosine);
+            const fx to[3] = {body[0] - me.pos[0], body[1] - me.pos[1], 0};
+            const fx flat = fxLength(to);
+            const std::int64_t ahead = static_cast<std::int64_t>(to[0]) * cosine + static_cast<std::int64_t>(to[1]) * sine;
+            // (Within sixty degrees of the way he faces: the game's.)
+            const bool faced = flat <= 0 || ahead * 2 >= static_cast<std::int64_t>(flat) * kFxOne;
+            if (me.cooldownMs > 0 || !faced || !me.clearShot)
+            {
+                if (me.once && me.finished)
+                    monsterClip(a, me, "idle1", false);
+                else if (!me.once)
+                    monsterClip(a, me, "idle1", false);
+                return true;
+            }
+            // One round to each firing clip, which is how long he takes
+            // over it.
+            a.seed = a.seed * 1664525u + 1013904223u;
+            const bool quick = (a.seed >> 12) & 1;
+            me.cooldownMs = quick ? 400 : 640;
+            monsterClip(a, me, quick ? "shootgun2" : "shootgun", true);
+            if (w.heard != nullptr)
+            {
+                a.seed = a.seed * 1664525u + 1013904223u;
+                const int pitch = (a.seed >> 12) & 1 ? 100 : 95 + static_cast<int>((a.seed >> 16) % 11);
+                w.heard->add(static_cast<std::uint16_t>(CommonSound::Pistol), me.pos, 110, kRadiusLarge, 0, pitch);
+            }
+            const fx muzzle[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(55)};
+            fx aim[3] = {body[0] - muzzle[0], body[1] - muzzle[1], body[2] - muzzle[2]};
+            const fx length = fxLength(aim);
+            if (length <= 0)
+                return true;
+            for (fx &c : aim)
+                c = static_cast<fx>((static_cast<std::int64_t>(c) << kFxShift) / length);
+            // Off line by the game's two degrees: across, and up or down.
+            auto draw = [&]() -> int
+            {
+                a.seed = a.seed * 1664525u + 1013904223u;
+                const int one = static_cast<int>((a.seed >> 8) % 4097);
+                a.seed = a.seed * 1664525u + 1013904223u;
+                return (one + static_cast<int>((a.seed >> 8) % 4097) - 4096) * kGuardCone / 4096;
+            };
+            const int across = draw(), upward = draw();
+            const fx side[3] = {-aim[1], aim[0], 0};
+            fx dir[3] = {aim[0] + ((side[0] * across) >> kFxShift), aim[1] + ((side[1] * across) >> kFxShift),
+                         aim[2] + upward};
+            effectAdd(a, kEffectMuzzle, muzzle, nullptr, 0, 50);
+            if (atPlayer)
+            {
+                const fx end[3] = {muzzle[0] + dir[0] * kPersonSight, muzzle[1] + dir[1] * kPersonSight,
+                                   muzzle[2] + dir[2] * kPersonSight};
+                if (playerInLine(player, muzzle, end))
+                {
+                    playerHurt(player, kGuardRound, me.pos);
+                    a.got |= kGotHurt;
+                }
+            }
+            else
+            {
+                fireLine(w, player, muzzle, dir, kPersonSight, kGuardRound, true, true, nullptr, index);
+            }
+            return true;
+        }
+
         inline void personTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             ActorWorld &a = *w.actors;
@@ -154,12 +422,14 @@ namespace hldata
             if (me.cooldownMs > 0)
                 me.cooldownMs -= ms;
 
-            // A look about, twice a second.
+            if (me.painMs > 0)
+                me.painMs -= ms;
+            // A look about, twice a second. (A guard's is his own: guardTick.)
             me.lookMs -= ms;
-            if (me.lookMs <= 0)
+            if (me.lookMs <= 0 && !guard)
             {
                 me.lookMs = 500;
-                me.foe = static_cast<std::int16_t>(personFoe(w, me, guard ? kPersonSight : kPersonFright));
+                me.foe = static_cast<std::int16_t>(personFoe(w, me, kPersonFright));
                 me.lostMs = me.foe >= 0 ? 0 : me.lostMs + 500;
             }
             const bool foeThere = me.foe >= 0 && me.foe < a.count && a.states[me.foe].active &&
@@ -167,45 +437,8 @@ namespace hldata
 
             if (guard)
             {
-                // What he shoots: a monster in sight; or the player, who
-                // has shot him twice.
-                const bool turned = me.struck >= 2 && player.health > 0;
-                const fx eye[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(56)};
-                const fx *at = nullptr;
-                fx body[3];
-                if (foeThere)
+                if (guardTick(w, player, index, ms))
                 {
-                    body[0] = a.states[me.foe].pos[0];
-                    body[1] = a.states[me.foe].pos[1];
-                    body[2] = a.states[me.foe].pos[2] + fxFromInt(24);
-                    at = body;
-                }
-                else if (turned)
-                {
-                    const fx d[3] = {player.origin[0] - me.pos[0], player.origin[1] - me.pos[1], 0};
-                    if (fxLength(d) < fxFromInt(kPersonSight) && lineClear(*w.world, eye, player.origin))
-                        at = player.origin;
-                }
-                if (at != nullptr)
-                {
-                    faceTo(me, at[0] - me.pos[0], at[1] - me.pos[1], ms, 65536 * 2);
-                    if (me.cooldownMs <= 0)
-                    {
-                        me.cooldownMs = 600;
-                        monsterClip(a, me, "shootgun2", true);
-                        if (w.heard != nullptr)
-                            w.heard->add(CommonSound::Pistol, me.pos, 110, kRadiusLarge);
-                        if (foeThere)
-                        {
-                            monsterHurt(w, me.foe, kGuardRound, true);
-                            bleed(w, me.foe, at, nullptr, a.states[me.foe].ai >= kAiDying || !a.states[me.foe].active);
-                        }
-                        else
-                        {
-                            playerHurt(player, 5, me.pos);
-                            a.got |= kGotHurt;
-                        }
-                    }
                     actorPlaceBox(a, index);
                     return;
                 }
@@ -253,6 +486,10 @@ namespace hldata
                 return;
             }
 
+            // (One who stands where he is stands as he does: not as his last
+            // shot left him.)
+            if (me.ai == kPersonIdle && guard && me.once && me.finished)
+                monsterClip(a, me, "idle1", false);
             if (me.ai == kPersonFollow)
             {
                 // After the player: at a run if they are far ahead, a walk

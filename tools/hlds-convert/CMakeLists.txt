@@ -120,6 +120,7 @@ if(HLDS_BUILD_TESTS)
             test_titles
             test_view
             test_drawplan
+            test_people
             test_families
             test_incident
             test_mixer
@@ -137,6 +138,8 @@ if(HLDS_BUILD_TESTS)
             test_movers
             test_physics
             test_save
+            test_savefiles
+            test_savestate
             test_texture
             test_wad)
         add_executable(${test_name} tests/${test_name}.cpp)

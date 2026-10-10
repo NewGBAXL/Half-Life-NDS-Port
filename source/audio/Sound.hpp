@@ -60,6 +60,13 @@ namespace hlrt
         /// is slowed to the slowest the hardware has, and silenced. Ten
         /// seconds of menu cost a sound a quarter of a second.)
         void setPaused(bool paused);
+        /// The track that is playing (or held, while a map loads); -1: none.
+        int musicTrack() const;
+        /// How far into it the music is, in milliseconds.
+        std::uint32_t musicMs() const;
+        /// The music put at `ms` into `track` (a save's: what was playing,
+        /// from where it was); -1 for none.
+        void setMusic(int track, std::uint32_t ms);
 
         /// On a DSi: the DSP is in use (stereo music, echo).
         bool extended() const { return extended_; }

@@ -11,9 +11,15 @@ MODE="${1:?ds or dsi}"
 CFG="$ROOT/build/emu/cfg_$MODE"
 [ -d "$CFG" ] || "$ROOT/tools/emu/setup.sh" >/dev/null
 cd "$ROOT"
-# A save left by an earlier run would be gone back to instead of the start
-# map: EMU_KEEP_SAVE=1 keeps it (to test exactly that).
-[ -n "${EMU_KEEP_SAVE:-}" ] || rm -f "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/slot0.sav"
+# Saves left by an earlier run are not this run's: EMU_KEEP_SAVE=1 keeps
+# them (to test exactly that -- the title's CONTINUE and LOAD GAME).
+if [ -z "${EMU_KEEP_SAVE:-}" ]; then
+    for save in auto quick save1 save2 save3 save4 save5 save6 arrival; do
+        rm -f "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/$save.sav" "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/$save.sav.new"
+    done
+    rm -f "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/index.dat" "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/slot0.sav" \
+        "${ROOT:?}/sdroot/_nds/hl_nds/data/saves/slot1.sav"
+fi
 START_FILE="$ROOT/sdroot/_nds/hl_nds/data/debug_start.txt"
 [ -n "${EMU_START:-}" ] && echo "$EMU_START" > "$START_FILE"
 trap 'rm -f "$START_FILE"' EXIT

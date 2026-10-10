@@ -770,7 +770,8 @@ namespace hlds
         // one drives.
         {
             LogicCook logic;
-            cookLogic(bsp, entities, brushRecordOfEntity, options.models, logic, options.sentences, options.titles);
+            cookLogic(bsp, entities, brushRecordOfEntity, options.models, logic, options.sentences, options.titles,
+                      options.chapter);
             if (logic.records.size() > 0x7FFF || logic.aux.size() > 0xFFFF)
             {
                 error = "the map has more logic entities than the cooked format holds";

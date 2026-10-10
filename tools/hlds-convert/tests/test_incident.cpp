@@ -300,6 +300,69 @@ namespace
         check(live() - before >= 3, "after the fifth press its marks are on the wall");
         check(broke, "... and what was in it has burst");
     }
+    // c1a1's lift that falls: three scientists stand in its cab on a floor
+    // that cannot be seen and breaks when the call button is pressed; they
+    // fall the length of the shaft, and what is at the bottom of it kills
+    // them. (They used to be left standing in the air beside the ladder.)
+    void testFallingLift(const char *dir)
+    {
+        const std::unique_ptr<Game> game = load(dir, "c1a1");
+        check(game != nullptr, "c1a1 cooks");
+        if (game == nullptr)
+            return;
+        Game &g = *game;
+        int riders[3] = {-1, -1, -1}, found = 0;
+        for (int i = 0; i < g.actors.count && found < 3; ++i)
+        {
+            const ActorState &actor = g.actors.states[i];
+            if (actor.active && actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) &&
+                std::abs(fxToInt(actor.pos[0]) - 728) < 80 && std::abs(fxToInt(actor.pos[1]) - 2112) < 80 &&
+                fxToInt(actor.pos[2]) > 400)
+                riders[found++] = i;
+        }
+        check(found == 3, "three scientists are in the cab at the top of the shaft");
+        const int manager = nameOf(g, "dethvmm");
+        check(manager != 0, "the button's chain is in the level");
+        if (found != 3 || manager == 0)
+            return;
+        // (The player well out of it, on the top floor.)
+        g.player.origin[0] = fxFromInt(1120);
+        g.player.origin[1] = fxFromInt(2112);
+        g.player.origin[2] = fxFromInt(836);
+        for (int n = 0; n < 30; ++n)
+            g.frame();
+        bool stood = true;
+        int floorZ[3];
+        for (int r = 0; r < 3; ++r)
+        {
+            const ActorState &actor = g.actors.states[riders[r]];
+            floorZ[r] = fxToInt(actor.pos[2]);
+            stood = stood && actor.groundMover >= 0 && !actor.airborne && floorZ[r] >= 570 && floorZ[r] <= 576;
+        }
+        std::printf("test_incident: the lift's three stand at %d, %d, %d\n", floorZ[0], floorZ[1], floorZ[2]);
+        check(stood, "before the button they stand on the cab's floor, which is a brush");
+        logicFire(g.logic, g.player, static_cast<std::uint16_t>(manager), -1, kUseToggle, 0);
+        int fell = -1, gone = -1;
+        for (int n = 0; n < 30 * 6 && gone < 0; ++n)
+        {
+            g.frame();
+            bool allLow = true, allDead = true;
+            for (int r = 0; r < 3; ++r)
+            {
+                const ActorState &actor = g.actors.states[riders[r]];
+                allLow = allLow && (!actor.active || fxToInt(actor.pos[2]) < 0);
+                allDead = allDead && (!actor.active || actor.ai >= kAiDying);
+            }
+            if (allLow && fell < 0)
+                fell = n;
+            if (allDead)
+                gone = n;
+        }
+        std::printf("test_incident: they are past the bottom floor %.1f s after the button, and dead at %.1f s\n",
+                    fell / 30.0, gone / 30.0);
+        check(fell > 0 && fell < 75, "the floor gone, they fall down the shaft");
+        check(gone > 0 && gone < 105, "... and do not live through what is at the bottom");
+    }
 } // namespace
 
 int main()
@@ -310,6 +373,7 @@ int main()
     {
         testTramDoor(dir);
         testLift(dir);
+        testFallingLift(dir);
         testLights(dir);
         testMicrowave(dir);
     }

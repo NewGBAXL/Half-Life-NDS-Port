@@ -10,6 +10,8 @@
 
 #include <string>
 
+#include "HlSaveFiles.hpp"
+
 namespace hlrt
 {
     class Menu
@@ -19,13 +21,24 @@ namespace hlrt
         {
             None,
             Resume,
-            Save,
+            Save,     ///< the quick one
+            SaveTo,   ///< ... into slot() -- one of the player's six
+            Load,     ///< the save in slot()
+            Continue, ///< the most recent save (the title's)
             NewGame,
             Command,
         };
 
         /// Take the touch screen and show the first page.
         void open();
+        /// The same, as the game's title: CONTINUE, LOAD GAME, NEW GAME,
+        /// OPTIONS, with no game behind it.
+        void openTitle();
+        /// The list of saves that the load and save pages show (the
+        /// caller's: SaveGame::index()).
+        void setSaves(const hldata::SaveIndex *saves) { saves_ = saves; }
+        /// Which save an action is about (a kSlot*).
+        int slot() const { return slot_; }
         /// Once a frame while it is open (after the keys have been scanned).
         Action frame();
         /// A line typed on the keyboard. False if it was given up (B).
@@ -39,7 +52,18 @@ namespace hlrt
             Main,
             Options,
             Graphics,
+            Title,
+            Saves,   ///< the list: to load from, or to save into
+            Confirm, ///< "overwrite?", "load?", "new game?"
         };
+        const hldata::SaveIndex *saves_ = nullptr;
+        bool title_ = false;   ///< it is the title's menu, not the pause's
+        bool saving_ = false;  ///< the list is shown to save into
+        int slot_ = -1;
+        Action asked_ = Action::None; ///< what "yes" on the confirm page does
+        Page asker_ = Page::Main;     ///< ... and where "no" goes back to
+        void showSaves(bool saving);
+        void ask(Action action, const char *question);
         Page page_ = Page::Main;
         int active_ = -1; ///< the row the stylus went down on, or -1
         bool touching_ = false;

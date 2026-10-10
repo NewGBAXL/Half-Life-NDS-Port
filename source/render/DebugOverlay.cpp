@@ -75,8 +75,7 @@ namespace hlrt
             // to pick up, D the rest -- and how many polygons over. (A is
             // never to be anything but 0: HlDrawPlan.hpp.) Otherwise where
             // the eye is.
-            if (modelDraw.cutOf(0) + modelDraw.cutOf(1) + modelDraw.cutOf(2) + modelDraw.cutOf(3) + modelDraw.grown() != 0 ||
-                modelDraw.strained())
+            if (modelDraw.cutOf(0) + modelDraw.cutOf(1) + modelDraw.cutOf(2) + modelDraw.cutOf(3) + modelDraw.grown() != 0)
             {
                 std::snprintf(line, sizeof(line), "cut A%d B%d C%d D%d +%d%s", modelDraw.cutOf(0), modelDraw.cutOf(1),
                               modelDraw.cutOf(2), modelDraw.cutOf(3), modelDraw.grown(), modelDraw.strained() ? " full" : "");

@@ -283,6 +283,15 @@ int main()
     checkModel(dir, "barney.mdl", {"idle1", "walk", "run", "unlatch", "sit1"});
     checkModel(dir, "gman.mdl", {"idle01", "walk", "idlebrush"});
     checkModel(dir, "v_crowbar.mdl", {"idle1", "attack1", "draw"});
+    // Every clip the weapons' code asks the hand for (HlMonsters.hpp's
+    // weaponsTick) is in the game's own models.
+    checkModel(dir, "v_9mmhandgun.mdl",
+               {"idle1", "idle2", "idle3", "shoot", "shoot_empty", "reload", "reload_noshot", "draw"});
+    checkModel(dir, "v_shotgun.mdl",
+               {"sm_idle", "idle4", "deepidle", "shoot", "shoot_big", "start_reload", "reload", "pump", "draw"});
+    checkModel(dir, "v_grenade.mdl", {"idle", "fidget", "pinpull", "throw1", "throw2", "throw3", "draw"});
+    checkModel(dir, "v_9mmar.mdl", {"longidle", "idle1", "shoot", "grenade", "reload", "deploy"});
+    checkModel(dir, "v_357.mdl", {"idle1", "idle2", "idle3", "fidget1", "fire1", "reload", "draw"});
     checkModel(dir, "zombie.mdl", {"idle1", "walk"});
     checkModel(dir, "forklift.mdl", {"idle2", "drive"});
 

@@ -258,20 +258,25 @@ namespace hlds
                 // swings at the air, the two that land, out and away.)
                 {kViewModelName, !before,
                  {"draw", "holster", "attack1miss", "attack2", "attack3", "attack2hit", "attack3hit"}},
+                // (The others' likewise, as the game's own weapon code asks
+                // for them -- HlMonsters.hpp's weaponsTick: every way each
+                // is held still, its shot, its last round, its reloads.
+                // The first of each is what it is held as between them.)
                 {"v_9mmhandgun", !before && map != "c1a1" && map != "c1a1a",
-                 {"idle1", "shoot", "reload", "draw"}},
-                {"v_shotgun", !before && !early, {"sm_idle", "shoot", "reload", "draw"}},
+                 {"idle1", "idle2", "idle3", "shoot", "shoot_empty", "reload", "reload_noshot", "draw"}},
+                {"v_shotgun", !before && !early,
+                 {"sm_idle", "idle4", "deepidle", "shoot", "shoot_big", "start_reload", "reload", "pump", "draw"}},
                 // (Grenades are first found in c1a1b.)
                 {"v_grenade", !before && map != "c1a1" && map != "c1a1a" && map != "c1a1f",
-                 {"idle", "throw1", "draw"}},
+                 {"idle", "fidget", "pinpull", "throw1", "throw2", "throw3", "draw"}},
                 // (The MP5 is first found in c1a3, the .357 in c1a4g.)
                 {"v_9mmar", !before && !early && map.rfind("c1a2", 0) != 0,
-                 {"longidle", "shoot", "grenade", "reload", "deploy"}},
+                 {"longidle", "idle1", "shoot", "grenade", "reload", "deploy"}},
                 {"v_357",
                  !before && !early && map.rfind("c1a2", 0) != 0 && map.rfind("c1a3", 0) != 0 && map != "c1a4" &&
                      map != "c1a4b" && map != "c1a4d" && map != "c1a4e" && map != "c1a4f" && map != "c1a4k" &&
                      map != "c1a4i",
-                 {"idle1", "fire1", "reload", "draw"}},
+                 {"idle1", "idle2", "idle3", "fidget1", "fire1", "reload", "draw"}},
             };
             for (const Held &one : kHeld)
             {
@@ -338,6 +343,13 @@ namespace hlds
                 if (!quiet)
                     result.warnings.push_back("model '" + need.file + "' cannot be cooked: " + why);
                 return false;
+            }
+            // A clip the hand is told to play and its model has not got is
+            // a weapon that stands still when it should move: said.
+            if (!quiet && need.name.rfind("v_", 0) == 0)
+            {
+                for (const std::string &missing : modelReport.missingClips)
+                    result.warnings.push_back("model '" + need.file + "' has no clip '" + missing + "'");
             }
             out.atlas = std::move(cooked.atlas);
             out.triangles = modelReport.triangles;
@@ -485,6 +497,18 @@ namespace hlds
                 titles = parseTitles(std::string(text.begin(), text.end()));
         }
         cookOptions.titles = &titles;
+        // The chapter this map is part of (asked of all the game's maps,
+        // once: each chapter is named by the map that opens it).
+        {
+            static std::filesystem::path scanned;
+            static std::vector<std::pair<std::string, std::string>> titled;
+            if (scanned != options_.gameDir)
+            {
+                titled = chapterTitles(options_.gameDir, &titles);
+                scanned = options_.gameDir;
+            }
+            cookOptions.chapter = chapterOf(lower(name), titled);
+        }
         CookedLevel level;
         CookReport report;
         std::vector<std::uint8_t> bytes;
@@ -1188,5 +1212,85 @@ namespace hlds
             !writeFileAtomic(dir / "manifest.bin", hldata::writeManifest(manifest), error))
             return false;
         return true;
+    }
+    std::string chapterOf(const std::string &map, const std::vector<std::pair<std::string, std::string>> &titled)
+    {
+        const std::string head = map.substr(0, 4);
+        std::string like, likeFirst, before;
+        for (const auto &[name, title] : titled)
+        {
+            if (name.substr(0, 4) == head)
+            {
+                if (likeFirst.empty())
+                    likeFirst = title;
+                if (name <= map)
+                    like = title;
+            }
+            if (name <= map)
+                before = title;
+        }
+        if (!like.empty())
+            return like;
+        if (!likeFirst.empty())
+            return likeFirst;
+        if (!before.empty())
+            return before;
+        // (The game's first maps name none: their chapter's title is shown
+        // by the ride itself.)
+        return map.rfind("c0a0", 0) == 0 ? "C0A0TITLE" : std::string();
+    }
+
+    std::vector<std::pair<std::string, std::string>> chapterTitles(const std::filesystem::path &gameDir,
+                                                                   const TitlesBook *titles)
+    {
+        std::vector<std::pair<std::string, std::string>> out;
+        std::error_code ignored;
+        const fs::path maps = findNoCase(gameDir, "maps");
+        if (maps.empty())
+            return out;
+        for (const auto &entry : fs::directory_iterator(maps, ignored))
+        {
+            if (entry.path().extension() != ".bsp")
+                continue;
+            // The map's entities are a text at the place its first lump
+            // says; the world is the first of them.
+            std::vector<std::uint8_t> bytes;
+            std::string why;
+            if (!readFile(entry.path(), bytes, why) || bytes.size() < 12)
+                continue;
+            std::uint32_t at = 0, length = 0;
+            std::memcpy(&at, bytes.data() + 4, 4);
+            std::memcpy(&length, bytes.data() + 8, 4);
+            if (at > bytes.size() || length > bytes.size() - at)
+                continue;
+            const std::string text(bytes.begin() + at, bytes.begin() + at + length);
+            const std::size_t end = text.find("}");
+            const std::string world = text.substr(0, end);
+            const std::size_t key = world.find("\"chaptertitle\"");
+            if (key == std::string::npos)
+                continue;
+            const std::size_t open = world.find('"', key + 14);
+            const std::size_t close = open == std::string::npos ? open : world.find('"', open + 1);
+            if (close == std::string::npos)
+                continue;
+            std::string title = world.substr(open + 1, close - open - 1);
+            // (One that says nothing opens no chapter.)
+            const Title *said = titles != nullptr ? titles->find(title) : nullptr;
+            bool blank = said == nullptr;
+            if (said != nullptr)
+            {
+                blank = true;
+                for (char c : said->text)
+                    blank = blank && (c == ' ' || c == '\n' || c == '\r' || c == '\t');
+            }
+            if (title.empty() || blank)
+                continue;
+            std::string name = entry.path().stem().string();
+            for (char &c : name)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            out.emplace_back(name, title);
+        }
+        std::sort(out.begin(), out.end());
+        return out;
     }
 } // namespace hlds

@@ -88,6 +88,21 @@ namespace hlrt
         /// Put the player (and the train they rode) where the save has them.
         /// Call once its map is up.
         void placeFromSave(const hldata::SaveData &save);
+        /// Who came into a save's map with the player, if anyone did: what
+        /// its map is to be begun with (loadLevel's arrival), so that they
+        /// are there for the save's state to be laid over. False if it has
+        /// none.
+        static bool arrivalOf(const hldata::SaveData &save, hldata::Arrival &out);
+        /// The whole of the map's state as the save has it, laid over the
+        /// map just begun: every door, trigger and actor as it was. False
+        /// if the save has none that fits this map as it is cooked -- the
+        /// map is then as it begins, with the player put back (the older,
+        /// coarser way). Call after placeFromSave.
+        bool layState(const hldata::SaveData &save);
+        /// What a save says of itself: where, the chapter, how long played.
+        hldata::SaveHeading heading(const std::string &map) const;
+        /// Seconds played, this game.
+        std::uint32_t playSeconds() const { return static_cast<std::uint32_t>(playMs_ / 1000); }
 
         /// Where each brush entity is, for the renderer.
         const hldata::BrushState *brushStates() const { return brushStates_; }
@@ -119,6 +134,22 @@ namespace hlrt
         std::uint8_t *linkShut_ = nullptr; ///< ActorWorld::linkShut
         bool wasDeep_ = false; ///< the player was in water to the waist a frame ago
         std::vector<hldata::SaveMapState> visited_;
+        /// What a save keeps of the game beside the map's own state: how
+        /// long has been played, the chapter's title as it was last
+        /// shown, the music that was playing.
+        struct Kept
+        {
+            std::uint64_t playMs = 0;
+            std::int32_t music = -1;
+            std::uint32_t musicMs = 0; ///< how far into it
+            char chapter[44] = {};
+            std::uint32_t spare = 0;
+        };
+        std::uint64_t playMs_ = 0;
+        char chapter_[44] = {};
+        /// How the player came into this map (who came with them is in
+        /// it): kept for a save of the map.
+        hldata::Arrival came_;
     };
 
     extern Game game;

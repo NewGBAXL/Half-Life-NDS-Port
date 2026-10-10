@@ -1018,6 +1018,9 @@ namespace hldata
     inline constexpr std::uint8_t kMessageLogo = 1;
     /// Shown by itself when the map is come into (the chapter's name).
     inline constexpr std::uint8_t kMessageAtStart = 2;
+    /// The title of the chapter this map is part of (every map has one such
+    /// message, shown or not): what a save made in the map is listed under.
+    inline constexpr std::uint8_t kMessageChapter = 4;
 
     /// The size of one record of a section, which is how both the writer and
     /// the reader know that `size == count * recordSize`.

@@ -244,7 +244,7 @@ namespace hlds
             }
             else if (cls == "monster_barney")
             {
-                info = {true, ActorKind::Guard, "models/barney.mdl", {"idle1", "walk", "run", "diesimple", "shootgun2"}, "idle1"};
+                info = {true, ActorKind::Guard, "models/barney.mdl", {"idle1", "walk", "run", "diesimple", "shootgun", "shootgun2", "draw"}, "idle1"};
             }
             else if (cls == "monster_gman")
             {
@@ -539,7 +539,7 @@ namespace hlds
     void cookLogic(const BspFile &bsp, const std::vector<Entity> &entities,
                    const std::vector<int> &brushRecordOfEntity,
                    const std::vector<std::string> &models, LogicCook &out, const SentenceBook *book,
-                   const TitlesBook *titles)
+                   const TitlesBook *titles, const std::string &chapterName)
     {
         out = LogicCook();
         out.recordOfEntity.assign(entities.size(), -1);
@@ -709,6 +709,14 @@ namespace hlds
             const std::string chapter(entity.value("chaptertitle"));
             if (!chapter.empty())
                 addMessage(chapter, kMessageAtStart);
+        }
+        // The chapter the map is part of, for whoever lists the saves: its
+        // own title if it opens one, else the title of the chapter it is
+        // in -- there to be read, not shown.
+        if (!chapterName.empty())
+        {
+            const std::uint32_t id = addMessage(chapterName, 0);
+            out.messages[id].flags |= kMessageChapter;
         }
         auto hashOf = [](std::string_view text) -> std::uint32_t
         {
@@ -2312,9 +2320,19 @@ namespace hlds
         }
         // (The newer guns': where the map has them to be held.)
         if (std::find(models.begin(), models.end(), "v_9mmar") != models.end())
+        {
             use(CommonSound::Mp5Fire, CommonSound::Launcher);
+            use(CommonSound::Mp5Fire1, CommonSound::Launcher2);
+        }
         if (std::find(models.begin(), models.end(), "v_357") != models.end())
+        {
             use(CommonSound::PythonFire, CommonSound::PythonReload);
+            use(CommonSound::PythonFire2, CommonSound::PythonFire2);
+        }
+        if (std::find(models.begin(), models.end(), "v_shotgun") != models.end())
+            use(CommonSound::ShotgunDouble, CommonSound::ShotgunReload3);
+        if (std::find(models.begin(), models.end(), "v_grenade") != models.end())
+            use(CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3);
         // (What comes apart is heard to: where the map has the pieces.)
         if (std::find(models.begin(), models.end(), "agibs") != models.end() ||
             std::find(models.begin(), models.end(), "hgibs") != models.end())

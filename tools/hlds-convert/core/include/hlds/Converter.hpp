@@ -8,12 +8,14 @@
 // reports through plain callbacks, so that it knows nothing about a terminal
 // or a window.
 
+#include <utility>
 #include <atomic>
 #include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
 
+#include "hlds/TitlesFile.hpp"
 #include "HlManifest.hpp"
 #include "hlds/LightBake.hpp"
 
@@ -159,4 +161,18 @@ namespace hlds
         ConvertOptions options_;
         CommonResult common_;
     };
+    /// Which chapter `map` is part of: the name, in the game's titles.txt,
+    /// of that chapter's title. A map that opens a chapter says so itself
+    /// (its worldspawn's "chaptertitle"); the others are of the chapter
+    /// opened by the map whose name is most like theirs -- of those that
+    /// share their first four letters, the last one at or before them (or
+    /// the first, if they all come after: c3a2 is of the chapter c3a2e
+    /// opens); failing that, the last one before them of any name. A title
+    /// that says nothing (titles.txt has some) opens no chapter. `titled`:
+    /// each map that names a title, and the title -- by map name, sorted.
+    std::string chapterOf(const std::string &map, const std::vector<std::pair<std::string, std::string>> &titled);
+    /// Every map in the game's folder that names a chapter's title, and the
+    /// title: read out of each map's own entities.
+    std::vector<std::pair<std::string, std::string>> chapterTitles(const std::filesystem::path &gameDir,
+                                                                   const TitlesBook *titles);
 } // namespace hlds

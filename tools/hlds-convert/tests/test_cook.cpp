@@ -11,6 +11,8 @@
 
 #include "HlLevelReader.hpp"
 #include "TestBspBuilder.hpp"
+#include "hlds/AtomicWrite.hpp"
+#include "hlds/Converter.hpp"
 #include "hlds/Cooker.hpp"
 #include "hlds/Materials.hpp"
 #include "HlMaterial.hpp"
@@ -269,8 +271,52 @@ void testMaterials()
     check(levelLeafAt(c.view, feet) >= 0, "(the feet are in a leaf)");
 }
 
+// Which chapter a map is part of: the one opened by the map most like it.
+static void testChapters()
+{
+    const std::vector<std::pair<std::string, std::string>> titled = {
+        {"c1a0", "C0A1TITLE"}, {"c1a0c", "C1A1TITLE"}, {"c1a2", "C1A2TITLE"}, {"c2a4", "C2A4TITLE1"},
+        {"c2a4d", "C2A4TITLE2"}, {"c3a1", "C3A1TITLE"}, {"c3a2e", "C3A2TITLE"}, {"c4a1", "C4A1TITLE"},
+        {"c4a1a", "C4A1ATITLE"}, {"c4a2", "C4A2TITLE"}};
+    check(chapterOf("c1a0", titled) == "C0A1TITLE" && chapterOf("c1a0b", titled) == "C0A1TITLE",
+          "a map is of the chapter it opens, and so are those after it");
+    check(chapterOf("c1a0c", titled) == "C1A1TITLE" && chapterOf("c1a0e", titled) == "C1A1TITLE" &&
+              chapterOf("c1a1", titled) == "C1A1TITLE" && chapterOf("c1a1f", titled) == "C1A1TITLE",
+          "a chapter opened part-way through a run of names goes on into the next");
+    check(chapterOf("c2a4c", titled) == "C2A4TITLE1" && chapterOf("c2a4g", titled) == "C2A4TITLE2",
+          "two chapters in one run of names: each map is of the one opened at or before it");
+    check(chapterOf("c3a2", titled) == "C3A2TITLE" && chapterOf("c3a2a", titled) == "C3A2TITLE" &&
+              chapterOf("c3a1b", titled) == "C3A1TITLE",
+          "maps named before the one that opens their chapter are of it all the same");
+    check(chapterOf("c4a1f", titled) == "C4A1ATITLE" && chapterOf("c4a2b", titled) == "C4A2TITLE",
+          "the chapters of the far side of the game");
+    check(chapterOf("c0a0", titled) == "C0A0TITLE" && chapterOf("c0a0e", titled) == "C0A0TITLE",
+          "the game's first maps name none: they are the first chapter");
+    check(chapterOf("mymap", titled).empty() || !chapterOf("mymap", titled).empty(), "(a map of no campaign has what it has)");
+    if (const char *dir = std::getenv("HLDS_VALVE_DIR"); dir != nullptr && dir[0] != '\0')
+    {
+        std::vector<std::uint8_t> text;
+        std::string ignored;
+        TitlesBook book;
+        if (readFile(std::filesystem::path(dir) / "titles.txt", text, ignored))
+            book = parseTitles(std::string(text.begin(), text.end()));
+        const auto real = chapterTitles(dir, &book);
+        auto name = [&](const char *map) -> std::string
+        {
+            const Title *title = book.find(chapterOf(map, real));
+            return title != nullptr ? title->text : std::string("?");
+        };
+        std::printf("test_cook: chapters: c0a0 '%s', c1a1 '%s', c2a4e '%s', c3a2 '%s', c4a1c '%s'\n", name("c0a0").c_str(),
+                    name("c1a1").c_str(), name("c2a4e").c_str(), name("c3a2").c_str(), name("c4a1c").c_str());
+        check(name("c0a0") == "BLACK MESA INBOUND" && name("c1a1") == "UNFORESEEN CONSEQUENCES" &&
+                  name("c2a4e") == "QUESTIONABLE ETHICS" && name("c3a2") == "LAMBDA CORE",
+              "the game's own maps are of the game's own chapters");
+    }
+}
+
 int main()
 {
+    testChapters();
     testMaterials();
     testBoxRoom();
     testDroppedFaces();

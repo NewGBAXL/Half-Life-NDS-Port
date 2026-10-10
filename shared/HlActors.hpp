@@ -82,9 +82,27 @@ namespace hldata
         /// player before he ran.
         std::int16_t foe = -1;
         bool wasFollowing = false;
+        /// A guard (HlPeople.hpp): where what he is after was when he last
+        /// saw it, whether he sees it now and has a clear shot at it; his
+        /// pistol (0 in its holster, 1 coming out, 2 out). (`painMs`, a
+        /// soldier's too, is how long until he may cry out again.)
+        fx foeAt[3] = {0, 0, 0};
+        bool foeSeen = false;
+        bool clearShot = false;
+        std::uint8_t gun = 0;
+        std::int32_t gunMs = 0;
         /// A barnacle's tongue: how far it hangs below the mouth. (The big
         /// turret's eye, too: how bright, 0..255 -- not Q12.)
         fx reach = 0;
+        /// What one of the people stands on (HlMonsters.hpp's peopleGround):
+        /// a brush, by its number; -1 the world, or nothing the map gave
+        /// them; -2 not yet looked at. Where that brush was a tick ago, so
+        /// that they go where it goes; and whether they are falling --
+        /// because it broke, or went from under them.
+        std::int16_t groundMover = -2;
+        fx groundAt[3] = {0, 0, 0};
+        bool airborne = false;
+        std::int32_t hurtMs = 0;     ///< until a place that hurts may hurt them again
         std::uint8_t attack = 0;     ///< which of its kind's attacks it is making (kAttack*)
         std::uint8_t item = 0;       ///< ItemKind, for something to pick up
         std::uint16_t fires = 0;     ///< ... and the name id of what taking it fires
@@ -292,6 +310,7 @@ namespace hldata
         std::uint16_t doorWanted[4] = {};
         int doorsWanted = 0;
         std::uint32_t seed = 12345; ///< what little chance there is in a fight
+        std::int32_t hurtLookMs = 0; ///< until the places that hurt are next looked at (HlMonsters.hpp)
         /// Set by what happens to the player's things this tick (kGot*): the
         /// caller shows it, and clears it.
         std::uint32_t got = 0;
@@ -399,12 +418,17 @@ namespace hldata
                                              "sitting3"};
         return nameHash(kNames[which < 0 || which > 4 ? 4 : which]);
     }
-    inline std::uint32_t g_sitRoll = 0x51773;
-    inline int sittingNext()
+    /// Which way of sitting comes next for `actor`: by chance, from his
+    /// own count of them -- which is his, and goes into a save with him
+    /// (nothing the game does by chance is kept anywhere but in its state).
+    inline int sittingNext(ActorState &actor)
     {
-        g_sitRoll = g_sitRoll * 1664525u + 1013904223u;
-        const int roll = static_cast<int>((g_sitRoll >> 16) % 100);
-        return roll < 40 ? 4 : (roll < 50 ? 0 : (roll < 60 ? 1 : (roll < 80 ? 3 : 2)));
+        ++actor.struck;
+        std::uint32_t roll = (static_cast<std::uint32_t>(actor.pos[0]) ^ (static_cast<std::uint32_t>(actor.pos[1]) << 7)) +
+                             actor.struck * 2654435761u;
+        roll = roll * 1664525u + 1013904223u;
+        const int of = static_cast<int>((roll >> 16) % 100);
+        return of < 40 ? 4 : (of < 50 ? 0 : (of < 60 ? 1 : (of < 80 ? 3 : 2)));
     }
 
     /// The box the player cannot walk into, kept where the actor is.
@@ -617,7 +641,7 @@ namespace hldata
         if (finished && actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter) &&
             actor.scriptPhase == kActorFree && actor.ai == 0)
         {
-            const int next = model->findClip(sittingClip(sittingNext()));
+            const int next = model->findClip(sittingClip(sittingNext(actor)));
             if (next >= 0)
             {
                 actor.clip = static_cast<std::int16_t>(next);
