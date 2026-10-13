@@ -26,10 +26,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # BlocksDS and its ARM compiler at their newest (the code is C++26: it wants
 # the current GCC), and ptexconv, which the converter runs for textures.
-# (Twice: the first time the package manager only brings itself up to date.)
-RUN wf-pacman -Syu --noconfirm && \
-    wf-pacman -Syu --noconfirm && \
-    wf-pacman -S --noconfirm --needed blocksds-toolchain blocksds-ptexconv && \
+# (The upgrade twice: the first time the package manager only brings itself
+# up to date. And each step up to five times, a few seconds apart: the name
+# servers Docker hands a build on some machines now and then answer "no such
+# host" for one that exists.)
+RUN again() { n=1; until "$@"; do \
+        [ "$n" -ge 5 ] && return 1; n=$((n + 1)); \
+        echo "... did not work: again in 5 seconds ($n of 5)"; sleep 5; done; } && \
+    again wf-pacman -Syu --noconfirm && \
+    again wf-pacman -Syu --noconfirm && \
+    again wf-pacman -S --noconfirm --needed blocksds-toolchain blocksds-ptexconv && \
     wf-pacman -Scc --noconfirm && \
     mkdir -p "${BLOCKSDSEXT}"
 

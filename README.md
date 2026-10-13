@@ -65,6 +65,12 @@ HLDS_VALVE_DIR=/path/to/Half-Life/valve ./docker.sh \
 (With `docker compose` directly: add
 `-v "C:\path\to\Half-Life\valve:/valve:ro"` after `run --rm`.)
 
+If building the image stops with `Could not resolve host` (seen with
+Docker Desktop on Windows), it is Docker's name server and not the
+download: run the command again, and if it keeps happening give Docker a
+name server of your choosing -- Docker Desktop > Settings > Docker Engine,
+add `"dns": ["1.1.1.1", "8.8.8.8"]`, Apply & restart.
+
 The DSi's DSP audio is an experiment, off by default in the game, and its
 toolchain is not in the image unless asked for, because that means compiling
 clang (allow an hour): `WITH_TEAK=1 ./docker.sh ./make.sh`. Without it the
