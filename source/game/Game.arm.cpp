@@ -674,9 +674,12 @@ namespace hlrt
             const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                player.state.origin[2] + player.state.viewHeight};
             const bool alive = player.state.health > 0;
+            // (A slot touched, or a step to the weapon before or after.)
+            const int pick = input.weaponPick != 0 ? input.weaponPick
+                                                   : weaponStepped(player.state.inv, input.weaponStep);
             const std::uint32_t did = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
                                                   camera.right, camera.up, alive && input.attack,
-                                                  false, ms, alive && input.second, alive ? input.weaponPick : 0,
+                                                  false, ms, alive && input.second, alive ? pick : 0,
                                                   alive && input.reloadPressed);
             // What has broken: its pieces, each a patch of the thing's
             // own texture, thrown from where it was.

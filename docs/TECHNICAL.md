@@ -642,6 +642,18 @@ Milestone 11, "levels of detail".
   when that is switched on. Nothing is left out for a DS that it had
   before: the heaviest soldier maps (c1a3a, c2a2b1) leave it 1.6 MB and more
   free.
+- The controls (`shared/HlControls.hpp`). What is held this frame goes in
+  and what the player is doing comes out, by one function for both layouts,
+  either hand and the two swaps of pad and stylus; the console's part
+  (`source/game/Input.cpp`) only reads the hardware. So the host tests run
+  it (`test_controls`): the classic layout is held, frame by frame over
+  fifty thousand frames of random pressing and dragging, to the code the
+  game had when there was one layout; the modern one, the hand and the
+  swaps to what the README says of them. A tap is a touch of the aim pad
+  lifted within a fifth of a second that went less than six pixels; it is
+  USE as it lifts, without waiting to see whether a second tap makes it a
+  jump -- waiting would make every USE a third of a second late. Settings
+  saved before there were layouts are still read.
 
 ## Not yet
 

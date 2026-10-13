@@ -24,6 +24,7 @@ separated by `;`:
 | `sleep <s>` | wait |
 | `ready [s]` | wait until the game is on screen (the emulator can take half a minute over the card first; at most `s` seconds, 90 if not given) |
 | `key <keysym> <s>` | hold a key (your melonDS key mapping applies) |
+| `down <keysym>`, `up <keysym>` | press and let go of a key across other commands: two buttons at once |
 | `drag <x0> <y0> <x1> <y1>` | stylus drag, in window pixels |
 | `tap <x> <y>` | a quick touch (two close together are a jump) |
 | `sweep <s> <px per step>` | hold the stylus and sweep left-right for a time |

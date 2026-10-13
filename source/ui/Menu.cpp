@@ -43,6 +43,10 @@ namespace hlrt
             kAmbience,
             kReadout,
             kHand,
+            kControls,
+            kScheme,
+            kPadSide,
+            kPadUp,
             kBob,
             kBack,
             kGraphics,
@@ -77,7 +81,7 @@ namespace hlrt
         const Row kOptionRows[] = {{Kind::Button, kGraphics, "GRAPHICS"}, {Kind::Value, kDsp, "DSi sound"},
                                    {Kind::Slider, kMusic, "Music"},     {Kind::Slider, kEffects, "Effects"},
                                    {Kind::Slider, kVoices, "Voices"},   {Kind::Slider, kAmbience, "Ambience"},
-                                   {Kind::Value, kHand, "Buttons"},     {Kind::Value, kBob, "View bob"},
+                                   {Kind::Button, kControls, "CONTROLS"}, {Kind::Value, kBob, "View bob"},
                                    {Kind::Value, kReadout, "Debug readout"},
                                    {Kind::Button, kBack, "BACK"}};
 
@@ -93,6 +97,15 @@ namespace hlrt
                                      {Kind::Value, kModelLimit, "Models at once"},
                                      {Kind::Value, kDrawDistance, "Draw distance"},
                                      {Kind::Button, kBack, "BACK"}};
+
+        // The buttons: which layout, which hand, and which of the pad and
+        // the stylus turns and which moves (shared/HlControls.hpp). Under
+        // the rows, what each button then does.
+        const Row kControlRows[] = {{Kind::Value, kScheme, "Layout"},
+                                    {Kind::Value, kHand, "Stylus hand"},
+                                    {Kind::Value, kPadSide, "Pad left/right"},
+                                    {Kind::Value, kPadUp, "Pad up/down"},
+                                    {Kind::Button, kBack, "BACK"}};
 
         // Where the rows are: the first page's are big and few, the
         // others' as many as the screen holds.
@@ -138,6 +151,11 @@ namespace hlrt
             {
                 count = 2;
                 return kConfirmRows;
+            }
+            if (page == 6)
+            {
+                count = static_cast<int>(sizeof(kControlRows) / sizeof(kControlRows[0]));
+                return kControlRows;
             }
             if (page == 1)
             {
@@ -240,6 +258,15 @@ namespace hlrt
         }
         for (int row = 0; row < rowCount(); ++row)
             drawRow(row, false);
+        if (page_ == Page::Controls)
+        {
+            // What the buttons do, as they are now set.
+            const FontView &small = touchCanvas.font(kFontSmall);
+            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
+            for (int line = 0; controlsLegend(settings.controls(), line) != nullptr; ++line)
+                drawTextCentred(canvas, small, 128, top + line * (small.height() + 3),
+                                controlsLegend(settings.controls(), line), inkFor(small, kUiGrey));
+        }
     }
 
     void Menu::drawRow(int row, bool down)
@@ -309,8 +336,19 @@ namespace hlrt
             std::snprintf(text, sizeof(text), "%s: %s", item.label, kDrawDistanceName[settings.graphics.drawDistance]);
             break;
         case kHand:
-            // (Which side of the touch screen its column of buttons is.)
+            // (Which side of the touch screen its column of buttons is,
+            // and which hand has the pad and the trigger.)
             std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.leftHanded ? "left" : "right");
+            break;
+        case kScheme:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label,
+                          settings.controlScheme == kControlsModern ? "modern" : "classic");
+            break;
+        case kPadSide:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.padTurns ? "turn" : "sidestep");
+            break;
+        case kPadUp:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.padLooks ? "look" : "move");
             break;
         default:
             std::snprintf(text, sizeof(text), "%s", item.label);
@@ -420,7 +458,7 @@ namespace hlrt
         case kBack:
             // (From the graphics, back to the options they are among; from
             // the list, to where it was asked for.)
-            page_ = page_ == Page::Graphics ? Page::Options
+            page_ = page_ == Page::Graphics || page_ == Page::Controls ? Page::Options
                                             : (page_ == Page::Saves ? asker_ : (title_ ? Page::Title : Page::Main));
             settings.save();
             draw();
@@ -479,9 +517,27 @@ namespace hlrt
             settings.viewBob = !settings.viewBob;
             drawRow(row, false);
             break;
+        case kControls:
+            page_ = Page::Controls;
+            draw();
+            break;
+        // (The whole page again: the lines under the rows say what the
+        // buttons now do.)
         case kHand:
             settings.leftHanded = !settings.leftHanded;
-            drawRow(row, false);
+            draw();
+            break;
+        case kScheme:
+            settings.controlScheme = static_cast<std::uint8_t>((settings.controlScheme + 1) % kControlsSchemes);
+            draw();
+            break;
+        case kPadSide:
+            settings.padTurns = !settings.padTurns;
+            draw();
+            break;
+        case kPadUp:
+            settings.padLooks = !settings.padLooks;
+            draw();
             break;
         default:
             break;

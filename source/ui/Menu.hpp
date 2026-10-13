@@ -1,6 +1,6 @@
 #pragma once
 
-// The pause menu, on the touch screen: two pages of rows -- buttons, which
+// The pause menu, on the touch screen: pages of rows -- buttons, which
 // act when the stylus is lifted from them; rows that show a setting and
 // change it when pressed; and sliders, which follow the stylus -- and the
 // keyboard the debug command line is typed on.
@@ -55,6 +55,7 @@ namespace hlrt
             Title,
             Saves,   ///< the list: to load from, or to save into
             Confirm, ///< "overwrite?", "load?", "new game?"
+            Controls, ///< the layout of the buttons
         };
         const hldata::SaveIndex *saves_ = nullptr;
         bool title_ = false;   ///< it is the title's menu, not the pause's

@@ -73,6 +73,12 @@ for command in sys.argv[1].split(';'):
         key(a[1], True)
         time.sleep(float(a[2]))
         key(a[1], False)
+    elif a[0] == 'down':
+        # down <key> / up <key>: hold a key across other commands (two
+        # buttons at once: "down z;key Down 0.1;up z").
+        key(a[1], True)
+    elif a[0] == 'up':
+        key(a[1], False)
     elif a[0] == 'ready':
         # ready [seconds]: wait until the game is on the top screen (the
         # emulator may take a long time over the card before it starts, and

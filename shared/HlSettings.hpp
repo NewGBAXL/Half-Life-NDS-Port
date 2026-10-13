@@ -66,18 +66,32 @@ namespace hldata
         std::uint8_t viewBob = 0;
         /// The fog, and how much detail is given up for speed (HlFog.hpp).
         GraphicsSettings graphics;
+        /// The layout of the buttons (kControls*), and which of the pad and
+        /// the stylus turns and which moves (HlControls.hpp).
+        std::uint8_t controlScheme = 0;
+        std::uint8_t padTurns = 0;
+        std::uint8_t padLooks = 0;
 
+        /// What a file of version 8 held: all but the controls.
         template <class Ar>
-        void serialize(Ar &ar)
+        void serializeEight(Ar &ar)
         {
             ar &renderMode &dspAudio &volume[0] &volume[1] &volume[2] &volume[3] &debugReadout &leftHanded &viewBob;
             ar &graphics.fog &graphics.fogStrength &graphics.fogDistance &graphics.fogColour &graphics.modelDetail &
                 graphics.worldDetail &graphics.modelLimit &graphics.drawDistance;
         }
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            serializeEight(ar);
+            ar &controlScheme &padTurns &padLooks;
+        }
     };
 
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 8;
+    inline constexpr std::uint16_t kSettingsVersion = 9;
+    /// The version before, which is still read: it had no controls to choose.
+    inline constexpr std::uint16_t kSettingsVersionBefore = 8;
     inline constexpr int kVolumeMusic = 0;
     inline constexpr int kVolumeEffects = 1;
     inline constexpr int kVolumeVoices = 2;
@@ -123,14 +137,20 @@ namespace hldata
             return false;
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSettingsMagic, sizeof(header.magic)) != 0 ||
-            header.version != kSettingsVersion || header.payloadBytes != size - sizeof(header) ||
+            (header.version != kSettingsVersion && header.version != kSettingsVersionBefore) ||
+            header.payloadBytes != size - sizeof(header) ||
             crc32(bytes + sizeof(header), header.payloadBytes) != header.crc32)
             return false;
 
         SettingsData read;
         yas::mem_istream is(bytes + sizeof(header), header.payloadBytes);
         yas::binary_iarchive<yas::mem_istream, flags> ia(is);
-        ia &read;
+        if (header.version == kSettingsVersionBefore)
+            read.serializeEight(ia);
+        else
+            ia &read;
+        if (read.controlScheme > 1 || read.padTurns > 1 || read.padLooks > 1)
+            return false;
         if (read.renderMode >= static_cast<std::uint8_t>(RenderMode::Count) || read.dspAudio > 1 ||
             read.debugReadout > 1 || read.leftHanded > 1 || read.viewBob > 1 || !read.graphics.valid())
             return false;

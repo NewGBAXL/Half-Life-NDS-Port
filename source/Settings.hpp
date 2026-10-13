@@ -3,6 +3,7 @@
 // The player's settings on the console: loaded once at boot, saved when one
 // changes. The format and its checks are in shared/HlSettings.hpp.
 
+#include "HlControls.hpp"
 #include "HlSettings.hpp"
 
 class Settings
@@ -17,6 +18,16 @@ public:
     bool debugReadout = false;
     /// The stylus is in the left hand: the touch screen is mirrored.
     bool leftHanded = false;
+    /// The layout of the buttons (hldata::kControls*), and which of the pad
+    /// and the stylus turns and which moves.
+    std::uint8_t controlScheme = hldata::kControlsClassic;
+    bool padTurns = false;
+    bool padLooks = false;
+    /// The four of them, for whoever reads the buttons.
+    hldata::ControlSettings controls() const
+    {
+        return hldata::ControlSettings{controlScheme, leftHanded, padTurns, padLooks};
+    }
     /// The view bobs and leans with a walk (off unless asked for).
     bool viewBob = false;
     /// The fog, and how much detail is given up for speed (HlFog.hpp).

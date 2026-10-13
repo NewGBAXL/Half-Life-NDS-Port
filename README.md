@@ -113,19 +113,36 @@ converts one map; the other commands and what the files are made of are in
 
 ## Controls
 
+Two layouts, chosen in the pause menu under OPTIONS > CONTROLS. The page
+also says what each button does as it is set.
+
+| | CLASSIC | MODERN |
+|---|---|---|
+| Stylus drag | look around | look around |
+| D-pad | move | move |
+| A B X Y | move, as the D-pad | X: weapon before · Y: weapon after · B: reload · A: jump |
+| L | fire, or swing the crowbar | the same |
+| R | the second trigger: the pistol's fast fire, both barrels of the shotgun, the MP5's grenade launcher (the .357: reload) | the same |
+| R + D-pad down / up | | crouch, and stay crouched / stand |
+| One short tap on the pad | | USE |
+| Two quick taps | jump (hold the second to keep it held) | the same |
+
+Whichever the layout:
+
 | | |
 |---|---|
-| Stylus drag | look around |
-| D-pad, or A B X Y | move |
-| L | fire, or swing the crowbar |
-| R | the second trigger: the pistol's fast fire, both barrels of the shotgun, the MP5's grenade launcher (the .357: reload) |
 | Touch a weapon's slot | take that weapon; the one in hand: reload it |
-| Touch RELOAD | reload |
-| Touch JUMP, or tap the pad twice | jump (hold it, or the second tap, to keep it held) |
-| Touch DUCK | crouch |
-| Touch USE | press a button, open a use-only door, charge at a wall unit |
-| Start, or touch MENU | pause menu: resume, quick save, save game, load game, new game, options (graphics: rendering mode, fog, detail; DSi sound, volumes, buttons left or right, view bob, debug readout), debug command line |
+| Touch RELOAD, JUMP, DUCK, USE | what they say (USE: press a button, open a use-only door, charge at a wall unit) |
+| Start, or touch MENU | pause menu: resume, quick save, save game, load game, new game, options, debug command line |
 | Select, or touch the lamp | the suit's lamp |
+
+**Stylus hand: left** mirrors the touch screen and changes the buttons over:
+A B X Y become the pad (X up, B down, Y left, A right), the D-pad takes the
+face buttons' work, and R fires with L as the second trigger.
+
+**Pad left/right: turn** and **Pad up/down: look** give that axis of the pad
+to the view; the stylus then moves on it instead, as a stick: push it away
+from where it touched down.
 
 The pause menu's COMMAND opens a debug command line on the on-screen
 keyboard: `map <name>` goes to a map, `give` hands over every weapon with its

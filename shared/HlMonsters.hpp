@@ -2820,6 +2820,23 @@ namespace hldata
         return kWeaponNone;
     }
 
+    /// The weapon `step` places on from the one in hand (1 the next, -1 the
+    /// one before), among those the player has, going round: what to ask
+    /// weaponsTick to take out. kWeaponNone for no step, or nothing else to
+    /// take.
+    inline std::uint8_t weaponStepped(const Inventory &inv, int step)
+    {
+        if (step == 0)
+            return kWeaponNone;
+        for (int n = 1; n < kWeaponCount; ++n)
+        {
+            const int at = (inv.current + (step > 0 ? n : kWeaponCount - n)) % kWeaponCount;
+            if (at != kWeaponNone && at != inv.current && (inv.have & (1u << at)))
+                return static_cast<std::uint8_t>(at);
+        }
+        return kWeaponNone;
+    }
+
     namespace detail
     {
         /// The crowbar's blow, as the game makes it: along the view for
