@@ -38,6 +38,10 @@ namespace hlrt
         /// away: bits of people went missing. Drawn both ways, the depth
         /// buffer does the hiding.
         constexpr NEA_CullingEnum kCull = NEA_CULL_NONE;
+
+        /// How many steps to pose an actor; lower is better.
+        /// 256: full frame, 128: half frame, 64: quarter frame.
+        constexpr std::uint32_t kPoseStep = 64;
     } // namespace
 
     namespace
@@ -65,9 +69,10 @@ namespace hlrt
     HL_ITCM const BoneMatrix *ModelDraw::posed(const ActorState &actor, const ModelView &model,
                                        unsigned modelIndex, int id)
     {
-        // To the nearest whole frame of the clip: the game's clips are 15 to
-        // 30 frames a second, so a pose serves two to four of the screen's.
-        const std::uint32_t frame = (actor.frame + 0x80u) & ~0xFFu;
+        // Needed for proper 60fps blending between animations
+        constexpr std::uint32_t kStep = kPoseStep;
+        const std::uint32_t frame = (actor.frame + kStep / 2) & ~(kStep - 1);
+
         // What the game sets by hand on top of the clip: a barnacle's tongue
         // let out, a turret's gun turned (HlActors.hpp).
         std::int32_t controls[kModelControls];
