@@ -1,6 +1,57 @@
 {
     "version": "2.0.0",
     "tasks": [
+        // ------------------------------------------------ in the container
+        // Nothing to install but Docker: see the README. On Windows the
+        // tasks call docker compose themselves; elsewhere ./docker.sh, which
+        // keeps the files the build makes yours.
+        {
+            "label": "Docker: build ROM",
+            "type": "shell",
+            "command": "./docker.sh ./make.sh",
+            "windows": { "command": "docker compose run --rm dev ./make.sh" },
+            "problemMatcher": ["$gcc"],
+            "group": "build"
+        },
+        {
+            "label": "Docker: build converter and test",
+            "type": "shell",
+            "command": "./docker.sh bash -c 'cmake -S tools/hlds-convert -B build/convert-docker -DHLDS_BUILD_GUI=OFF && cmake --build build/convert-docker -j4 && ctest --test-dir build/convert-docker --output-on-failure'",
+            "windows": {
+                "command": "docker compose run --rm dev bash -c 'cmake -S tools/hlds-convert -B build/convert-docker -DHLDS_BUILD_GUI=OFF && cmake --build build/convert-docker -j4 && ctest --test-dir build/convert-docker --output-on-failure'"
+            },
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(?:/work/)?(.*?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            },
+            "group": "build"
+        },
+        {
+            "label": "Docker: clean ROM",
+            "type": "shell",
+            "command": "./docker.sh ./clean.sh",
+            "windows": { "command": "docker compose run --rm dev ./clean.sh" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Docker: shell",
+            "type": "shell",
+            "command": "./docker.sh",
+            "windows": { "command": "docker compose run --rm dev" },
+            "problemMatcher": [],
+            "presentation": { "focus": true, "panel": "dedicated" }
+        },
+        {
+            "label": "Docker: rebuild image",
+            "type": "shell",
+            "command": "docker compose build dev",
+            "problemMatcher": []
+        },
+        // ------------------------------------- with BlocksDS installed here
         {
             "label": "Configure converter",
             "type": "shell",
@@ -10,7 +61,7 @@
         {
             "label": "Build converter",
             "type": "shell",
-            "command": "cmake --build build/convert -j && ctest --test-dir build/convert --output-on-failure",
+            "command": "cmake --build build/convert -j4 && ctest --test-dir build/convert --output-on-failure",
             "problemMatcher": ["$gcc"],
             "group": "build"
         },

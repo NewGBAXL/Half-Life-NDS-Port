@@ -1,0 +1,20 @@
+# The build environment as a container: see docker/Dockerfile and the README.
+#
+#   docker compose build
+#   docker compose run --rm dev ./make.sh
+#
+# On Linux and macOS ./docker.sh does the same and keeps the files it makes
+# yours.
+services:
+  dev:
+    build:
+      context: docker
+      args:
+        WITH_TEAK: ${WITH_TEAK:-0}
+    image: half-life-nds-port-dev
+    working_dir: /work
+    user: "${HLDS_UID:-1000}:${HLDS_GID:-1000}"
+    environment:
+      HLDS_JOBS: ${HLDS_JOBS:-4}
+    volumes:
+      - .:/work

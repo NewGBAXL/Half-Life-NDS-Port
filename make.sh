@@ -5,7 +5,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/env"
+# (HLDS_VENV: a venv somewhere else -- the build container has its own.)
+VENV_DIR="${HLDS_VENV:-${SCRIPT_DIR}/env}"
 
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
     echo "ERROR: Python venv not found at ${VENV_DIR}." >&2

@@ -1,0 +1,8 @@
+# The scripts run in a Linux container whatever the system they were checked
+# out on: never with Windows line endings.
+*.sh    text eol=lf
+*.py    text eol=lf
+*.s     text eol=lf
+Makefile.teak text eol=lf
+docker/Dockerfile text eol=lf
+*.bmp   binary
