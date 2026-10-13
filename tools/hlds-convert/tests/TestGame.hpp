@@ -34,6 +34,7 @@ namespace hldstest
         LevelView view;
         MoveWorld move;
         std::vector<MoverHull> movers;
+        std::vector<MoverReach> reach; ///< MoveWorld::reach
         std::vector<BrushState> brushStates;
         std::vector<LogicState> states;
         std::vector<LadderVolume> ladders;
@@ -196,6 +197,7 @@ namespace hldstest
         g.move.crouched = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipCrouched};
         g.move.large = Hull{v.clipNodes, v.planes, v.planeTypes, v.models[0].clipLarge};
         g.movers.resize(v.brushCount);
+        g.reach.assign(v.brushCount + 1, MoverReach());
         g.brushStates.resize(v.brushCount);
         g.states.resize(v.logicCount);
         g.cornerState.resize(v.cornerCount + 1);
@@ -212,6 +214,7 @@ namespace hldstest
         g.move.visSize = v.visSize;
         g.move.visLeafCount = v.header->visLeafCount;
         g.move.movers = g.movers.data();
+        g.move.reach = g.reach.data();
         g.move.moverCount = static_cast<int>(g.movers.size());
         int ladderCount = 0;
         for (std::uint32_t i = 0; i < v.logicCount; ++i)
@@ -263,6 +266,7 @@ namespace hldstest
         g.logic.spriteCount = static_cast<int>(v.spriteCount);
         g.logic.nameCount = static_cast<int>(v.nameCount);
         logicInit(g.logic);
+        moverReachAll(g.move);
         actorsInit(g.actors, v.actors, static_cast<int>(v.actorCount), v.nameHashes, g.move);
 
         g.player = PlayerState();

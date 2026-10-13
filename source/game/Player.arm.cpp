@@ -16,8 +16,8 @@
 // ARM code (the file name says so), for the movement's 64-bit multiplies; NOT
 // in fast memory. The movement runs once a frame, and its ten thousand
 // instructions are mostly branches not taken. What it calls thousands of
-// times -- the hull trace -- is in fast memory, in Trace.itcm.arm.cpp, and is
-// reached through MoveWorld::trace.
+// times -- the hull trace -- is in fast memory by itself (HL_HOT, in
+// HlFixed.hpp), for this and for everything else that traces.
 
 namespace hlrt
 {

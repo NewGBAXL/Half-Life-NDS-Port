@@ -27,7 +27,6 @@
 
 namespace hlrt
 {
-    WorldDraw worldDraw;
 
     using namespace hldata;
     using namespace worldparts;

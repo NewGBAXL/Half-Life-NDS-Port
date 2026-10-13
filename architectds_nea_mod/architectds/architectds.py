@@ -235,7 +235,11 @@ class GenericBinary():
             # failed compile look like a successful build: locally the previous
             # .nds stayed on disk as if it were fresh, and in CI the job went
             # green and only the artifact upload noticed there was no ROM.
-            result = subprocess.run(['ninja', '-f', ninja_file_path], env=my_env)
+            # (HLDS_JOBS=4 keeps ninja to four compilers at once: its own
+            # default is one more than the machine has cores, and each
+            # compiler of this code takes a good share of a gigabyte.)
+            jobs = ['-j', os.environ['HLDS_JOBS']] if os.environ.get('HLDS_JOBS') else []
+            result = subprocess.run(['ninja', '-f', ninja_file_path] + jobs, env=my_env)
             if result.returncode != 0:
                 import sys
                 sys.exit(result.returncode)
@@ -600,14 +604,14 @@ class GenericArmBinary(GenericCpuBinary):
             if in_path.endswith('.arm.cpp'):
                 self.print(
                     f'build {obj_out_path}: cxx_arm {in_path} || {out_path_dir} {assets_h_flag}\n'
-                    f'  cxxflags = {cxxflags} -marm -mlong-calls\n'
+                    f'  cxxflags = {cxxflags} -marm\n'
                     f'  dep = {dep_out_path}\n'
                     '\n'
                 )
             elif in_path.endswith('.arm.c'):
                 self.print(
                     f'build {obj_out_path}: cc_arm {in_path} || {out_path_dir} {assets_h_flag}\n'
-                    f'  cflags = {cflags} -marm -mlong-calls\n'
+                    f'  cflags = {cflags} -marm\n'
                     f'  dep = {dep_out_path}\n'
                     '\n'
                 )

@@ -25,5 +25,7 @@
 #include <nds.h>
 
 #include <NEAMain.h>
+
+#include "Hot.hpp"
 #include <filesystem.h>
 #include <fat.h>

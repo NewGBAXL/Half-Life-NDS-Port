@@ -114,6 +114,7 @@ namespace hlrt
     private:
         hldata::BrushState *brushStates_ = nullptr;
         hldata::MoverHull *movers_ = nullptr;
+        hldata::MoverReach *reach_ = nullptr; ///< MoveWorld::reach
         hldata::LogicState *states_ = nullptr;
         hldata::LadderVolume *ladders_ = nullptr;
         std::uint8_t *cornerState_ = nullptr;

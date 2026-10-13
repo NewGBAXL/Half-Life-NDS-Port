@@ -33,6 +33,12 @@
     .type   __aeabi_ldivmod, %function
 __aeabi_ldivmod:
     push    {r4, r5}
+#ifdef HLDS_PROFILE
+    ldr     r12, =hlHwCount             @ (a build that measures counts them)
+    ldr     r4, [r12]
+    add     r4, r4, #1
+    str     r4, [r12]
+#endif
     ldr     r12, =REG_DIVCNT
     ldr     r4, =REG_IME
     ldrh    r5, [r4]
@@ -81,6 +87,12 @@ __aeabi_uldivmod:
     .global hlHwSqrt64
     .type   hlHwSqrt64, %function
 hlHwSqrt64:
+#ifdef HLDS_PROFILE
+    ldr     r12, =hlHwCount
+    ldr     r2, [r12, #4]
+    add     r2, r2, #1
+    str     r2, [r12, #4]
+#endif
     ldr     r12, =REG_SQRTCNT
     ldr     r2, =REG_IME
     ldrh    r3, [r2]
@@ -98,3 +110,12 @@ hlHwSqrt64:
     .size   hlHwSqrt64, . - hlHwSqrt64
 
     .pool
+
+#ifdef HLDS_PROFILE
+@ How many divides and how many roots, since whoever reads it last cleared it.
+    .section .bss.hlHwCount, "aw", %nobits
+    .align  2
+    .global hlHwCount
+hlHwCount:
+    .space  8
+#endif

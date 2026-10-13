@@ -29,6 +29,10 @@
 
 namespace hlrt
 {
+    // (Here and not in WorldDraw.itcm.arm.cpp: the code that sets it up
+    // runs once, and that file's code is all in fast memory.)
+    WorldDraw worldDraw;
+
     using namespace hldata;
     using namespace worldparts;
 

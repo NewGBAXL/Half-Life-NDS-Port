@@ -91,7 +91,7 @@ namespace hldata
         }
 
         /// One bone's rotation and place at `frame` (Q8 frames) of a track.
-        inline void sampleTrack(const ModelTrack &track, const ModelKey *keys, std::uint32_t frame,
+        HL_HOT void sampleTrack(const ModelTrack &track, const ModelKey *keys, std::uint32_t frame,
                                 std::uint32_t lastFrame, std::int32_t *quat, fx *pos)
         {
             const ModelKey *rot = keys + track.firstRot;
@@ -209,7 +209,7 @@ namespace hldata
     /// values, a turn as 65536 to the circle and a slide as units in Q12.
     /// As the game sets them, except that there a setting is kept as one
     /// byte: here it is as fine as it is given.
-    inline void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
+    HL_HOT void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
                           const std::int32_t *controls = nullptr)
     {
         const int controllers = controls != nullptr ? model.header->controllerCount : 0;

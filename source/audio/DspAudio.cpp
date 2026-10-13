@@ -277,7 +277,7 @@ namespace hlrt
         up_ = command(HL_DSP_CMD_MUSIC_FED, musicWrite_, 0, answer);
     }
 
-    void DspAudio::feedEcho()
+    HL_ARM void DspAudio::feedEcho()
     {
         if (capture_ == nullptr)
             return;

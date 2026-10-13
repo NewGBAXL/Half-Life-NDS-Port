@@ -620,7 +620,7 @@ namespace hldata
 
     /// Advance one actor's clip by `ms`. Returns the frame it was at before
     /// (Q8), for whoever watches for the clip's events.
-    inline std::uint32_t actorAdvance(const ActorWorld &a, ActorState &actor, int ms)
+    HL_HOT std::uint32_t actorAdvance(const ActorWorld &a, ActorState &actor, int ms)
     {
         const std::uint32_t before = actor.frame;
         const ModelView *model = actorModel(a, actor);

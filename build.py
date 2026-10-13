@@ -22,20 +22,30 @@
 # (architectds), and one named Foo.itcm.arm.cpp is ALSO placed in the 32 KB
 # ITCM by the BlocksDS linker script, which matches objects on `*.itcm*`. The
 # order of the two suffixes matters: architectds tests for the `.arm.cpp`
-# ending, so Foo.arm.itcm.cpp would be ITCM but Thumb.
+# ending, so Foo.arm.itcm.cpp would be ITCM but Thumb. A single function is
+# marked in the source instead: HL_ARM, HL_ITCM (source/Hot.hpp) and, for the
+# code the host shares, HL_HOT (shared/HlFixed.hpp).
+#
+# HLDS_JOBS=4 in the environment keeps ninja to four compilers at once.
+
+import os
 
 from architectds import *
+
+# HLDS_PROFILE=1 ./make.sh builds the frame-time readout in (see below).
+profile = ['HLDS_PROFILE=1'] if os.environ.get('HLDS_PROFILE') else []
 
 arm9 = Arm9Binary(
     sourcedirs=['source'],
     # 'thirdparty' puts yas on the include path as <yas/...>, the same spelling
     # the host converter uses -- both sides must agree on the serializer.
     includedirs=['source', 'shared', 'thirdparty'],
-    # Add 'HLDS_PROFILE=1' here to build the frame-time readout in: where the
-    # frame went, split between input, the BSP walk and the send to the
-    # geometry engine. Off, every one of its entry points is an empty inline
-    # (DebugLog.hpp), so the shipped build carries none of it.
-    defines=['NEA_MAXMOD', 'HL_HW_MATH'],
+    # HLDS_PROFILE=1 in the environment builds the frame-time readout in:
+    # where the frame went, split between input, the BSP walk and the send to
+    # the geometry engine, on the overlay and in perf.txt. Off, every one of
+    # its entry points is an empty inline (DebugLog.hpp), so the shipped
+    # build carries none of it.
+    defines=['NEA_MAXMOD', 'HL_HW_MATH'] + profile,
     libs=['NEA', 'mm9', 'nds9', 'dswifi9d_noip'],
     libdirs=[
         '${BLOCKSDS}/libs/libnds',

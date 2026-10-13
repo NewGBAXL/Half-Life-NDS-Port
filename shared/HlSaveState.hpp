@@ -250,6 +250,10 @@ namespace hldata
             for (int i = 0; i < w.actors->count; ++i)
                 actorPlaceBox(*w.actors, i);
         }
+        // (The brushes are where the save has them: so is the table of
+        // where they are.)
+        if (w.world != nullptr)
+            moverReachAll(*w.world);
         return true;
     }
 

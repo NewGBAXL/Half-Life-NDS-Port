@@ -502,6 +502,7 @@ int main(int argc, char *argv[])
     global.Init();
     // (Before the first load, which is timed too.)
     hlrt::DebugLog::Perf::begin();
+    hlrt::DebugLog::Perf::markStack();
     hlrt::screenFade.curtainDown();
     // How many models at once: what there is time for. Measured: with five
     // soldiers in sight a DS's frame is already 15 ms of its 16.7, each
@@ -846,6 +847,7 @@ int main(int argc, char *argv[])
                 step();
         }
         hlrt::DebugLog::Perf::endFrame();
+        hlrt::DebugLog::Perf::logEvery(currentMap.c_str(), 512);
         hlrt::debugOverlay.frame();
     }
 }

@@ -6,7 +6,7 @@
 //
 // Like the rest of the game's rules this is the same code on the host and on
 // the console: what is on, what frame it is at, whom a laser burns. Drawing
-// is the console's (source/render/EffectDraw.cpp), which reads the same
+// is the console's (source/render/EffectDraw.arm.cpp), which reads the same
 // records and states.
 //
 // Included at the end of HlMonsters.hpp: an explosion hurts.

@@ -142,7 +142,7 @@ namespace hlrt
         canvas.fill(r.x + r.w - 3, cy - 8, 2, 16, kUiOrange);
     }
 
-    void BottomScreen::drawColumn()
+    HL_ARM void BottomScreen::drawColumn()
     {
         Canvas &canvas = touchCanvas.canvas();
         const TouchLayout at = touchLayout(mirrored_);
@@ -203,7 +203,7 @@ namespace hlrt
             drawColumn();
     }
 
-    void BottomScreen::drawSlots()
+    HL_ARM void BottomScreen::drawSlots()
     {
         // (What a slot says with no picture to show.)
         static const char *const kNames[kTouchSlots] = {"BAR", "9MM", "SHOT", "GREN", "MP5", ".357"};

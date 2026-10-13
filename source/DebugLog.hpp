@@ -39,6 +39,13 @@ namespace hlrt::DebugLog
         std::uint32_t micros(Section section);
         /// Latch this frame's totals for micros() and clear the accumulators.
         void endFrame();
+        /// A line in perf.txt of what the sections took since the last one
+        /// (each one's mean and its worst frame, in microseconds, and how
+        /// deep the stack has been), once every so many frames. The emulator
+        /// and the console both leave it, to be compared build with build.
+        void logEvery(const char *map, int frames);
+        /// Paint the unused stack, for logEvery to see how far it was used.
+        void markStack();
 
         struct Scope
         {
@@ -55,6 +62,8 @@ namespace hlrt::DebugLog
     {
         inline void begin() {}
         inline void endFrame() {}
+        inline void logEvery(const char *, int) {}
+        inline void markStack() {}
         inline std::uint32_t micros(Section) { return 0; }
         struct Scope
         {

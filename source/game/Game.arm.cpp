@@ -13,7 +13,6 @@
 #include "data/ModelCache.hpp"
 #include "game/Input.hpp"
 #include "game/Player.hpp"
-#include "game/Trace.hpp"
 #include "audio/Sound.hpp"
 #include "render/HudDraw.hpp"
 #include "render/ScreenFade.hpp"
@@ -45,6 +44,7 @@ namespace hlrt
         actors.linkShut = nullptr;
         std::free(brushStates_);
         std::free(movers_);
+        std::free(reach_);
         std::free(states_);
         std::free(ladders_);
         std::free(cornerState_);
@@ -57,6 +57,7 @@ namespace hlrt
         ladders_ = nullptr;
         brushStates_ = nullptr;
         movers_ = nullptr;
+        reach_ = nullptr;
         states_ = nullptr;
         world = MoveWorld();
         logic = LogicWorld();
@@ -90,6 +91,7 @@ namespace hlrt
         brushStates_ =
             static_cast<BrushState *>(std::calloc(view.brushCount + 1, sizeof(BrushState)));
         movers_ = static_cast<MoverHull *>(std::calloc(view.brushCount + 1, sizeof(MoverHull)));
+        reach_ = static_cast<MoverReach *>(std::calloc(view.brushCount + 1, sizeof(MoverReach)));
         states_ = static_cast<LogicState *>(std::calloc(view.logicCount + 1, sizeof(LogicState)));
         int ladderCount = 0;
         for (std::uint32_t i = 0; i < view.logicCount; ++i)
@@ -99,7 +101,7 @@ namespace hlrt
         const int actorCount = static_cast<int>(view.actorCount) + kMaxVisitors;
         actorStates_ = static_cast<ActorState *>(std::calloc(actorCount, sizeof(ActorState)));
         actorBoxes_ = static_cast<SolidBox *>(std::calloc(actorCount, sizeof(SolidBox)));
-        if (brushStates_ == nullptr || movers_ == nullptr || states_ == nullptr ||
+        if (brushStates_ == nullptr || movers_ == nullptr || reach_ == nullptr || states_ == nullptr ||
             ladders_ == nullptr || cornerState_ == nullptr || actorStates_ == nullptr ||
             actorBoxes_ == nullptr)
         {
@@ -122,8 +124,8 @@ namespace hlrt
             Hull{view.clipNodes, view.planes, view.planeTypes, view.models[0].clipCrouched};
         world.large = Hull{view.clipNodes, view.planes, view.planeTypes, view.models[0].clipLarge};
         world.movers = movers_;
+        world.reach = reach_;
         world.moverCount = static_cast<int>(view.brushCount);
-        world.trace = traceFast;
         world.nodes = view.nodes;
         world.leaves = view.leaves;
         world.headNode = view.models[0].headNode;
@@ -184,6 +186,7 @@ namespace hlrt
         // Places every brush where the map starts it, for the renderer and
         // the collision alike.
         logicInit(logic);
+        moverReachAll(world);
         actorsInit(actors, view.actors, static_cast<int>(view.actorCount), view.nameHashes, world);
         actors.nodes = view.pathNodes;
         actors.links = view.pathLinks;

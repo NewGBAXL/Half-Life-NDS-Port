@@ -34,4 +34,9 @@ cd "${SCRIPT_DIR}"
 # no toolchain the array is empty and the game does without the DSP.
 python tools/dspsim/embed.py
 
-exec python build.py "$@"
+python build.py "$@"
+# What the fast memories hold and who still calls the library's arithmetic,
+# in a line (tools/arm9-report.sh for all of it).
+if [ -f build/arm9/arm9.elf ]; then
+    tools/arm9-report.sh --summary || true
+fi

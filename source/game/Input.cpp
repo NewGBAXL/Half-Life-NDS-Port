@@ -9,7 +9,7 @@ namespace hlrt
 {
     Input input;
 
-    void Input::poll()
+    HL_ARM void Input::poll()
     {
         scanKeys();
         const std::uint32_t held = keysHeld();

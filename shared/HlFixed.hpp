@@ -40,15 +40,28 @@
 extern "C" std::uint32_t hlHwSqrt64(std::uint64_t value); // source/HwMath.s
 #endif
 
-// HL_HOT marks the handful of functions that are the inner loops of collision
-// (the hull trace and what it calls). They are inline like everything else
-// here -- unless the file including this says otherwise. The DS has one file
-// that does (Trace.itcm.arm.cpp defines HL_HOT as "static"): that gives it
-// copies of its OWN, which the linker puts in fast memory with the rest of
-// that file. Left inline, every file's copy is the same symbol and the linker
-// keeps whichever it meets first, which is not the one in fast memory.
+// HL_HOT marks the functions that run many times a frame: the hull trace
+// and what it calls, the posing of a model's bones, a monster's step, the
+// sines and the lengths. They are inline like everything else here; on the
+// console they are, besides, ARM code in the 32 KB of fast memory (ITCM) --
+// whichever file's copy the linker keeps, it is that one, and everything
+// that traces (the player, every monster, every shot) runs it from there.
+//
+// The 32 KB are shared with the world's drawing, the libraries' interrupt
+// code and the hardware's divide (HwMath.s), and the link fails when they
+// are full: what goes in is chosen by how much of the frame it is, not by
+// how important it sounds. tools/arm9-report.sh lists what is there, byte by
+// byte, and with --check says if one of these is not.
 #ifndef HL_HOT
+#if defined(__arm__) && defined(HL_HW_MATH)
+// (A section each, by a number: two kinds of function -- one the linker
+// merges, one it does not -- cannot share one.)
+#define HL_HOT_TEXT2(n) #n
+#define HL_HOT_TEXT(n) HL_HOT_TEXT2(n)
+#define HL_HOT inline __attribute__((target("arm"), section(".itcm.text.hl_hot." HL_HOT_TEXT(__COUNTER__))))
+#else
 #define HL_HOT inline
+#endif
 #endif
 
 namespace hldata
@@ -117,7 +130,7 @@ namespace hldata
     }
 
     /// Length of a Q12 vector, Q12.
-    constexpr fx fxLength(const fx *v)
+    HL_HOT constexpr fx fxLength(const fx *v)
     {
         const std::int64_t sum = static_cast<std::int64_t>(v[0]) * v[0] +
                                  static_cast<std::int64_t>(v[1]) * v[1] +
@@ -131,7 +144,7 @@ namespace hldata
     /// under one unit in the last place. It is here, rather than
     /// borrowed from libnds, because the code that turns doors is shared with
     /// the host tests, and both must turn them by exactly the same amount.
-    constexpr void fxSinCos(std::uint16_t angle, fx &sine, fx &cosine)
+    HL_HOT constexpr void fxSinCos(std::uint16_t angle, fx &sine, fx &cosine)
     {
         // The quarter wave at 14 bits, two more than the answer has, so that
         // the interpolation is rounded once, at the end, instead of being cut
@@ -199,7 +212,7 @@ namespace hldata
     /// The direction of (x, y) as an angle in turns (65536 to the circle;
     /// 0 along +x, a quarter turn along +y). Good to a tenth of a degree,
     /// which is what steering a train along its track needs; (0, 0) gives 0.
-    constexpr std::uint16_t fxAtan2Turns(fx y, fx x)
+    HL_HOT constexpr std::uint16_t fxAtan2Turns(fx y, fx x)
     {
         const std::int64_t ax = x < 0 ? -static_cast<std::int64_t>(x) : x;
         const std::int64_t ay = y < 0 ? -static_cast<std::int64_t>(y) : y;
@@ -227,7 +240,7 @@ namespace hldata
     /// a unit at a hundred units from the pivot, which is more than the gap
     /// the collision keeps between the player and a wall. Riding in a tram
     /// that turns needs better: this is good to a part in ten million.
-    constexpr void fxSinCosFine(std::uint16_t angle, std::int32_t &sine, std::int32_t &cosine)
+    HL_HOT constexpr void fxSinCosFine(std::uint16_t angle, std::int32_t &sine, std::int32_t &cosine)
     {
         // Fold into the first eighth of a turn, where the series below needs
         // few terms.

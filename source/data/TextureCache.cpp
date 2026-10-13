@@ -76,7 +76,7 @@ namespace hlrt
         return true;
     }
 
-    unsigned TextureCache::shown(unsigned index, bool switched) const
+    HL_ARM unsigned TextureCache::shown(unsigned index, bool switched) const
     {
         const hldata::TextureRef &ref = level.view.textures[index];
         unsigned first = index, pictures = ref.frames;
@@ -88,7 +88,7 @@ namespace hlrt
         return pictures > 1 ? first + tick_ % pictures : first;
     }
 
-    void TextureCache::frame()
+    HL_ARM void TextureCache::frame()
     {
         tick_ = Global::vblanks() / 6;
     }

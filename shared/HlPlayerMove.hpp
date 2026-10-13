@@ -216,8 +216,7 @@ namespace hldata
             /// A move, against the world and every solid brush.
             Trace trace(const fx *from, const fx *to) const
             {
-                const Trace tr = world.trace != nullptr ? world.trace(world, s.ducked, from, to)
-                                                        : traceAll(world, s.ducked, from, to);
+                const Trace tr = traceAll(world, s.ducked, from, to);
                 // Walked into, not stood on: its face is nearer upright than
                 // flat.
                 if (tr.mover >= 0 && tr.fraction < kFractionOne && tr.normal[2] < kFloorNormalZ &&

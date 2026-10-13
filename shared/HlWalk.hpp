@@ -122,8 +122,11 @@ namespace hldata
             const Trace t = traceHull(world.crouched, start, end);
             shot.fraction = t.startSolid ? 0 : t.fraction;
         }
+        const detail::SegmentReach reach = detail::segmentReach(true, start, end);
         for (int m = 0; m < world.moverCount; ++m)
         {
+            if (!detail::moverMayTouch(world, m, reach))
+                continue;
             const MoverHull &mover = world.movers[m];
             if (!mover.solid || !detail::nearMover(mover, true, start, end))
                 continue;
@@ -160,8 +163,11 @@ namespace hldata
             found = true;
         }
         fx back = 0;
+        const detail::SegmentReach reach = detail::segmentReach(true, start, end);
         for (int m = 0; m < world.moverCount; ++m)
         {
+            if (!detail::moverMayTouch(world, m, reach))
+                continue;
             const MoverHull &mover = world.movers[m];
             if (!mover.solid || !detail::nearMover(mover, true, start, end))
                 continue;
@@ -411,7 +417,7 @@ namespace hldata
     /// `hull` is the size: kWalkStanding, kWalkCrouched, or kWalkLarge --
     /// which goes as a standing person does, but only to where something 64
     /// units across has room in the world (the game's large hull).
-    inline bool walkStep(const MoveWorld &world, const ActorWorld *a, int index, int hull,
+    HL_HOT bool walkStep(const MoveWorld &world, const ActorWorld *a, int index, int hull,
                          fx *feet, fx dx, fx dy)
     {
         const bool small = hull == kWalkCrouched;
@@ -722,7 +728,7 @@ namespace hldata
     /// straight walk is looked for from further off, since it need be found
     /// only once -- the plan is made again only on reaching a node or on
     /// being held up.
-    inline int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
+    HL_HOT int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
                         fx speed, int ms, const PlayerState *player, fx half, fx height,
                         bool still = false)
     {

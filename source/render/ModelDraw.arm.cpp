@@ -1,3 +1,4 @@
+#include "Hot.hpp"
 #include "HlDrawPlan.hpp"
 #include "render/ModelDraw.hpp"
 
@@ -61,7 +62,7 @@ namespace hlrt
             slot.id = -2;
     }
 
-    const BoneMatrix *ModelDraw::posed(const ActorState &actor, const ModelView &model,
+    HL_ITCM const BoneMatrix *ModelDraw::posed(const ActorState &actor, const ModelView &model,
                                        unsigned modelIndex, int id)
     {
         // To the nearest whole frame of the clip: the game's clips are 15 to
@@ -121,7 +122,7 @@ namespace hlrt
             out[n] = '\0';
     }
 
-    void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
+    HL_ITCM void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
                               const fx *turn, int id, int level)
     {
         // The pose is kept: a model is drawn twice for one moment in
@@ -504,7 +505,7 @@ namespace hlrt
         // work out worth doing ahead.)
     }
 
-    void ModelDraw::draw(int &drawn, int &cut)
+    HL_ITCM void ModelDraw::draw(int &drawn, int &cut)
     {
         const ActorWorld &actors = game.actors;
         cut += cut_;

@@ -22,6 +22,9 @@
 //
 // std-only and inline, like HlHullTrace.hpp: the host tests run this code.
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "HlHullTrace.hpp"
 #include "HlPlaneMath.hpp"
 
@@ -69,6 +72,18 @@ namespace hldata
         bool active = false;
     };
 
+    /// Where a solid brush is, in six short numbers: whole units, rounded
+    /// outwards. A map has some hundreds of brushes and a trace asks each
+    /// "could this move come near you?" -- of the brush's own record that is
+    /// a hundred bytes fetched to say no; of this table it is twelve, one
+    /// after another. A brush that is not solid has bounds nothing is
+    /// inside.
+    struct MoverReach
+    {
+        std::int16_t lo[3] = {32767, 32767, 32767};
+        std::int16_t hi[3] = {-32768, -32768, -32768};
+    };
+
     /// Everything the player can collide with, and climb.
     struct MoveWorld
     {
@@ -79,6 +94,10 @@ namespace hldata
         Hull large;
         const MoverHull *movers = nullptr;
         int moverCount = 0;
+        /// One per mover, if given: kept by whoever moves a brush or makes
+        /// it solid (moverReachSet), and read before the mover itself is.
+        /// A world given none asks every mover, as before.
+        MoverReach *reach = nullptr;
         const LadderVolume *ladders = nullptr;
         int ladderCount = 0;
         /// The world's render tree, which is where water is: the clip hulls
@@ -96,11 +115,6 @@ namespace hldata
         /// The actors' boxes.
         const SolidBox *boxes = nullptr;
         int boxCount = 0;
-        /// If set, what the player's movement traces with in place of
-        /// traceAll: the same function, from wherever the caller has put a
-        /// fast copy of it (the DS keeps one in ITCM).
-        struct Trace (*trace)(const MoveWorld &world, bool crouched, const fx *start,
-                              const fx *end) = nullptr;
     };
 
     /// The leaf of the world's tree `p` is in; 0 (the solid leaf) on a world
@@ -242,6 +256,73 @@ namespace hldata
             return true;
         }
 
+        /// What MoverReach says of a brush as it now is.
+        inline MoverReach moverReachOf(const MoverHull &mover)
+        {
+            MoverReach reach;
+            if (!mover.solid)
+                return reach;
+            for (int i = 0; i < 3; ++i)
+            {
+                const std::int32_t lo = mover.mins[i] >> kFxShift;
+                const std::int32_t hi = (mover.maxs[i] + kFxOne - 1) >> kFxShift;
+                reach.lo[i] = static_cast<std::int16_t>(lo < -32767 ? -32767 : (lo > 32766 ? 32766 : lo));
+                reach.hi[i] = static_cast<std::int16_t>(hi < -32767 ? -32767 : (hi > 32766 ? 32766 : hi));
+                // (Further out than the table can say: as far as it can.)
+                if (lo > 32766)
+                    reach.lo[i] = 32766;
+                if (hi < -32767)
+                    reach.hi[i] = -32767;
+            }
+            return reach;
+        }
+
+        /// A move, as the same kind of box: where the player's middle goes,
+        /// grown by their size.
+        struct SegmentReach
+        {
+            std::int32_t lo[3], hi[3];
+        };
+        HL_HOT SegmentReach segmentReach(bool crouched, const fx *a, const fx *b)
+        {
+            SegmentReach reach;
+            for (int i = 0; i < 3; ++i)
+            {
+                const fx grow = (i == 2 ? kPlayerHalfHeight[crouched ? 1 : 0] : kPlayerHalfWidth) +
+                                kMoverSlack;
+                const fx lo = (a[i] < b[i] ? a[i] : b[i]) - grow;
+                const fx hi = (a[i] < b[i] ? b[i] : a[i]) + grow;
+                reach.lo[i] = lo >> kFxShift;
+                reach.hi[i] = (hi + kFxOne - 1) >> kFxShift;
+            }
+            return reach;
+        }
+
+        /// Whether mover `m` has to be asked about a move at all. (Never
+        /// "no" for one nearMover would say yes to: both boxes are rounded
+        /// outwards.)
+        inline bool moverMayTouch(const MoveWorld &world, int m, const SegmentReach &move)
+        {
+            if (world.reach == nullptr)
+                return true;
+            const MoverReach &reach = world.reach[m];
+#ifndef __arm__
+            // (Off the console, where there is time: the table is what the
+            // mover says it is, or whoever changed the mover forgot it.)
+            const MoverReach now = moverReachOf(world.movers[m]);
+            for (int i = 0; i < 3; ++i)
+            {
+                if (now.lo[i] != reach.lo[i] || now.hi[i] != reach.hi[i])
+                {
+                    std::fprintf(stderr, "moverMayTouch: mover %d was changed without moverReachSet\n", m);
+                    std::abort();
+                }
+            }
+#endif
+            return !(move.hi[0] < reach.lo[0] || move.lo[0] > reach.hi[0] || move.hi[1] < reach.lo[1] ||
+                     move.lo[1] > reach.hi[1] || move.hi[2] < reach.lo[2] || move.lo[2] > reach.hi[2]);
+        }
+
         /// A world point in the brush's own space: back along its origin,
         /// then turned back.
         HL_HOT void toMoverSpace(const MoverHull &mover, const fx *world, fx *local)
@@ -288,13 +369,31 @@ namespace hldata
         }
     } // namespace detail
 
+    /// Mover `m` has moved, or become solid or stopped being: its line of
+    /// the table, again. Whoever writes a MoverHull's bounds or its `solid`
+    /// calls this after.
+    inline void moverReachSet(const MoveWorld &world, int m)
+    {
+        if (world.reach != nullptr)
+            world.reach[m] = detail::moverReachOf(world.movers[m]);
+    }
+    /// ... and all of them (a map set up; a saved game laid over it).
+    inline void moverReachAll(const MoveWorld &world)
+    {
+        for (int m = 0; m < world.moverCount; ++m)
+            moverReachSet(world, m);
+    }
+
     /// Move the player's origin from `start` towards `end` through the world
     /// and every solid brush.
     HL_HOT Trace traceAll(const MoveWorld &world, bool crouched, const fx *start, const fx *end)
     {
         Trace best = traceHull(crouched ? world.crouched : world.standing, start, end);
+        const detail::SegmentReach reach = detail::segmentReach(crouched, start, end);
         for (int m = 0; m < world.moverCount; ++m)
         {
+            if (!detail::moverMayTouch(world, m, reach))
+                continue;
             const MoverHull &mover = world.movers[m];
             if (!mover.solid || !detail::nearMover(mover, crouched, start, end))
                 continue;
@@ -412,8 +511,11 @@ namespace hldata
     {
         if (!hullPositionFree(crouched ? world.crouched : world.standing, p))
             return false;
+        const detail::SegmentReach reach = detail::segmentReach(crouched, p, p);
         for (int m = 0; m < world.moverCount; ++m)
         {
+            if (!detail::moverMayTouch(world, m, reach))
+                continue;
             const MoverHull &mover = world.movers[m];
             if (!mover.solid || !detail::nearMover(mover, crouched, p, p))
                 continue;

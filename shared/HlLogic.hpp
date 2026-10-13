@@ -347,6 +347,8 @@ namespace hldata
         mover.solid = (brush.flags & kBrushSolid) != 0 && state.active;
         mover.present = state.active;
         mover.contents = static_cast<std::int8_t>(brush.kind);
+        if (w.world != nullptr)
+            moverReachSet(*w.world, index);
     }
 
     /// The same for the ordinary case: turned about the vertical only.
@@ -389,12 +391,14 @@ namespace hldata
         {
             const bool wasSolid = w.movers[pusher].solid;
             w.movers[pusher].solid = false;
+            moverReachSet(*w.world, pusher);
             const fx to[3] = {player.origin[0] + delta[0], player.origin[1] + delta[1],
                               player.origin[2] + delta[2]};
             const Trace tr = traceAll(*w.world, player.ducked, player.origin, to);
             for (int a = 0; a < 3; ++a)
                 player.origin[a] = tr.endPos[a];
             w.movers[pusher].solid = wasSolid;
+            moverReachSet(*w.world, pusher);
         }
 
         inline bool boxShove(LogicWorld &w, PlayerState &player, int record, const fx *delta);
@@ -1348,6 +1352,7 @@ namespace hldata
                 count[a] = over[a] <= 0 ? 1 : (over[a] + 31) / 32 + 1 > 5 ? 5 : (over[a] + 31) / 32 + 1;
             const bool was = w.movers[brush].solid;
             w.movers[brush].solid = false;
+            moverReachSet(*w.world, brush);
             Trace best;
             bool any = false, stuck = false;
             for (int i = 0; i < count[0]; ++i)
@@ -1386,6 +1391,7 @@ namespace hldata
                 }
             }
             w.movers[brush].solid = was;
+            moverReachSet(*w.world, brush);
             // Against the other boxes, box against box: what is above is
             // blind to anything a corner has got the least way into (as a
             // door is to someone it closes on), and two boxes sliding past

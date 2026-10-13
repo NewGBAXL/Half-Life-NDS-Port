@@ -133,7 +133,7 @@ namespace hlrt
         }
     }
 
-    void TopText::drawLogo(Slot &slot, int index)
+    HL_ARM void TopText::drawLogo(Slot &slot, int index)
     {
         if (!titleTried)
         {
@@ -257,7 +257,7 @@ namespace hlrt
         tick(0);
     }
 
-    void TopText::tick(int ms)
+    HL_ARM void TopText::tick(int ms)
     {
         if (!slots_[0].busy && !slots_[1].busy)
             return;

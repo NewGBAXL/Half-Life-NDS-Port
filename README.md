@@ -251,6 +251,26 @@ Working:
   square-root unit (`source/HwMath.s`): same answers, a tenth of the time.
   A build with `HLDS_PROFILE` checks the hardware's sums against the slow
   way at start-up and says so in `perf.txt`.
+- Where the code runs from. The DS has 32 KB of memory that is always as
+  fast as the cache at its best (ITCM), and what is in it is chosen by how
+  much of the frame it is: the hull trace -- for everything that traces, not
+  only the player --, the choosing and sending of the world's surfaces, the
+  posing and drawing of the models, a walking monster's step, and the sines
+  and lengths they all use. `HL_HOT` (shared code) and `HL_ITCM` put a
+  function there; `HL_ARM` builds one function of a Thumb file as ARM (the
+  effects, the head-up display and the other things drawn every frame had
+  been Thumb, each product a call). 22 KB of the 32 are used; the fast
+  *data* memory (DTCM) is left to the stack, which was measured 11 KB deep
+  of its 16.
+- A trace no longer asks every brush of the map whether the move comes near
+  it. A map has some hundreds, each a hundred bytes of record: now there is
+  a table of twelve bytes a brush, read first (`MoverReach`). At the fight
+  in c1a2 that took a quarter off the logic's time.
+- `tools/arm9-report.sh` says what the built program is made of: what is in
+  the fast memory byte by byte, which of the game's functions still call the
+  library's arithmetic, which are Thumb; `--check` fails if one of the
+  frame's inner loops has come out of fast memory or calls a routine for a
+  multiply. `./make.sh` prints its first line.
 - On a DSi the 47.6 kHz output is asked of NEA
   (`NEA_SoundEnableDSiOutput`); it is the same output the game had by
   asking libnds directly.
@@ -662,6 +682,8 @@ NEA has to be one with `NEA_MaterialGetTexParam` and `NEA_PaletteGetBase`
 ```sh
 ./setup-env.sh          # once: Python venv with the ROM build system
 ./make.sh               # builds half-life-nds-port.nds
+HLDS_JOBS=4 ./make.sh   # ... with no more than four compilers at once
+HLDS_PROFILE=1 ./make.sh  # ... timing itself: see below
 
 cmake -S tools/hlds-convert -B build/convert
 cmake --build build/convert -j
@@ -681,6 +703,16 @@ and without them builds a ROM with no DSP audio. `tools/dspsim/run.sh` runs it
 against its model (it needs teakra, built: see the script), and says how much
 of the processor it uses; it is one of the test suites, skipped where teakra
 is not built.
+
+A ROM built with `HLDS_PROFILE=1` shows where each frame's time went on the
+debug overlay and, every 512 frames, writes a line to `perf.txt` on the card:
+the mean and the worst frame of each part (logic, movement, choosing the
+world's surfaces, sending them, posing and drawing the models, the whole
+frame) in microseconds, how deep the stack has been, and how many divides
+and square roots a frame asked of the hardware. An emulator's times are
+only a guide: it does not have the console's caches, which is what the
+placing of code in fast memory is about. The console's own `perf.txt` is
+the number.
 
 `tools/emu/` has scripts that run the ROM in melonDS without a display, for
 looking at a change on the console's own renderer -- and, with `EMU_AUDIO`,
@@ -790,7 +822,7 @@ way to look at a rendering or logic change on the console.
 
 | | |
 |---|---|
-| `source/` | the ARM9 program. `*.arm.cpp` is built as ARM; `*.itcm.arm.cpp` also runs from ITCM |
+| `source/` | the ARM9 program. `*.arm.cpp` is built as ARM; `*.itcm.arm.cpp` also runs from ITCM; single functions by `HL_ARM` / `HL_ITCM` (`source/Hot.hpp`) |
 | `teak/` | the DSi's DSP program (music and echo), in assembly |
 | `shared/` | file formats, fixed-point maths, collision and movement: compiled by both the ROM and the converter, so the host tests run the console's code |
 | `tools/hlds-convert/` | the converter: `core` (no Qt), `cli`, `gui`, `tests` |
