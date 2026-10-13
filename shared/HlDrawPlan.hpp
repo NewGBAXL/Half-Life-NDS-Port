@@ -37,6 +37,9 @@ namespace hldata
         const bool dead = actor.ai == kAiDead;
         if (fights(actor.kind))
             return dead ? kDrawProp : kDrawEnemy;
+        // (Another player is never left out either: they shoot back.)
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Player))
+            return kDrawEnemy;
         if (isPerson(actor.kind) || actor.kind == static_cast<std::uint8_t>(ActorKind::Gman))
             return dead ? kDrawProp : kDrawPerson;
         // (Whatever a scene has taken is what the scene is about.)

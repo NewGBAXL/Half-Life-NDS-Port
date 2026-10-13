@@ -1,6 +1,7 @@
 # Everything needed to build the ROM, the converter and the tests, on any
 # system that runs Docker: BlocksDS, the Nitro Engine Advanced fork this port
-# is written on, ptexconv, a host compiler and CMake.
+# is written on, the dswifi fork its wireless is, ptexconv, a host compiler
+# and CMake.
 #
 #   docker compose build                       # the default image
 #   docker compose build --build-arg WITH_TEAK=1
@@ -68,6 +69,16 @@ ADD https://api.github.com/repos/Warioware64/nitro-engine/git/refs/heads/master 
 RUN git clone --depth 1 --branch "${NEA_REF}" "${NEA_REPO}" /tmp/nitro-engine && \
     make -C /tmp/nitro-engine -f Makefile.blocksds -j"${NEA_JOBS}" install NEA_MAXMOD=1 && \
     rm -rf /tmp/nitro-engine
+
+# The wireless: the dswifi fork that also does DS Download Play, installed as
+# "dswifi_dl" beside the stock one. (After the engine: nothing of that
+# depends on it, and it is the game that links it.)
+ARG DSWIFI_REPO=https://github.com/Warioware64/dswifi.git
+ARG DSWIFI_REF=master
+ADD https://api.github.com/repos/Warioware64/dswifi/git/refs/heads/master /tmp/dswifi.ref
+RUN git clone --depth 1 --branch "${DSWIFI_REF}" "${DSWIFI_REPO}" /tmp/dswifi && \
+    make -C /tmp/dswifi -j"${NEA_JOBS}" && make -C /tmp/dswifi install && \
+    rm -rf /tmp/dswifi
 
 # The ROM's build system is this repository's own copy of architectds (found
 # through PYTHONPATH once the repository is mounted); what it needs besides

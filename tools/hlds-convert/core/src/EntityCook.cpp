@@ -46,7 +46,7 @@ namespace hlds
         bool isAccountedFor(const std::string &cls)
         {
             static const char *const kClasses[] = {
-                "worldspawn", "info_player_start", "light", "light_spot", "light_environment",
+                "worldspawn", "info_player_start", "info_player_deathmatch", "light", "light_spot", "light_environment",
                 "func_wall", "func_illusionary", "func_ladder", "infodecal", "info_null",
                 "info_target", "path_corner", "info_landmark", "path_track",
                 "info_teleport_destination", "monster_scientist", "monster_barney", "monster_gman",
@@ -351,6 +351,68 @@ namespace hlds
             return file;
         }
     } // namespace
+
+    bool isMultiplayerMap(const std::vector<Entity> &entities)
+    {
+        for (const Entity &entity : entities)
+        {
+            if (entity.className() == "info_player_deathmatch")
+                return true;
+        }
+        return false;
+    }
+
+    int standInEntities(std::vector<Entity> &entities)
+    {
+        if (!isMultiplayerMap(entities))
+            return 0;
+        // What stands in for what. As near in kind as the port's six
+        // weapons allow: the heavy guns are the .357, the fast ones the
+        // MP5, the crossbow the shotgun, and everything thrown or laid is
+        // a hand grenade. Each line goes when its weapon comes.
+        static const char *const kStandIns[][2] = {
+            {"weapon_rpg", "weapon_357"},           {"weapon_gauss", "weapon_357"},
+            {"weapon_egon", "weapon_9mmar"},        {"weapon_hornetgun", "weapon_9mmar"},
+            {"weapon_crossbow", "weapon_shotgun"},  {"weapon_satchel", "weapon_handgrenade"},
+            {"weapon_tripmine", "weapon_handgrenade"}, {"weapon_snark", "weapon_handgrenade"},
+            {"ammo_rpgclip", "ammo_357"},           {"ammo_gaussclip", "ammo_357"},
+            {"ammo_egonclip", "ammo_9mmar"},        {"ammo_crossbow", "ammo_buckshot"},
+            {"item_longjump", "item_battery"},
+        };
+        int count = 0;
+        for (Entity &entity : entities)
+        {
+            const std::string cls = lowered(entity.className());
+            for (const auto &pair : kStandIns)
+            {
+                if (cls != pair[0])
+                    continue;
+                for (auto &keyValue : entity.pairs)
+                {
+                    if (keyValue.first == "classname")
+                    {
+                        keyValue.second = pair[1];
+                        break;
+                    }
+                }
+                ++count;
+                break;
+            }
+        }
+        return count;
+    }
+
+    void addMultiplayerNeeds(const std::vector<Entity> &entities, std::vector<ModelNeed> &needs)
+    {
+        if (!isMultiplayerMap(entities))
+            return;
+        ModelNeed other;
+        other.name = kPlayerModelName;
+        other.file = "models/player/gordon/gordon.mdl";
+        other.clips = {"look_idle", "run",        "walk",          "crouch_idle",  "crawl",   "jump",
+                       "die_simple", "die_backwards", "die_forwards", "headshot", "gutshot"};
+        needs.push_back(other);
+    }
 
     std::vector<ModelNeed> collectModelNeeds(const std::vector<Entity> &entities)
     {

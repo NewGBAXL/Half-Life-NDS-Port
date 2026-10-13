@@ -5,6 +5,7 @@
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
 #include "audio/Sound.hpp"
+#include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
 #include "ui/TouchCanvas.hpp"
 
@@ -47,6 +48,15 @@ namespace hlrt
             kScheme,
             kPadSide,
             kPadUp,
+            kMultiplayer,
+            kNetHost,
+            kNetJoin,
+            kNetMap,
+            kNetFrags,
+            kNetMinutes,
+            kNetStart,
+            kNetFound, ///< a game found (which, by its row)
+            kLeave,
             kBob,
             kBack,
             kGraphics,
@@ -69,8 +79,25 @@ namespace hlrt
                              {Kind::Button, kSaveGame, "SAVE GAME"}, {Kind::Button, kLoadGame, "LOAD GAME"},
                              {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"},
                              {Kind::Button, kCommand, "COMMAND"}};
-        const Row kTitleRows[] = {{Kind::Button, kContinue, "CONTINUE"}, {Kind::Button, kLoadGame, "LOAD GAME"},
-                                  {Kind::Button, kNewGame, "NEW GAME"},   {Kind::Button, kOptions, "OPTIONS"}};
+        const Row kTitleRows[] = {{Kind::Button, kContinue, "CONTINUE"},     {Kind::Button, kLoadGame, "LOAD GAME"},
+                                  {Kind::Button, kNewGame, "NEW GAME"},       {Kind::Button, kMultiplayer, "MULTIPLAYER"},
+                                  {Kind::Button, kOptions, "OPTIONS"}};
+        // A game between consoles (source/net/NetGame.hpp).
+        const Row kMultiRows[] = {{Kind::Button, kNetHost, "HOST GAME"}, {Kind::Button, kNetJoin, "JOIN GAME"},
+                                  {Kind::Button, kBack, "BACK"}};
+        const Row kHostRows[] = {{Kind::Value, kNetMap, "Map"},
+                                 {Kind::Value, kNetFrags, "Frag limit"},
+                                 {Kind::Value, kNetMinutes, "Time limit"},
+                                 {Kind::Button, kNetStart, "START"},
+                                 {Kind::Button, kBack, "BACK"}};
+        const Row kLobbyRows[] = {{Kind::Button, kBack, "LEAVE"}};
+        const Row kNetPauseRows[] = {{Kind::Button, kResume, "RESUME"}, {Kind::Button, kOptions, "OPTIONS"},
+                                     {Kind::Button, kLeave, "LEAVE GAME"}};
+        // The games found: made when they are shown, then BACK.
+        constexpr int kFoundListed = 4;
+        Row foundRows[kFoundListed + 1];
+        NetGame::Found foundList[kFoundListed];
+        int foundCount = 0;
         const Row kConfirmRows[] = {{Kind::Button, kYes, "YES"}, {Kind::Button, kNo, "NO"}};
         // The list of saves: its lines are made when it is shown (they say
         // what is in each), then BACK.
@@ -157,6 +184,31 @@ namespace hlrt
                 count = static_cast<int>(sizeof(kControlRows) / sizeof(kControlRows[0]));
                 return kControlRows;
             }
+            if (page == 7)
+            {
+                count = static_cast<int>(sizeof(kMultiRows) / sizeof(kMultiRows[0]));
+                return kMultiRows;
+            }
+            if (page == 8)
+            {
+                count = static_cast<int>(sizeof(kHostRows) / sizeof(kHostRows[0]));
+                return kHostRows;
+            }
+            if (page == 9)
+            {
+                count = foundCount + 1;
+                return foundRows;
+            }
+            if (page == 10)
+            {
+                count = static_cast<int>(sizeof(kLobbyRows) / sizeof(kLobbyRows[0]));
+                return kLobbyRows;
+            }
+            if (page == 11)
+            {
+                count = static_cast<int>(sizeof(kNetPauseRows) / sizeof(kNetPauseRows[0]));
+                return kNetPauseRows;
+            }
             if (page == 1)
             {
                 count = static_cast<int>(sizeof(kOptionRows) / sizeof(kOptionRows[0]));
@@ -234,11 +286,72 @@ namespace hlrt
         draw();
     }
 
+    int netlinkFailStage();
+
+    bool Menu::big() const
+    {
+        return page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm || page_ == Page::Multiplayer ||
+               page_ == Page::NetPause;
+    }
+
+    /// What of the lobby is on the screen: who is there, what they are
+    /// called, how they stand -- to draw it again when it is not so.
+    unsigned Menu::netSignature() const
+    {
+        const NetMatch &match = netGame.match();
+        unsigned sum = static_cast<unsigned>(netGame.phase()) * 7919u;
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            sum = sum * 31u + (netHere(match, p) ? 1u : 0u);
+            for (const char *c = match.names[p]; *c != 0; ++c)
+                sum = sum * 31u + static_cast<unsigned char>(*c);
+            sum = sum * 31u + static_cast<unsigned>(match.frags[p] + 1000) + static_cast<unsigned>(match.deaths[p]) * 131u;
+        }
+        return sum;
+    }
+
+    /// Who is in the game, from `top` down: their names, and with `scores`
+    /// their frags and deaths.
+    void Menu::drawPlayers(int top, bool scores)
+    {
+        Canvas &canvas = touchCanvas.canvas();
+        const FontView &small = touchCanvas.font(kFontSmall);
+        const NetMatch &match = netGame.match();
+        canvas.fill(0, top, 256, 4 * (small.height() + 3) + 2, kUiBack);
+        int line = 0;
+        for (int p = 0; p < kNetPlayers; ++p)
+        {
+            if (!netHere(match, p))
+                continue;
+            char text[48];
+            const char *name = match.names[p][0] != 0 ? match.names[p] : "...";
+            if (scores)
+                std::snprintf(text, sizeof(text), "%s%s   %d frags   %d deaths", name, p == match.me ? " (you)" : "",
+                              match.frags[p], match.deaths[p]);
+            else
+                std::snprintf(text, sizeof(text), "%s%s%s", name, p == 0 ? " (host)" : "", p == match.me ? " (you)" : "");
+            drawTextCentred(canvas, small, 128, top + line++ * (small.height() + 3), text,
+                            inkFor(small, p == match.me ? kUiWhite : kUiGrey));
+        }
+        netShown_ = netSignature();
+    }
+
+    /// The games found, as rows; then BACK.
+    void Menu::showFound()
+    {
+        foundCount = netGame.found(foundList, kFoundListed);
+        for (int i = 0; i < foundCount; ++i)
+            foundRows[i] = Row{Kind::Button, kNetFound, foundList[i].line};
+        foundRows[foundCount] = Row{Kind::Button, kBack, "BACK"};
+        page_ = Page::NetJoin;
+        draw();
+    }
+
     void Menu::open()
     {
         bottomScreen.release();
         title_ = false;
-        page_ = Page::Main;
+        page_ = netGame.playing() ? Page::NetPause : Page::Main;
         active_ = -1;
         // (The touch that opened it, if there was one, is not a press.)
         touching_ = (keysHeld() & KEY_TOUCH) != 0;
@@ -249,15 +362,34 @@ namespace hlrt
     {
         Canvas &canvas = touchCanvas.canvas();
         canvas.clear();
-        if (page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm)
+        if (big())
         {
             const FontView &title = touchCanvas.font(page_ == Page::Confirm ? kFontMedium : kFontTitle);
             drawTextCentred(canvas, title, 128, page_ == Page::Confirm ? 14 : 8,
-                            page_ == Page::Main ? "PAUSED" : (page_ == Page::Title ? "HALF-LIFE" : question),
+                            page_ == Page::Main || page_ == Page::NetPause
+                                ? "PAUSED"
+                                : (page_ == Page::Title ? "HALF-LIFE"
+                                                        : (page_ == Page::Multiplayer ? "MULTIPLAYER" : question)),
                             inkFor(title, kUiOrange));
         }
         for (int row = 0; row < rowCount(); ++row)
             drawRow(row, false);
+        if (page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetJoin)
+        {
+            const FontView &small = touchCanvas.font(kFontSmall);
+            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 4;
+            const char *said = page_ == Page::NetHost
+                                   ? "In the game:"
+                                   : (page_ == Page::NetJoin
+                                          ? (netGame.phase() == NetGame::Phase::Joining ? "Joining..."
+                                                                                        : "Looking for games...")
+                                          : "Waiting for the host to start");
+            drawTextCentred(canvas, small, 128, top, said, inkFor(small, kUiOrange));
+            if (page_ != Page::NetJoin)
+                drawPlayers(top + small.height() + 5, false);
+        }
+        if (page_ == Page::NetPause)
+            drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
         if (page_ == Page::Controls)
         {
             // What the buttons do, as they are now set.
@@ -272,7 +404,7 @@ namespace hlrt
     void Menu::drawRow(int row, bool down)
     {
         Canvas &canvas = touchCanvas.canvas();
-        const bool main = page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm;
+        const bool main = big();
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
         const Layout &at = main ? kMainLayout : kOptionLayout;
@@ -284,7 +416,7 @@ namespace hlrt
         // and CONTINUE with nothing to continue.)
         const bool dead = (item.id == kDsp && !DspAudio::available()) || (item.id == kSlot && listDead[row]) ||
                           (item.id == kContinue && (saves_ == nullptr || saveMostRecent(*saves_) < 0)) ||
-                          (item.id == kCommand && title_);
+                          (item.id == kCommand && title_) || (item.id == kMultiplayer && netGame.maps().empty());
         if (item.kind == Kind::Slider)
         {
             canvas.fill(at.x, y, at.width, at.height, kUiBack);
@@ -340,6 +472,22 @@ namespace hlrt
             // and which hand has the pad and the trigger.)
             std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.leftHanded ? "left" : "right");
             break;
+        case kNetMap:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label,
+                          netGame.maps().empty() ? "none" : netGame.maps()[netMap_ % netGame.maps().size()].c_str());
+            break;
+        case kNetFrags:
+            if (netFrags_ == 0)
+                std::snprintf(text, sizeof(text), "%s: none", item.label);
+            else
+                std::snprintf(text, sizeof(text), "%s: %d", item.label, netFrags_);
+            break;
+        case kNetMinutes:
+            if (netMinutes_ == 0)
+                std::snprintf(text, sizeof(text), "%s: none", item.label);
+            else
+                std::snprintf(text, sizeof(text), "%s: %d minutes", item.label, netMinutes_);
+            break;
         case kScheme:
             std::snprintf(text, sizeof(text), "%s: %s", item.label,
                           settings.controlScheme == kControlsModern ? "modern" : "classic");
@@ -361,8 +509,7 @@ namespace hlrt
 
     int Menu::rowAt(int x, int y) const
     {
-        const Layout &at = page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm ? kMainLayout
-                                                                                                    : kOptionLayout;
+        const Layout &at = big() ? kMainLayout : kOptionLayout;
         if (x < at.x || x >= at.x + at.width || y < at.top)
             return -1;
         const int row = (y - at.top) / at.pitch;
@@ -456,13 +603,88 @@ namespace hlrt
             draw();
             break;
         case kBack:
+            // Out of a lobby: out of the game, and the radio silent.
+            if (page_ == Page::NetHost || page_ == Page::NetJoin || page_ == Page::NetLobby)
+            {
+                netGame.leave();
+                page_ = Page::Multiplayer;
+                draw();
+                break;
+            }
             // (From the graphics, back to the options they are among; from
             // the list, to where it was asked for.)
-            page_ = page_ == Page::Graphics || page_ == Page::Controls ? Page::Options
-                                            : (page_ == Page::Saves ? asker_ : (title_ ? Page::Title : Page::Main));
+            page_ = page_ == Page::Graphics || page_ == Page::Controls
+                        ? Page::Options
+                        : (page_ == Page::Saves
+                               ? asker_
+                               : (title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main)));
             settings.save();
             draw();
             break;
+        case kMultiplayer:
+            if (!netGame.maps().empty())
+            {
+                page_ = Page::Multiplayer;
+                draw();
+            }
+            break;
+        case kNetHost:
+            if (netGame.host())
+            {
+                page_ = Page::NetHost;
+                draw();
+            }
+            else
+            {
+                std::snprintf(question, sizeof(question), "The wireless would not start (%d)", netlinkFailStage());
+                page_ = Page::Multiplayer;
+                draw();
+                const FontView &small = touchCanvas.font(kFontSmall);
+                drawTextCentred(touchCanvas.canvas(), small, 128, 170, question, inkFor(small, kUiGrey));
+            }
+            break;
+        case kNetJoin:
+            if (netGame.scan())
+                showFound();
+            break;
+        case kNetFound:
+            if (row < foundCount && netGame.join(foundList[row].index))
+                draw();
+            break;
+        case kNetMap:
+            netMap_ = netGame.maps().empty() ? 0 : (netMap_ + 1) % static_cast<int>(netGame.maps().size());
+            drawRow(row, false);
+            break;
+        case kNetFrags:
+        {
+            static const int kLimits[] = {0, 5, 10, 20, 30, 50};
+            int at = 0;
+            for (int i = 0; i < 6; ++i)
+                at = kLimits[i] == netFrags_ ? i : at;
+            netFrags_ = kLimits[(at + 1) % 6];
+            drawRow(row, false);
+            break;
+        }
+        case kNetMinutes:
+        {
+            static const int kLimits[] = {0, 5, 10, 15, 20, 30};
+            int at = 0;
+            for (int i = 0; i < 6; ++i)
+                at = kLimits[i] == netMinutes_ ? i : at;
+            netMinutes_ = kLimits[(at + 1) % 6];
+            drawRow(row, false);
+            break;
+        }
+        case kNetStart:
+            // (Whoever runs the screens loads the map when the match says
+            // it has been started: main.cpp.)
+            // (Alone, too: a host may look round a map before anyone comes --
+            // though nobody can then, a match under way lets no one in.)
+            if (!netGame.maps().empty())
+                netGame.start(netGame.maps()[netMap_ % netGame.maps().size()], netFrags_, netMinutes_);
+            break;
+        case kLeave:
+            return Action::Leave;
         case kGraphics:
             page_ = Page::Graphics;
             draw();
@@ -547,6 +769,36 @@ namespace hlrt
 
     Menu::Action Menu::frame()
     {
+        // A game between consoles: the lobby changes without being touched.
+        if (page_ == Page::NetJoin)
+        {
+            // Let in: the host's lobby. Not let in, or the host gone: out.
+            if (netGame.phase() == NetGame::Phase::Lobby)
+            {
+                page_ = Page::NetLobby;
+                draw();
+            }
+            else if (netGame.phase() == NetGame::Phase::Off)
+            {
+                page_ = Page::Multiplayer;
+                draw();
+            }
+            else if (netGame.phase() == NetGame::Phase::Scanning && ++netTick_ >= 45 && active_ < 0)
+            {
+                netTick_ = 0;
+                showFound();
+            }
+        }
+        else if (page_ == Page::NetHost || page_ == Page::NetLobby || page_ == Page::NetPause)
+        {
+            if (page_ != Page::NetPause && netGame.phase() == NetGame::Phase::Off)
+            {
+                page_ = Page::Multiplayer;
+                draw();
+            }
+            else if (netSignature() != netShown_ && active_ < 0)
+                draw();
+        }
         const bool down = (keysHeld() & KEY_TOUCH) != 0;
         if (down)
         {

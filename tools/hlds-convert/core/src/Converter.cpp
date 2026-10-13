@@ -189,6 +189,9 @@ namespace hlds
         std::vector<Entity> entities;
         if (!parseEntities(bsp.entities, entities, result.error))
             return result;
+        // (A multiplayer map: what it has of weapons the port has not got
+        // yet is given as ones it has.)
+        result.stoodIn = standInEntities(entities);
         std::vector<std::string> missingWads;
         WadSet wads;
         wads.openForMap(options_.gameDir, entities.empty() ? "" : entities[0].value("wad"),
@@ -289,6 +292,10 @@ namespace hlds
                 needs.push_back(held);
             }
         }
+        // A multiplayer map: the others in the game are seen. One model for
+        // all of them, the game's own player in the suit, with what a body
+        // does whole -- standing, running, crouching, jumping, dying.
+        addMultiplayerNeeds(entities, needs);
         // One model, with a skin of at most `skinTexels`. False if it cannot
         // be read or cooked (said once, in the warnings).
         auto cookOne = [&](const ModelNeed &need, int skinTexels, ModelOut &out, bool quiet)
@@ -1188,6 +1195,12 @@ namespace hlds
             map.worstPolygons = view.header->worstPolygons;
             map.worstVertices = view.header->worstVertices;
             map.textureCount = static_cast<std::uint16_t>(view.textureCount);
+            for (std::uint32_t e = 0; e < view.entityCount; ++e)
+            {
+                if (view.entities[e].classId == static_cast<std::uint16_t>(hldata::EntityClass::InfoPlayerDeathmatch) &&
+                    map.spawns < 255)
+                    ++map.spawns;
+            }
             manifest.maps.push_back(std::move(map));
         }
         std::sort(manifest.maps.begin(), manifest.maps.end(),

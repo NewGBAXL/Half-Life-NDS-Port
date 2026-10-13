@@ -314,6 +314,13 @@ namespace hldata
         /// Set by what happens to the player's things this tick (kGot*): the
         /// caller shows it, and clears it.
         std::uint32_t got = 0;
+        /// A game between consoles (HlNetGame.hpp): what lies about is
+        /// everybody's. Touching something does not take it: it is noted
+        /// in `wanted` (the actor; -1 none; -2 one has been asked for and
+        /// no other is noted yet), and whoever runs the game says who has
+        /// it.
+        bool shared = false;
+        std::int16_t wanted = -1;
         Projectile shots[kMaxProjectiles];
         Effect effects[kMaxEffects];
         Gib gibs[kMaxGibs];

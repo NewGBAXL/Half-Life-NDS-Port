@@ -1,5 +1,6 @@
 #include <ctime>
 
+#include "net/NetGame.hpp"
 #include "global_header.hpp"
 
 #include "DebugLog.hpp"
@@ -514,7 +515,9 @@ int main(int argc, char *argv[])
     // start in. Read before the 3D engine is up, because the map decides how
     // the engine is brought up.
     std::string startMap;
-    const Global::DataStatus status = global.ReadManifest(startMap);
+    std::vector<std::string> multiplayerMaps;
+    const Global::DataStatus status = global.ReadManifest(startMap, &multiplayerMaps);
+    hlrt::netGame.setMaps(multiplayerMaps);
 
     settings.load();
     const bool debugging = debugStart();
@@ -534,35 +537,52 @@ int main(int argc, char *argv[])
     hlrt::sound.init();
     std::string error;
     hlrt::menu.setSaves(&hlrt::SaveGame::index());
-    // The title: go on with the last save, load another, or begin. (A card
-    // set up to start somewhere for a test goes straight there.)
-    bool begun = false;
-    if (!debugging)
+    // The title: go on with the last save, load another, begin -- or a game
+    // between consoles, which begins when its host says on which map. True
+    // if it loaded something; false for a new game.
+    auto titleScreen = [&]() -> bool
     {
         if (hlrt::hudDraw.showLoading())
             hlrt::screenFade.curtainUp();
         hlrt::menu.openTitle();
-        while (!begun)
+        while (true)
         {
             swiWaitForVBlank();
             hlrt::input.poll();
             hlrt::sound.frame();
+            hlrt::netGame.frame();
             using hlrt::Menu;
             const Menu::Action item = hlrt::menu.frame();
             if (item == Menu::Action::Continue || item == Menu::Action::Load)
             {
-                begun = loadSave(error, hlrt::menu.slot());
-                if (!begun)
-                    hlrt::menu.openTitle(); // (it could not be: the title again)
+                if (loadSave(error, hlrt::menu.slot()))
+                    break;
+                hlrt::menu.openTitle(); // (it could not be: the title again)
             }
             else if (item == Menu::Action::NewGame)
             {
-                break;
+                settings.save();
+                return false;
+            }
+            // A match: its host has said which map (on the host's own
+            // console as on the others).
+            std::string map;
+            if (hlrt::netGame.startAsked(map))
+            {
+                hlrt::game.resetProgress();
+                if (loadLevel(map, nullptr, error) == LoadResult::Ok)
+                {
+                    hlrt::netGame.mapLoaded();
+                    break;
+                }
+                hlrt::netGame.leave();
+                hlrt::menu.openTitle();
             }
         }
         settings.save();
-    }
-    if (!begun)
+        return true;
+    };
+    auto newGame = [&]()
     {
         hlrt::game.resetProgress();
         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
@@ -574,7 +594,10 @@ int main(int argc, char *argv[])
             saveNow(hldata::kSlotAuto, true);
             saveNow(hldata::kSlotArrival, true);
         }
-    }
+    };
+    // (A card set up to start somewhere for a test goes straight there.)
+    if (debugging || !titleScreen())
+        newGame();
 
 #ifdef HLDS_PROFILE
     // (A build that measures also checks the hardware's arithmetic.)
@@ -591,6 +614,18 @@ int main(int argc, char *argv[])
     std::uint32_t lastVblank = Global::vblanks();
     std::uint32_t lastPass = lastVblank;
     bool paused = false;
+    // Out of a game between consoles: the title again, and whatever is
+    // chosen there.
+    auto backToTitle = [&]()
+    {
+        hlrt::netGame.leave();
+        paused = false;
+        hlrt::sound.setPaused(false);
+        hlrt::screenFade.curtainDown();
+        if (!titleScreen())
+            newGame();
+        lastVblank = lastPass = Global::vblanks();
+    };
 
     while (true)
     {
@@ -610,12 +645,36 @@ int main(int argc, char *argv[])
                 const int elapsed = static_cast<int>(now - lastVblank);
                 lastVblank = now;
 
+                // A game between consoles: what has come over the air; and
+                // if this console is out of it without having asked to be
+                // (the host left, the link went), the title.
+                const bool inMatch = hlrt::netGame.playing();
+                hlrt::netGame.frame();
+                if (inMatch && !hlrt::netGame.on())
+                {
+                    hlrt::bottomScreen.showMessage("OUT OF THE GAME", hlrt::netGame.ended());
+                    for (int n = 0; n < 150; ++n)
+                        swiWaitForVBlank();
+                    backToTitle();
+                    return;
+                }
+                {
+                    char line[40];
+                    if (!paused && hlrt::netGame.notice(line, sizeof(line)) && line[0] != 0)
+                    {
+                        say(line);
+                        saidUntil = Global::vblanks() + 150;
+                    }
+                }
+
                 if (!paused)
                 {
                     if (hlrt::input.startPressed || hlrt::input.menuPressed)
                     {
                         paused = true;
-                        hlrt::sound.setPaused(true);
+                        // (A game between consoles goes on, and is heard.)
+                        if (!inMatch)
+                            hlrt::sound.setPaused(true);
                         hlrt::menu.open();
                     }
                     else
@@ -626,8 +685,22 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
+                    // (A game between consoles does not stand still for
+                    // one console's menu: it goes on, with nothing held.)
+                    const bool startPressed = hlrt::input.startPressed;
+                    if (inMatch)
+                    {
+                        hlrt::input.quiet();
+                        hlrt::game.frame(elapsed);
+                        hlrt::input.startPressed = startPressed;
+                    }
                     using hlrt::Menu;
                     const Menu::Action item = hlrt::menu.frame();
+                    if (item == Menu::Action::Leave)
+                    {
+                        backToTitle();
+                        return;
+                    }
                     if (item == Menu::Action::Save || item == Menu::Action::SaveTo)
                     {
                         // The quick one, or the one of the player's six
@@ -722,7 +795,7 @@ int main(int argc, char *argv[])
 
                 // Dead: back to the last save, or to the start of the map if
                 // there is none.
-                if (!paused && hlrt::player.state.health <= 0 &&
+                if (!paused && !hlrt::netGame.playing() && hlrt::player.state.health <= 0 &&
                     (hlrt::player.noclip || hlrt::player.view.deadMs >= hldata::kDeathWaitMs))
                 {
 #ifdef HLDS_PROFILE
@@ -757,8 +830,12 @@ int main(int argc, char *argv[])
                 if (hlrt::game.logic.saveRequested)
                 {
                     hlrt::game.logic.saveRequested = false;
-                    saveNow(hldata::kSlotAuto);
+                    if (!hlrt::netGame.playing())
+                        saveNow(hldata::kSlotAuto);
                 }
+                // (No way out of a map in a game between consoles.)
+                if (hlrt::netGame.playing())
+                    hlrt::game.logic.pendingChange = -1;
                 // What was said on the touch screen has been read.
                 if (saidUntil != 0 && !paused && Global::vblanks() > saidUntil)
                 {

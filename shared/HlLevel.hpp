@@ -34,7 +34,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 26;
+    inline constexpr std::uint16_t kLevelVersion = 27;
 
     enum class Section : std::uint16_t
     {
@@ -671,6 +671,9 @@ namespace hldata
         Turret,     ///< the big one: has to spin up before it fires
         Grunt,      ///< a soldier (HlGrunt.hpp)
         Tripmine,   ///< a mine on a wall, with its beam
+        /// Another player, in a game between consoles (HlNetGame.hpp): not
+        /// in any map; put where their own console says they are.
+        Player,
         Count
     };
 
@@ -945,6 +948,9 @@ namespace hldata
     {
         Worldspawn,
         InfoPlayerStart,
+        /// Where a player comes into a game between consoles (the game's
+        /// info_player_deathmatch): a map that has any is a multiplayer map.
+        InfoPlayerDeathmatch,
     };
 
     struct EntityRecord

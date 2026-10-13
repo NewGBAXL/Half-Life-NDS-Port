@@ -654,6 +654,44 @@ Milestone 11, "levels of detail".
   USE as it lifts, without waiting to see whether a second tap makes it a
   jump -- waiting would make every USE a third of a second late. Settings
   saved before there were layouts are still read.
+- A game between consoles (`shared/HlNet.hpp`, `shared/HlNetGame.hpp`,
+  `source/net/`). Each console runs the whole game for its own player, as it
+  does alone, and tells the others; none of the ninety-odd functions that
+  take "the player" had to learn that there are several.
+  - **The radio** is dswifi's local multiplayer (the fork that also does
+    Download Play): one console the host, up to three its clients. Every
+    frame the host sends one frame all clients hear, and each client answers
+    with one the host hears. Nothing else is used during a match.
+  - **A state** (sixteen bytes: where, facing, how fast, what in hand,
+    standing or crouched or dead) goes whole in every frame, so a lost frame
+    is replaced by the next. **An event** (a shot, a hit, a death, a pickup,
+    a button used) is numbered, sent in every frame until the other end says
+    it has it, and taken in order, once. A client's events go to the host,
+    which passes on what the others need in its own, one stream that every
+    client follows from where it joined.
+  - **A hit is claimed by whoever made it.** The others are actors of a new
+    kind (`ActorKind::Player`) on each console, so the game's own
+    `fireLine`, hit boxes and `radiusDamage` find them; what is taken off
+    such an actor is not a wound but a claim, sent to the console whose
+    player it is, which takes it (`playerHurt`). A console's word is taken
+    for its own position and its hits: right for friends in a room, and what
+    lets the game stay as it is.
+  - **The host decides what is shared:** who has a pickup when two reach for
+    it (touching one only asks for it), when it is back, the scores, the end.
+  - **The map's machinery** runs on every console. Each works out, for every
+    player, what they walk into here (`logicGhostTouch`: the triggers,
+    the doors and buttons that go at a touch, the lift stood on); what a
+    player USES or breaks is an event, done again on the others by someone
+    standing where they stand. There is no periodic check yet that the
+    consoles' doors and lifts agree.
+  - `test_net` plays it: events through air that loses a fifth of the
+    frames and delays the rest, with a client leaving and another coming;
+    a lobby with no map loaded; and three whole games on crossfire -- seen
+    by each other, hit, killed and scored, back after three seconds, two
+    reaching for one shotgun, a button used, a trigger walked into, one
+    leaving, the frag limit. Also the sending of a file in pieces (only the
+    pieces the other end lacks), which is for consoles started by Download
+    Play, when that is built.
 
 ## Not yet
 

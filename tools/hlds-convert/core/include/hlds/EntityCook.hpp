@@ -63,6 +63,22 @@ namespace hlds
         std::map<std::string, int> unsupported;
     };
 
+    /// The name, in a multiplayer map's models, of the one the other
+    /// players are seen as.
+    inline constexpr const char *kPlayerModelName = "player";
+
+    /// Whether the map is one for a game between consoles: it has places
+    /// for players to come in (info_player_deathmatch).
+    bool isMultiplayerMap(const std::vector<Entity> &entities);
+
+    /// In a multiplayer map, what lies about of weapons the port has not got
+    /// yet (the rocket launcher, the gauss gun, the crossbow, satchels...)
+    /// and of their ammunition is made into something it has, so that the
+    /// map has its full count of things to pick up: the entity's class is
+    /// changed, here, before anything is cooked from it. Returns how many
+    /// were. Other maps are left as they are.
+    int standInEntities(std::vector<Entity> &entities);
+
     /// A model a map needs, and the sequences of it the map plays.
     struct ModelNeed
     {
@@ -84,6 +100,11 @@ namespace hlds
     /// map must have their models, with the clips its scripts have them play.
     void addVisitorNeeds(const std::vector<Entity> &entities, const std::vector<Entity> &neighbour,
                          const std::string &landmark, std::vector<ModelNeed> &needs);
+
+    /// Add to `needs` what a multiplayer map needs besides: the model the
+    /// other players are seen as (kPlayerModelName), with what a body does
+    /// whole. Nothing, for any other map.
+    void addMultiplayerNeeds(const std::vector<Entity> &entities, std::vector<ModelNeed> &needs);
 
     /// `models` are the names of the models that were cooked for this map
     /// (ModelNeed::name), in the order they will be in the level: an actor

@@ -27,6 +27,7 @@ namespace hlrt
             Continue, ///< the most recent save (the title's)
             NewGame,
             Command,
+            Leave, ///< out of a game between consoles, to the title
         };
 
         /// Take the touch screen and show the first page.
@@ -56,6 +57,11 @@ namespace hlrt
             Saves,   ///< the list: to load from, or to save into
             Confirm, ///< "overwrite?", "load?", "new game?"
             Controls, ///< the layout of the buttons
+            Multiplayer, ///< host a game between consoles, or join one
+            NetHost,     ///< the host's lobby: which map, what limits, who is there
+            NetJoin,     ///< the games found
+            NetLobby,    ///< a client waiting for the host to start
+            NetPause,    ///< the pause menu of a game between consoles (which goes on)
         };
         const hldata::SaveIndex *saves_ = nullptr;
         bool title_ = false;   ///< it is the title's menu, not the pause's
@@ -66,6 +72,15 @@ namespace hlrt
         void showSaves(bool saving);
         void ask(Action action, const char *question);
         Page page_ = Page::Main;
+        // A game between consoles: what the host has chosen, and what was
+        // last drawn of who is there (to draw again when it changes).
+        int netMap_ = 0, netFrags_ = 20, netMinutes_ = 10;
+        unsigned netShown_ = 0;
+        int netTick_ = 0;
+        void showFound();
+        void drawPlayers(int top, bool scores);
+        unsigned netSignature() const;
+        bool big() const;
         int active_ = -1; ///< the row the stylus went down on, or -1
         bool touching_ = false;
         int lastX_ = 0, lastY_ = 0;
