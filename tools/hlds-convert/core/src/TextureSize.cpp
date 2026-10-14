@@ -31,4 +31,14 @@ namespace hlds
             kMaxTextureSide));
         return size;
     }
+
+    TextureSize streamedTextureSize(std::uint32_t sourceWidth, std::uint32_t sourceHeight)
+    {
+        TextureSize size;
+        size.width = static_cast<std::uint16_t>(
+            std::clamp(nearestPowerOfTwo(std::max<std::uint32_t>(sourceWidth, 1)), kMinTextureSide, kMaxTextureSide));
+        size.height = static_cast<std::uint16_t>(
+            std::clamp(nearestPowerOfTwo(std::max<std::uint32_t>(sourceHeight, 1)), kMinTextureSide, kMaxTextureSide));
+        return size;
+    }
 } // namespace hlds

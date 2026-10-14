@@ -6,8 +6,7 @@
 // It prints ONE ROW at a time, a few frames apart, and that is not a nicety:
 // the libnds console costs about 13 ms for the whole readout, most of a frame.
 // Printed every frame it halved the frame rate it was reporting; printed all
-// at once it would still cost a frame now and then, and in two-pass mode a
-// missed frame shows the two halves of the screen out of step.
+// at once it would still cost a frame now and then.
 
 namespace hlrt
 {

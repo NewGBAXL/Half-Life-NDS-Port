@@ -1,6 +1,7 @@
 #include "hlds/ModelCook.hpp"
 #include "hlds/ModelMesh.hpp"
 
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -130,7 +131,8 @@ namespace hlds
             constexpr int kBorder = 2;
             static const int kSizes[][2] = {{32, 32},   {64, 32},   {64, 64},  {128, 64},
                                             {128, 128}, {256, 128}, {256, 256}};
-            static const double kScales[] = {1.0, 0.75, 0.625, 0.5, 0.375, 0.3125, 0.25, 0.1875, 0.125};
+            static const double kScales[] = {1.0, 0.875, 0.8, 0.75, 0.625, 0.5, 0.375, 0.3125, 0.25, 0.1875, 0.125};
+            static const double kMin = std::getenv("HLDS_ATLAS_MIN") ? std::atof(std::getenv("HLDS_ATLAS_MIN")) : 0.5;
 
             int width = 0, height = 0;
             std::vector<std::pair<int, int>> at;
@@ -156,7 +158,7 @@ namespace hlds
                     }
                     for (double scale : kScales)
                     {
-                        if (pass == 0 && scale < 0.5)
+                        if (pass == 0 && scale < kMin - 1e-9)
                             break;
                         std::vector<std::pair<int, int>> padded;
                         inner.clear();

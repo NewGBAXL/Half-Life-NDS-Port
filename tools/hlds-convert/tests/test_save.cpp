@@ -65,9 +65,27 @@ int main()
     bad = bytes;
     bad.pop_back();
     check(!readSave(bad.data(), bad.size(), untouched), "nor a truncated one");
+
+    // Version and the maps it follows. SaveHeader: version at 4, levelVersion at 6.
     bad = bytes;
-    bad[4] ^= 1; // the version
+    bad[4] = static_cast<std::uint8_t>(kSaveVersion + 1);
+    bad[5] = 0;
     check(!readSave(bad.data(), bad.size(), untouched), "nor one of another version");
+    bad = bytes;
+    bad[6] = static_cast<std::uint8_t>(kLevelSaveSince - 1); // made against maps older than the saves still follow
+    bad[7] = 0;
+    check(!readSave(bad.data(), bad.size(), untouched), "nor one of maps whose layout it no longer follows");
+    bad = bytes;
+    bad[6] = static_cast<std::uint8_t>(kLevelSaveSince); // the oldest maps they still follow
+    bad[7] = 0;
+    {
+        SaveData older;
+        check(readSave(bad.data(), bad.size(), older), "but one of the oldest maps it still follows is read");
+    }
+    bad = bytes;
+    bad[6] = static_cast<std::uint8_t>(kLevelVersion + 1);
+    bad[7] = 0;
+    check(!readSave(bad.data(), bad.size(), untouched), "nor one of maps newer than this build");
     check(!readSave(bytes.data(), 8, untouched), "nor a file too short to be one");
 
     // A save whose map name is not a plain name is a save that would open

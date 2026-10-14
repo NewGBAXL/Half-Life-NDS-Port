@@ -9,6 +9,7 @@
 #include "HlSprite.hpp"
 #include "HlUi.hpp"
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 #include "render/HudDraw.hpp"
 #include "data/SpriteCache.hpp"
 #include "game/Game.hpp"
@@ -462,14 +463,17 @@ namespace hlrt
         if (piece.leftMs < 320)
             alpha = alpha * piece.leftMs / 320;
         alpha = alpha < 1 ? 1 : (alpha > 31 ? 31 : alpha);
-        const NEA_Material *material = piece.texture != 0xFFFF ? textureCache.material(piece.texture) : nullptr;
-        if (material != nullptr)
-            NEA_MaterialUse(material);
+        bool textured = false;
+        if (piece.texture != 0xFFFF)
+        {
+            noteTextureDrawn(piece.texture);
+            textured = textureCache.use(piece.texture);
+        }
         else
             GFX_TEX_FORMAT = 0;
         look(alpha, freshId(), piece.colour);
         GFX_BEGIN = GL_TRIANGLES;
-        pieceCorners(piece, material != nullptr);
+        pieceCorners(piece, textured);
     }
 
     /// The small things that are solid -- specks, casings, the pieces of
@@ -499,7 +503,7 @@ namespace hlrt
         {
             if (piece.kind == 0 || piece.alpha < 31 || !pieceSeen(piece))
                 continue;
-            if (piece.kind == kPieceShard && piece.texture != 0xFFFF && textureCache.material(piece.texture) != nullptr)
+            if (piece.kind == kPieceShard && piece.texture != 0xFFFF && textureCache.present(piece.texture))
                 continue;
             if (!plain)
             {
@@ -524,8 +528,7 @@ namespace hlrt
             bool seen = false;
             for (int k = 0; k < doneCount; ++k)
                 seen = seen || done[k] == first.texture;
-            const NEA_Material *material = textureCache.material(first.texture);
-            if (seen || material == nullptr || doneCount == 8)
+            if (seen || !textureCache.present(first.texture) || doneCount == 8)
                 continue;
             done[doneCount++] = first.texture;
             bool bound = false;
@@ -537,7 +540,8 @@ namespace hlrt
                 {
                     bound = true;
                     start();
-                    NEA_MaterialUse(material);
+                    noteTextureDrawn(first.texture);
+                    textureCache.use(first.texture);
                     GFX_COLOR = 0x7FFF;
                     GFX_BEGIN = GL_TRIANGLES;
                 }

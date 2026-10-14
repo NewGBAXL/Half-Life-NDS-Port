@@ -158,9 +158,22 @@ namespace
         bad[0] = 'X';
         check(view.open(bad.data(), size) == LevelError::BadMagic, "wrong magic");
 
+        // Min and target: a file older than this build reads, or one that
+        // needs a newer build, is refused; a newer file an old build can
+        // read (its minReader is not above this build's) is read.
         bad = good;
-        bad[4] ^= 0x7F;
-        check(view.open(bad.data(), size) == LevelError::BadVersion, "wrong version");
+        bad[4] = static_cast<std::uint8_t>(kLevelMinVersion - 1);
+        bad[5] = 0;
+        check(view.open(bad.data(), size) == LevelError::BadVersion, "a version older than this build reads");
+        bad = good;
+        bad[38] = static_cast<std::uint8_t>(kLevelVersion + 1); // minReader
+        bad[39] = 0;
+        check(view.open(bad.data(), size) == LevelError::BadVersion, "a file that needs a newer build");
+        bad = good;
+        bad[4] = static_cast<std::uint8_t>(kLevelVersion + 1);
+        bad[5] = 0;
+        check(view.open(bad.data(), size) == LevelError::Ok, "a newer file this build can still read");
+        check(view.header != nullptr && view.header->minReader == kLevelMinReader, "the file says who can read it");
 
         check(view.open(good.data(), size - 4) == LevelError::BadSize, "a truncated file");
 

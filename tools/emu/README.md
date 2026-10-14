@@ -37,10 +37,9 @@ instead of playing it: raw 16-bit stereo samples at 48 kHz (SDL's "disk" audio
 driver), which can be measured, or listened to with
 `ffplay -f s16le -ar 48000 -ac 2 <file>`.
 
-`EMU_START="x y z yaw [track [mode]]"` starts the player at a place, armed
+`EMU_START="x y z yaw [track]"` starts the player at a place, armed
 and wearing the suit, with the debug readout on: `track` starts that track of
-the music (-1 for none) and `mode` says how to draw (1 single-pass, 2
-two-pass, 3 two-pass DMA).
+the music (-1 for none).
 
 The private card images are a gigabyte each (`setup.sh` says so to melonDS):
 a whole cooked campaign is a quarter of that, and an image that is full

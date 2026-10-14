@@ -29,16 +29,6 @@ namespace hlrt
         std::int32_t dist;
     };
 
-    /// Which part of the screen the cull planes enclose. In two-pass mode
-    /// each pass draws one half, and culling to that half is where the mode's
-    /// extra capacity comes from: geometry in the other half is not sent.
-    enum class ViewHalf
-    {
-        Whole,
-        Left,
-        Right,
-    };
-
     class Camera
     {
     public:
@@ -82,10 +72,8 @@ namespace hlrt
         /// Recompute the vectors, the matrix and the cull planes (for the whole
         /// screen) from pos, yaw and pitch.
         void update();
-        /// Rebuild only the cull planes, for one half of the screen or all of
-        /// it. The matrix is the same for both halves: NEA narrows the
-        /// projection, not the view.
-        void buildPlanes(ViewHalf half);
+        /// Rebuild only the cull planes (the matrix is as it was).
+        void buildPlanes();
         /// Load the view matrix into the geometry engine's modelview.
         void apply() const;
 

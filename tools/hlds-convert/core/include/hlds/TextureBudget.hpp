@@ -6,8 +6,7 @@
 //
 //  * TEXELS. 4x4 compressed data goes in a bank pair that holds 524,288
 //    texels. World textures are kept to one pair so the other is free for
-//    models and weapons, and so a map also fits the two-pass mode that only
-//    has one.
+//    models and weapons.
 //  * PALETTE. A compressed texture's palette offset is 14 bits counting pairs
 //    of colours: 32,768 colours for everything, which is also what the 64 KB
 //    palette bank holds.
@@ -22,8 +21,8 @@
 // back for the whole map if the total would not fit.
 //
 // A3I5 textures (the '{' textures of brushes drawn with holes) have a budget
-// of their own, 8 bits a texel: the upper half of bank B. In two-pass mode
-// that half is the only texture memory 4x4 data cannot use, so it costs the
+// of their own, 8 bits a texel: the upper half of bank B.
+// That half is the only texture memory 4x4 data cannot use, so it costs the
 // opaque textures nothing; go past it and every byte comes out of theirs.
 
 #include <string>
@@ -37,6 +36,7 @@
 namespace hlds
 {
     inline constexpr int kWorldTexelBudget = 480 * 1024;
+    inline constexpr int kSinglePassTexelBudget = 720 * 1024;
     inline constexpr int kPaletteColourBudget = 30000;
     /// (Of the 64 KB that half holds, twelve are there in every map: eight
     /// the head-up display's, four the marks shots and blood leave --
@@ -60,6 +60,15 @@ namespace hlds
         std::vector<double> alphaArea;
     };
 
+    /// Plain opaque textures are sized for what one view of the map lists,
+    /// everything else is allocated as before, within a share of the budget.
+    struct StreamOptions
+    {
+        bool enabled = false;
+        int residentPercent = 40; //how much of the budget resident textures get
+        bool families = true;
+    };
+
     /// `hidden` (findHiddenTextures) may be empty.
     TextureNeeds textureNeeds(const BspFile &bsp, const std::vector<BrushInfo> &brushes,
                               const std::vector<char> &hidden);
@@ -77,6 +86,11 @@ namespace hlds
         int colours = 0;
         int shrunk = 0;  ///< textures made smaller than their default
         bool fits = true; ///< false if even the smallest sizes are too much
+        std::vector<char> streamed; ///< empty when not using streaming
+        int streamedTextures = 0;
+        int residentTexels = 0;   ///< of the 4x4 textures that are not streamed
+        int regionTexels = 0;     ///< what the streamed ones may take of one view
+        int worstViewTexels = 0;  ///< what the worst view lists of them
     };
 
     /// Textures that are nothing but holes: a colour-keyed ('{') texture whose
@@ -90,7 +104,8 @@ namespace hlds
     TexturePlan planTextures(const BspFile &bsp, const TextureNeeds &needs,
                              int texelBudget = kWorldTexelBudget,
                              int colourBudget = kPaletteColourBudget,
-                             int alphaBudget = kAlphaTexelBudget);
+                             int alphaBudget = kAlphaTexelBudget,
+                             const StreamOptions &stream = StreamOptions());
 
     /// For a map taken as plain geometry -- every model opaque, no entities
     /// consulted. `hidden` marks textures to leave out (findHiddenTextures).

@@ -1,6 +1,10 @@
 #include "hlds/TextureEncoder.hpp"
 
+#include <algorithm>
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
+#include <thread>
 #include <cstring>
 
 #include "hlds/AtomicWrite.hpp"
@@ -9,6 +13,38 @@ namespace hlds
 {
     namespace
     {
+        /// Multi-threaded encoding
+        class EncodeSlots
+        {
+        public:
+            EncodeSlots() : free_(static_cast<int>(std::max(1u, std::thread::hardware_concurrency()))) {}
+            void take()
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&] { return free_ > 0; });
+                --free_;
+            }
+            void give()
+            {
+                {
+                    const std::lock_guard<std::mutex> lock(mutex_);
+                    ++free_;
+                }
+                cv_.notify_one();
+            }
+
+        private:
+            std::mutex mutex_;
+            std::condition_variable cv_;
+            int free_;
+        };
+
+        EncodeSlots &encodeSlots()
+        {
+            static EncodeSlots slots;
+            return slots;
+        }
+
         /// Quote a path for the shell. Paths here are ours (a temp directory
         /// and an executable the user pointed at), but a space in a home
         /// directory is common enough.
@@ -67,7 +103,9 @@ namespace hlds
 #else
                                     " > /dev/null 2>&1";
 #endif
+        encodeSlots().take();
         const int status = std::system(command.c_str());
+        encodeSlots().give();
 
         auto piece = [&](const char *suffix, std::vector<std::uint8_t> &bytes)
         {

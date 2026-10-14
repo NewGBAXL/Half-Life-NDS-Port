@@ -34,6 +34,87 @@ namespace hlds
         {
             return std::clamp(texels / divisor, 16, 512) & ~1;
         }
+        /// A name the streaming may take: not a liquid ('!', "water"), a belt
+        /// ("scroll") or a hole ('{'). (The cycles and the tiled variants are
+        /// the families' business: planTextures.)
+        bool streamableName(const std::string &name)
+        {
+            if (name.empty())
+                return false;
+            const char c = name[0];
+            return c != '!' && c != '{' && c != '*' && name.rfind("water", 0) != 0 && name.rfind("scroll", 0) != 0;
+        }
+
+        /// For each leaf a view has (1..visLeafCount): the streamed textures
+        /// any surface in its PVS wears, each once.
+        std::vector<std::vector<int>> streamedViews(const BspFile &bsp, const std::vector<char> &streamed,
+                                                    const std::vector<int> &canon, const std::vector<int> &otherOf)
+        {
+            const int leaves = bsp.visLeafCount();
+            std::vector<std::vector<int>> own(leaves + 1), views(leaves + 1);
+            std::vector<int> stamp(bsp.textures.size(), -1);
+            for (int l = 1; l <= leaves; ++l)
+            {
+                const BspLeaf &leaf = bsp.leaves[l];
+                for (int k = 0; k < leaf.markSurfaceCount; ++k)
+                {
+                    const BspFace &face = bsp.faces[bsp.markSurfaces[leaf.firstMarkSurface + k]];
+                    const int worn = wornTexture(bsp, face);
+                    if (worn < 0 || !streamed[worn])
+                        continue;
+                    // (A cycle is one picture in a view -- the one shown -- and
+                    // so is its other face's, which a brush may show instead.)
+                    for (const int t : {canon[worn], otherOf[worn]})
+                    {
+                        if (t >= 0 && stamp[t] != l)
+                        {
+                            stamp[t] = l;
+                            own[l].push_back(t);
+                        }
+                    }
+                }
+            }
+            std::fill(stamp.begin(), stamp.end(), -1);
+            for (int l = 1; l <= leaves; ++l)
+            {
+                const std::vector<std::uint8_t> row = bsp.decompressVis(l);
+                for (int other = 1; other <= leaves; ++other)
+                {
+                    if (other != l && !(row[(other - 1) >> 3] & (1 << ((other - 1) & 7))))
+                        continue;
+                    for (const int t : own[other])
+                    {
+                        if (stamp[t] != l)
+                        {
+                            stamp[t] = l;
+                            views[l].push_back(t);
+                        }
+                    }
+                }
+            }
+            return views;
+        }
+
+        /// The most, over every view, of `value(texture)` summed over the
+        /// textures the view lists; and which view that is.
+        template <class F>
+        long worstView(const std::vector<std::vector<int>> &views, F value, int *which = nullptr)
+        {
+            long worst = 0;
+            for (std::size_t l = 1; l < views.size(); ++l)
+            {
+                long sum = 0;
+                for (const int t : views[l])
+                    sum += value(t);
+                if (sum > worst)
+                {
+                    worst = sum;
+                    if (which != nullptr)
+                        *which = static_cast<int>(l);
+                }
+            }
+            return worst;
+        }
     } // namespace
 
     std::vector<char> findHiddenTextures(const BspFile &bsp, const WadSet &wads)
@@ -165,18 +246,69 @@ namespace hlds
     } // namespace
 
     TexturePlan planTextures(const BspFile &bsp, const TextureNeeds &needs, int texelBudget,
-                             int colourBudget, int alphaBudget)
+                             int colourBudget, int alphaBudget, const StreamOptions &stream)
     {
         TexturePlan plan;
         plan.sizes.assign(bsp.textures.size(), TextureSize{});
         plan.alphaSizes.assign(bsp.textures.size(), TextureSize{});
         plan.paletteColours.assign(bsp.textures.size(), 0);
+        // Which are streamed (if any are): plain opaque ones, one picture and
+        // one face.
+        std::vector<char> streamed;
+        std::vector<int> canon, otherOf;       // see below
+        std::vector<std::vector<int>> cycleOf; // by a cycle's first picture: its pictures
+        if (stream.enabled)
+        {
+            streamed.assign(bsp.textures.size(), 0);
+            for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+            {
+                const TextureFamily family = textureFamily(bsp, static_cast<int>(t));
+                const bool isFamily = family.frames.size() > 1 || !family.other.empty();
+                if (isFamily && !stream.families)
+                    continue;
+                // (All of a family's pictures or none: they are wanted together.)
+                bool ok = true;
+                for (const std::vector<int> *part : {&family.frames, &family.other})
+                {
+                    for (const int member : *part)
+                        ok = ok && needs.opaque[member] && !needs.alpha[member] && streamableName(bsp.textures[member].name);
+                }
+                streamed[t] = ok;
+            }
+            // Each picture of a cycle stands for its cycle's first, and the
+            // first of a cycle that has another face has that cycle's first.
+            canon.resize(bsp.textures.size());
+            otherOf.assign(bsp.textures.size(), -1);
+            cycleOf.assign(bsp.textures.size(), std::vector<int>());
+            for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+            {
+                canon[t] = static_cast<int>(t);
+                const TextureFamily family = textureFamily(bsp, static_cast<int>(t));
+                const std::string &name = bsp.textures[t].name;
+                const bool inFrames = std::find(family.frames.begin(), family.frames.end(), static_cast<int>(t)) != family.frames.end();
+                if (inFrames)
+                {
+                    canon[t] = family.frames[0];
+                    if (!family.other.empty())
+                        otherOf[t] = family.other[0];
+                }
+                else if (std::find(family.other.begin(), family.other.end(), static_cast<int>(t)) != family.other.end())
+                    canon[t] = family.other[0];
+                (void)name;
+            }
+            for (std::size_t t = 0; t < bsp.textures.size(); ++t)
+            {
+                if (streamed[t])
+                    cycleOf[canon[t]].push_back(static_cast<int>(t));
+            }
+        }
         for (std::size_t t = 0; t < bsp.textures.size(); ++t)
         {
             const BspTexture &tex = bsp.textures[t];
             if (needs.opaque[t])
             {
-                plan.sizes[t] = defaultTextureSize(tex.width, tex.height);
+                plan.sizes[t] = streamed.empty() || !streamed[t] ? defaultTextureSize(tex.width, tex.height)
+                                                                 : streamedTextureSize(tex.width, tex.height);
                 ++plan.usedTextures;
             }
             if (needs.alpha[t])
@@ -187,8 +319,29 @@ namespace hlds
         }
 
         std::vector<char> shrunk(bsp.textures.size(), 0);
-        if (!shrinkToFit(plan.sizes, needs.opaqueArea, texelBudget, plan.texels, shrunk))
-            plan.fits = false;
+        if (streamed.empty())
+        {
+            if (!shrinkToFit(plan.sizes, needs.opaqueArea, texelBudget, plan.texels, shrunk))
+                plan.fits = false;
+        }
+        else
+        {
+            // What stays in video memory has its share of the budget; the
+            // streamed ones are planned below, once that is known.
+            std::vector<TextureSize> resident = plan.sizes;
+            for (std::size_t t = 0; t < resident.size(); ++t)
+            {
+                if (streamed[t])
+                    resident[t] = TextureSize{};
+            }
+            if (!shrinkToFit(resident, needs.opaqueArea, texelBudget * stream.residentPercent / 100, plan.texels, shrunk))
+                plan.fits = false;
+            for (std::size_t t = 0; t < resident.size(); ++t)
+            {
+                if (!streamed[t])
+                    plan.sizes[t] = resident[t];
+            }
+        }
         if (!shrinkToFit(plan.alphaSizes, needs.alphaArea, alphaBudget, plan.alphaTexels, shrunk))
             plan.fits = false;
         plan.shrunk = static_cast<int>(std::count(shrunk.begin(), shrunk.end(), 1));
@@ -226,8 +379,75 @@ namespace hlds
         plan.texels = plan.alphaTexels = 0;
         for (std::size_t t = 0; t < bsp.textures.size(); ++t)
         {
-            plan.texels += static_cast<int>(plan.sizes[t].width) * plan.sizes[t].height;
+            if (streamed.empty() || !streamed[t])
+                plan.texels += static_cast<int>(plan.sizes[t].width) * plan.sizes[t].height;
             plan.alphaTexels += static_cast<int>(plan.alphaSizes[t].width) * plan.alphaSizes[t].height;
+        }
+        std::vector<std::vector<int>> views;
+        if (!streamed.empty())
+        {
+            plan.streamed = streamed;
+            plan.streamedTextures = static_cast<int>(std::count(streamed.begin(), streamed.end(), 1));
+            plan.residentTexels = plan.texels;
+            // (A tenth is left over: the faces of brush entities are not in a
+            // view's count.)
+            plan.regionTexels = std::max((texelBudget - plan.residentTexels) * 9 / 10, 16 * 1024);
+            views = streamedViews(bsp, streamed, canon, otherOf);
+            auto texelsOf = [&](int t) { return static_cast<long>(plan.sizes[t].width) * plan.sizes[t].height; };
+            // The worst view must fit what is left of the budget: halve,
+            // in that view, whatever does the least with its memory -- but
+            // every texture of the view once before any is halved twice, and
+            // so on. (Without that, small things that are all detail -- a
+            // sign -- always lose: they cover the least wall for their texels
+            // and would be halved down to nothing while the walls stay as
+            // they were.)
+            std::vector<int> halvings(bsp.textures.size(), 0);
+            for (;;)
+            {
+                int which = 0;
+                const long worst = worstView(views, texelsOf, &which);
+                if (worst <= plan.regionTexels || which == 0)
+                    break;
+                int pick = -1;
+                double least = 0;
+                for (const int t : views[which])
+                {
+                    const TextureSize &size = plan.sizes[t];
+                    if (size.width <= kMinTextureSide && size.height <= kMinTextureSide)
+                        continue;
+                    const double density = needs.opaqueArea[t] / static_cast<double>(texelsOf(t));
+                    if (pick < 0 || halvings[t] < halvings[pick] || (halvings[t] == halvings[pick] && density < least))
+                    {
+                        pick = t;
+                        least = density;
+                    }
+                }
+                if (pick < 0)
+                {
+                    plan.fits = false;
+                    break;
+                }
+                TextureSize &size = plan.sizes[pick];
+                if (size.width >= size.height && size.width > kMinTextureSide)
+                    size.width /= 2;
+                else if (size.height > kMinTextureSide)
+                    size.height /= 2;
+                else
+                    size.width /= 2;
+                shrunk[pick] = 1;
+                ++halvings[pick];
+                // (The pictures of a cycle are all one size.)
+                for (const int member : cycleOf[pick])
+                {
+                    plan.sizes[member] = size;
+                    shrunk[member] = 1;
+                }
+            }
+            plan.worstViewTexels = static_cast<int>(worstView(views, texelsOf));
+            plan.shrunk = static_cast<int>(std::count(shrunk.begin(), shrunk.end(), 1));
+            // (What the report calls the map's texels: all that is ever in
+            // video memory at once, at the most.)
+            plan.texels += plan.worstViewTexels;
         }
 
         // The palette bank is shared: every A3I5 texture takes 32 colours of
@@ -250,8 +470,13 @@ namespace hlds
                     continue;
                 plan.paletteColours[t] = coloursFor(
                     static_cast<int>(plan.sizes[t].width) * plan.sizes[t].height, divisor);
-                plan.colours += plan.paletteColours[t];
+                // (A streamed texture's palette is in video memory only as
+                // long as the texture is: the worst view's, below.)
+                if (streamed.empty() || !streamed[t])
+                    plan.colours += plan.paletteColours[t];
             }
+            if (!views.empty())
+                plan.colours += static_cast<int>(worstView(views, [&](int t) { return plan.paletteColours[t]; }));
             if (plan.colours <= colourBudget)
                 break;
         }

@@ -415,9 +415,9 @@ namespace
             std::printf("test_track: HLDS_VALVE_DIR not set, the real ride is skipped\n");
             return;
         }
-        // Every frame rate the console runs at -- 60 a second in single-pass,
-        // 30 in two-pass, and the 20 and 15 of a frame that ran long -- with
-        // a passenger who stands still and one who will not.
+        // Every frame rate the console runs at
+        // (60 a second; 30, 20 and 15 of a frame that ran long)
+        // with a passenger who stands still and one who will not.
         for (int vblanks = 1; vblanks <= 4; ++vblanks)
         {
             check(ride(dir, vblanks, Passenger::Idle, false),

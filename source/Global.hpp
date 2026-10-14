@@ -8,21 +8,13 @@
 // pad, the way DS first-person shooters do it.
 //
 // TWO STEPS. Init() brings up everything that does not depend on the map;
-// InitVideo() brings up the 3D engine, and has to know one thing about the map
-// first: whether it needs TWO-PASS rendering.
+// InitVideo() brings up the 3D engine.
 //
-// The hardware draws 2048 polygons and 6144 vertices a frame and no more. In
-// two-pass mode the screen is drawn as a left half and a right half on
-// alternate frames, each with that whole allowance to itself, and the two are
-// put together with the display capture unit. It doubles what can be on
-// screen and halves the frame rate to 30, so it is used only for the maps
-// that need it -- which the converter measured and wrote in the level's
-// header.
-//
-// Of NEA's three two-pass variants this uses the FB one: the two capture
-// buffers are VRAM banks C and D rather than 192 KB of main RAM (a twentieth
-// of a DS's memory), and textures get banks A and B, which is exactly the one
-// compressed-texture pair the converter budgets a map's world textures for.
+// The hardware draws 2048 polygons and 6144 vertices a frame and no more, and
+// every map is drawn in ONE pass, at 60 frames a second: what a view asks for
+// beyond that is left out from the far end and hidden in fog (WorldDraw).
+// Video banks A, B and C are textures; D is kept back for FrameFreeze, which
+// captures the last picture of a map into it while the next one loads.
 
 #include "global_header.hpp"
 
@@ -39,29 +31,11 @@ public:
     /// The ARM9 is running at 134 MHz. Only ever true when isDSi is.
     bool fastClock = false;
 
-    /// How the 3D engine is brought up.
-    enum class Video : std::uint8_t
-    {
-        SinglePass,
-        TwoPass,    ///< halves put together in video memory (NEA's "FB")
-        TwoPassDma, ///< halves put together in main memory (NEA's "HBL DMA")
-    };
-    /// Set by InitVideo().
-    Video video = Video::SinglePass;
-    /// The world is drawn in two passes, at 30 frames a second, either way.
-    bool twoPass = false;
-
     /// IRQs, clock and FAT: everything but the picture. Call once at startup.
     void Init();
 
-    /// The 3D engine, in single-pass or two-pass mode, and the debug console.
-    /// Call after Init().
-    ///
-    /// May be called again to change mode. NEA tears itself down and starts
-    /// over when it is, which frees every material and palette it held: the
-    /// caller must drop its own pointers to them first (TextureCache::forget)
-    /// and load the textures again afterwards.
-    void InitVideo(Video want);
+    /// The 3D engine. Call after Init().
+    void InitVideo();
     bool videoReady() const { return videoReady_; }
 
     /// Vertical blanks since boot: the game's clock. Sixty to the second.

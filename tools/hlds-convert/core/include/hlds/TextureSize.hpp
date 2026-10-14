@@ -27,4 +27,8 @@ namespace hlds
     /// ratio, so 48 goes up to 64 and 40 down to 32) and clamped to
     /// kMinTextureSide..kMaxTextureSide.
     TextureSize defaultTextureSize(std::uint32_t sourceWidth, std::uint32_t sourceHeight);
+
+    /// Original source size, each axis rounded to the nearest power of two,
+    /// clamped to kMinTextureSide..kMaxTextureSide.
+    TextureSize streamedTextureSize(std::uint32_t sourceWidth, std::uint32_t sourceHeight);
 } // namespace hlds

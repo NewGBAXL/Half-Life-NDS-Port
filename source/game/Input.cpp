@@ -19,8 +19,8 @@ namespace hlrt
     HL_ARM void Input::poll()
     {
         scanKeys();
-        // What is HELD, and never keysDown(): in two-pass mode NEA scans the
-        // keys as well, and keysDown() only reports what changed since the
+        // What is HELD, and never keysDown():
+        // keysDown() only reports what changed since the
         // LAST scan, whoever made it. The edges are worked out from this.
         const std::uint32_t held = keysHeld();
         hldata::ControlsIn in;

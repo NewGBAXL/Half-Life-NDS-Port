@@ -212,6 +212,8 @@ namespace hlds
                 ref.flags |= kTextureColourKey;
             if (a3i5)
                 ref.flags |= kTextureA3I5;
+            if (!a3i5 && !plan.streamed.empty() && plan.streamed[bspTexture])
+                ref.flags |= kTextureStreamed;
             // The game's own rule for what is drawn as liquid: the name.
             if (!src.name.empty() && (src.name[0] == '!' || src.name.rfind("water", 0) == 0))
                 ref.flags |= kTextureLiquid;
@@ -220,6 +222,7 @@ namespace hlds
                 ref.flags |= static_cast<std::uint32_t>(options.materials->of(src.name)) << kTextureMaterialShift;
             ref.frames = 1;
             ref.other = kNoTexture;
+            ref.average = 0x7FFF;
             level.textures.push_back(ref);
             return static_cast<std::uint16_t>(level.textures.size() - 1);
         };
@@ -1052,15 +1055,21 @@ namespace hlds
                 ref.flags = kTextureSky;
                 ref.frames = 1;
                 ref.other = kNoTexture;
+                ref.average = 0x7FFF;
+                ref.share = 100; //always draw the sky
                 level.textures.push_back(ref);
             }
         }
 
         // --- The worst a single leaf's PVS can ask for, in the cooked
         // surfaces' own costs. This is the number the runtime's choice between
-        // single-pass and two-pass rendering starts from.
+        // varying levels of fog is chosen from.
         {
             std::vector<int> stamp(level.surfaces.size(), 0);
+            // How many leaves see each for streaming
+            std::vector<int> textureStamp(level.textures.size(), 0);
+            std::vector<int> leavesSeeing(level.textures.size(), 0);
+            std::uint32_t worstTexels = 0;
             int worstPolygons = 0;
             int worstVertices = 0;
             for (int leaf = 1; leaf <= level.visLeafCount; ++leaf)
@@ -1068,6 +1077,7 @@ namespace hlds
                 const std::vector<std::uint8_t> row = bsp.decompressVis(leaf);
                 int polygons = 0;
                 int vertices = 0;
+                std::uint32_t texels = 0;
                 for (int other = 1; other <= level.visLeafCount; ++other)
                 {
                     if (!(row[(other - 1) >> 3] & (1 << ((other - 1) & 7))))
@@ -1081,6 +1091,16 @@ namespace hlds
                         stamp[s] = leaf;
                         polygons += level.surfaces[s].polygons;
                         vertices += level.surfaces[s].vertices;
+                        const std::uint16_t texture = level.surfaces[s].texture;
+                        if (texture != kNoTexture && texture < textureStamp.size() &&
+                            textureStamp[texture] != leaf)
+                        {
+                            textureStamp[texture] = leaf;
+                            ++leavesSeeing[texture];
+                            for (unsigned f = 0; f < level.textures[texture].frames; ++f)
+                                texels += static_cast<std::uint32_t>(level.textures[texture + f].width) *
+                                          level.textures[texture + f].height;
+                        }
                     }
                 }
                 // And whether any of what it sees is sky.
@@ -1092,6 +1112,20 @@ namespace hlds
                     level.leaves[leaf].flags |= kLeafSeesSky;
                 worstPolygons = std::max(worstPolygons, polygons);
                 worstVertices = std::max(worstVertices, vertices);
+                worstTexels = std::max(worstTexels, texels);
+            }
+            level.worstTexels = worstTexels;
+            for (std::size_t t = 0; t < level.textures.size(); ++t)
+            {
+                const int leaves = std::max<int>(level.visLeafCount, 1);
+                // Anything a leaf sees is at least 1
+                level.textures[t].share = static_cast<std::uint8_t>(
+                    std::min(100, (leavesSeeing[t] * 100 + leaves - 1) / leaves));
+                if (level.textures[t].frames > 1)
+                {
+                    for (unsigned f = 1; f < level.textures[t].frames && t + f < level.textures.size(); ++f)
+                        level.textures[t + f].share = level.textures[t].share;
+                }
             }
             level.worstPolygons = static_cast<std::uint16_t>(std::min(worstPolygons, 0xFFFF));
             level.worstVertices = static_cast<std::uint16_t>(std::min(worstVertices, 0xFFFF));

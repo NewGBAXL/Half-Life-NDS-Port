@@ -20,7 +20,6 @@ void Settings::load()
     hldata::SettingsData data;
     if (hldata::readSettings(bytes, size, data))
     {
-        renderMode = static_cast<hldata::RenderMode>(data.renderMode);
         dspAudio = data.dspAudio != 0;
         for (int i = 0; i < 4; ++i)
             volume[i] = data.volume[i];
@@ -39,7 +38,6 @@ bool Settings::save() const
     if (!global.hasFat)
         return false;
     hldata::SettingsData data;
-    data.renderMode = static_cast<std::uint8_t>(renderMode);
     data.dspAudio = dspAudio ? 1 : 0;
     for (int i = 0; i < 4; ++i)
         data.volume[i] = volume[i];
@@ -59,26 +57,3 @@ bool Settings::save() const
     return std::fclose(file) == 0 && ok;
 }
 
-hldata::RenderMode Settings::next(hldata::RenderMode mode)
-{
-    // The order they are offered in, which is not the order of their numbers.
-    switch (mode)
-    {
-    case hldata::RenderMode::SinglePass: return hldata::RenderMode::TwoPass;
-    case hldata::RenderMode::TwoPass:    return hldata::RenderMode::TwoPassDma;
-    case hldata::RenderMode::TwoPassDma: return hldata::RenderMode::Auto;
-    default:                             return hldata::RenderMode::SinglePass;
-    }
-}
-
-const char *Settings::name(hldata::RenderMode mode)
-{
-    switch (mode)
-    {
-    case hldata::RenderMode::TwoPass:    return "Two-pass (30 fps)";
-    case hldata::RenderMode::TwoPassDma: return "Two-pass DMA (30 fps)";
-    case hldata::RenderMode::SinglePass: return "Single-pass (60 fps)";
-    case hldata::RenderMode::Auto:       return "Auto (per map)";
-    default:                             return "";
-    }
-}

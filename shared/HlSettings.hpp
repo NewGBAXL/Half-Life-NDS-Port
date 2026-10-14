@@ -21,33 +21,10 @@
 
 namespace hldata
 {
-    /// How the world is drawn.
-    ///
-    /// The hardware draws 2048 polygons and 6144 vertices a frame. TWO-PASS
-    /// draws the screen as two halves on alternate frames, each with that
-    /// whole allowance: twice the capacity at 30 frames a second. SINGLE-PASS
-    /// is 60 frames a second and drops the far end of the view where a map
-    /// asks for more than one pass can hold; it is the default. AUTO picks
-    /// per map from the worst case the converter measured.
-    ///
-    /// There are two ways of putting the two halves together. TWO-PASS shows
-    /// one half live beside a capture of the other, straight from video
-    /// memory. TWO-PASS (DMA) copies both halves into a picture in main
-    /// memory and shows that, whole, when it is complete: a frame can never
-    /// be half of one moment and half of another, and a third texture bank
-    /// is free, for 190 KB of memory and a little more delay.
-    enum class RenderMode : std::uint8_t
-    {
-        TwoPass,
-        SinglePass,
-        Auto,
-        TwoPassDma, ///< after Auto: the numbers are in settings files
-        Count
-    };
-
     struct SettingsData
     {
-        std::uint8_t renderMode = static_cast<std::uint8_t>(RenderMode::SinglePass);
+        /// Deprecated, can be reused for something else later
+        std::uint8_t renderMode = 0;
         /// On a DSi: the DSP plays the music in stereo and adds the rooms'
         /// echo. Off unless asked for: a DSi then sounds as a DS does.
         std::uint8_t dspAudio = 0;
@@ -151,7 +128,7 @@ namespace hldata
             ia &read;
         if (read.controlScheme > 1 || read.padTurns > 1 || read.padLooks > 1)
             return false;
-        if (read.renderMode >= static_cast<std::uint8_t>(RenderMode::Count) || read.dspAudio > 1 ||
+        if (read.dspAudio > 1 ||
             read.debugReadout > 1 || read.leftHanded > 1 || read.viewBob > 1 || !read.graphics.valid())
             return false;
         for (std::uint8_t level : read.volume)

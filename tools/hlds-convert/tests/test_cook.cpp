@@ -96,6 +96,12 @@ namespace
                   v.textures[0].width == 16 && v.textures[0].sourceWidth == 16,
               "the texture table");
 
+        // The single leaf reads the single texture, so the view lists just the texels.
+        // Cooker leaves the average colour unknown, the converter sets it.
+        check(v.textures[0].share == 100, "a texture the only leaf sees is wanted in every view");
+        check(v.header->worstTexels == 16u * 16u, "the worst view lists the one texture's texels");
+        check(v.textures[0].average == 0x7FFF, "an average not worked out is unknown");
+
         check(v.entityCount == 2 &&
                   v.entities[1].classId ==
                       static_cast<std::uint16_t>(EntityClass::InfoPlayerStart) &&

@@ -4,8 +4,11 @@
 #include <cstdlib>
 #include <string>
 
+#include <nds.h>
+
 #include "Global.hpp"
 #include "HlTexture.hpp"
+#include "HlTextureStream.hpp"
 #include "data/LevelFile.hpp"
 
 namespace hlrt
@@ -20,29 +23,30 @@ namespace hlrt
                 NEA_MaterialDelete(materials_[i]);
             if (palettes_[i] != nullptr)
                 NEA_PaletteDelete(palettes_[i]);
+            if (flatPalettes_ != nullptr && flatPalettes_[i] != nullptr)
+                NEA_PaletteDelete(flatPalettes_[i]);
         }
-        std::free(materials_);
-        std::free(palettes_);
-        std::free(binds_);
-        std::free(tints_);
-        binds_ = nullptr;
-        tints_ = nullptr;
-        materials_ = nullptr;
-        palettes_ = nullptr;
-        count_ = 0;
-        missing_ = 0;
+        if (flatTexture_ != nullptr)
+            NEA_MaterialDelete(flatTexture_);
+        forget();
     }
 
     void TextureCache::forget()
     {
         std::free(materials_);
         std::free(palettes_);
+        std::free(flatPalettes_);
+        std::free(streamed_);
         std::free(binds_);
         std::free(tints_);
         binds_ = nullptr;
         tints_ = nullptr;
         materials_ = nullptr;
         palettes_ = nullptr;
+        flatPalettes_ = nullptr;
+        streamed_ = nullptr;
+        flatTexture_ = nullptr;
+        streamedCount_ = 0;
         count_ = 0;
         missing_ = 0;
     }
@@ -55,9 +59,12 @@ namespace hlrt
         palettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
         binds_ = static_cast<std::uint32_t *>(std::calloc(count + 1, 2 * sizeof(std::uint32_t)));
         tints_ = static_cast<std::uint16_t *>(std::malloc((count + 1) * sizeof(std::uint16_t)));
+        flatPalettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
+        streamed_ = static_cast<std::uint8_t *>(std::calloc(count + 1, 1));
         for (int i = 0; tints_ != nullptr && i <= count; ++i)
             tints_[i] = 0x7FFF;
-        if (materials_ == nullptr || palettes_ == nullptr || binds_ == nullptr || tints_ == nullptr)
+        if (materials_ == nullptr || palettes_ == nullptr || binds_ == nullptr || tints_ == nullptr ||
+            flatPalettes_ == nullptr || streamed_ == nullptr)
         {
             destroy();
             return false;
@@ -65,6 +72,18 @@ namespace hlrt
         count_ = count;
         for (int i = 0; i < count; ++i)
         {
+            const hldata::TextureRef &ref = level.view.textures[i];
+            // A streamed texture is its flat colour until it is read in.
+            // (The planner numbers a map's textures up to a limit; the rest
+            // are loaded like any other.)
+            if ((ref.flags & hldata::kTextureStreamed) != 0 && i < hldata::kStreamMaxTextures &&
+                makeFlat(static_cast<unsigned>(i), ref.average))
+            {
+                streamed_[i] = 1;
+                ++streamedCount_;
+                tints_[i] = ref.average;
+                continue;
+            }
             if (!loadOne(static_cast<unsigned>(i)))
             {
                 ++missing_;
@@ -74,6 +93,79 @@ namespace hlrt
             binds_[i * 2 + 1] = NEA_PaletteGetBase(palettes_[i]);
         }
         return true;
+    }
+
+    bool TextureCache::makeFlat(unsigned index, std::uint16_t colour)
+    {
+        if (flatTexture_ == nullptr)
+        {
+            // Sixteen bytes of zeros: every texel is colour 0 of whichever
+            // palette it is drawn with, and the picture repeats.
+            static const std::uint8_t kZeros[16] = {};
+            flatTexture_ = NEA_MaterialCreate();
+            if (flatTexture_ == nullptr ||
+                NEA_MaterialTexLoad(flatTexture_, NEA_PAL4, 8, 8,
+                                    static_cast<NEA_TextureFlags>(NEA_TEXTURE_WRAP_S | NEA_TEXTURE_WRAP_T),
+                                    kZeros) != 1)
+            {
+                if (flatTexture_ != nullptr)
+                    NEA_MaterialDelete(flatTexture_);
+                flatTexture_ = nullptr;
+                return false;
+            }
+        }
+        NEA_Palette *palette = NEA_PaletteCreate();
+        const std::uint16_t colours[4] = {colour, colour, colour, colour};
+        if (palette == nullptr || NEA_PaletteLoad(palette, colours, 4, NEA_PAL4) != 1)
+        {
+            if (palette != nullptr)
+                NEA_PaletteDelete(palette);
+            return false;
+        }
+        flatPalettes_[index] = palette;
+        binds_[index * 2] = NEA_MaterialGetTexParam(flatTexture_);
+        binds_[index * 2 + 1] = NEA_PaletteGetBase(palette);
+        return true;
+    }
+
+    bool TextureCache::use(unsigned index) const
+    {
+        if (streamed_[index] != 0)
+        {
+            // What NEA_MaterialUse writes, from the words kept for it.
+            GFX_PAL_FORMAT = binds_[index * 2 + 1];
+            GFX_TEX_FORMAT = binds_[index * 2];
+            return true;
+        }
+        if (materials_[index] != nullptr)
+        {
+            NEA_MaterialUse(materials_[index]);
+            return true;
+        }
+        GFX_TEX_FORMAT = 0;
+        return false;
+    }
+
+    void TextureCache::attachStreamed(unsigned index, NEA_Material *material, NEA_Palette *palette)
+    {
+        materials_[index] = material;
+        palettes_[index] = palette;
+        binds_[index * 2] = NEA_MaterialGetTexParam(material);
+        binds_[index * 2 + 1] = NEA_PaletteGetBase(palette);
+    }
+
+    void TextureCache::detachStreamed(unsigned index)
+    {
+        // The words come back to the flat colour first: whatever is drawn
+        // next must not name memory that is about to be somebody else's.
+        binds_[index * 2] = NEA_MaterialGetTexParam(flatTexture_);
+        binds_[index * 2 + 1] = NEA_PaletteGetBase(flatPalettes_[index]);
+        if (materials_[index] != nullptr)
+            NEA_MaterialDelete(materials_[index]);
+        if (palettes_[index] != nullptr)
+            NEA_PaletteDelete(palettes_[index]);
+        materials_[index] = nullptr;
+        palettes_[index] = nullptr;
     }
 
     HL_ARM unsigned TextureCache::shown(unsigned index, bool switched) const
@@ -106,6 +198,34 @@ namespace hlrt
                         ref.height, a3i5 ? 1 : 0, materials_[index], palettes_[index], &tints_[index]);
     }
 
+    bool TextureCache::readFile(const char *path, int expectWidth, int expectHeight, int expectA3I5,
+                                hldata::TextureHeader &header, std::uint8_t *body, std::size_t capacity)
+    {
+        std::FILE *file = std::fopen(path, "rb");
+        if (file == nullptr)
+            return false;
+        std::fseek(file, 0, SEEK_END);
+        const long size = std::ftell(file);
+        std::fseek(file, 0, SEEK_SET);
+
+        // The header is checked against the file's real size before anything
+        // in it is used to size an allocation or a read.
+        bool ok = size > static_cast<long>(sizeof(header)) &&
+                  std::fread(&header, sizeof(header), 1, file) == 1 &&
+                  hldata::textureHeaderValid(header, static_cast<std::uint32_t>(size));
+        const bool a3i5 = ok && (header.flags & hldata::kTextureA3I5) != 0;
+        ok = ok && (expectWidth == 0 || header.width == expectWidth) &&
+             (expectHeight == 0 || header.height == expectHeight) &&
+             (expectA3I5 < 0 || a3i5 == (expectA3I5 != 0));
+        if (ok)
+        {
+            const std::size_t rest = static_cast<std::size_t>(size) - sizeof(header);
+            ok = rest <= capacity && std::fread(body, 1, rest, file) == rest;
+        }
+        std::fclose(file);
+        return ok;
+    }
+
     bool TextureCache::loadFile(const char *path, bool liquid, int expectWidth, int expectHeight,
                                 int expectA3I5, NEA_Material *&outMaterial, NEA_Palette *&outPalette,
                                 std::uint16_t *tint)
@@ -117,32 +237,24 @@ namespace hlrt
             return false;
         std::fseek(file, 0, SEEK_END);
         const long size = std::ftell(file);
-        std::fseek(file, 0, SEEK_SET);
-
-        // The header is checked against the file's real size before anything
-        // in it is used to size an allocation or a read.
-        hldata::TextureHeader header;
-        std::uint8_t *data = nullptr;
-        bool ok = size > static_cast<long>(sizeof(header)) &&
-                  std::fread(&header, sizeof(header), 1, file) == 1 &&
-                  hldata::textureHeaderValid(header, static_cast<std::uint32_t>(size));
-        const bool a3i5 = ok && (header.flags & hldata::kTextureA3I5) != 0;
-        ok = ok && (expectWidth == 0 || header.width == expectWidth) &&
-             (expectHeight == 0 || header.height == expectHeight) &&
-             (expectA3I5 < 0 || a3i5 == (expectA3I5 != 0));
-        if (ok)
-        {
-            const std::size_t body = static_cast<std::size_t>(size) - sizeof(header);
-            data = static_cast<std::uint8_t *>(std::malloc(body));
-            ok = data != nullptr && std::fread(data, 1, body, file) == body;
-        }
         std::fclose(file);
-        if (!ok)
-        {
-            std::free(data);
+        if (size <= static_cast<long>(sizeof(hldata::TextureHeader)))
             return false;
-        }
+        const std::size_t body = static_cast<std::size_t>(size) - sizeof(hldata::TextureHeader);
+        auto *data = static_cast<std::uint8_t *>(std::malloc(body));
+        hldata::TextureHeader header;
+        bool ok = data != nullptr && readFile(path, expectWidth, expectHeight, expectA3I5, header, data, body) &&
+                  create(header, data, liquid, outMaterial, outPalette, tint);
+        std::free(data);
+        return ok;
+    }
 
+    bool TextureCache::create(const hldata::TextureHeader &header, const std::uint8_t *data, bool liquid,
+                              NEA_Material *&outMaterial, NEA_Palette *&outPalette, std::uint16_t *tint)
+    {
+        outMaterial = nullptr;
+        outPalette = nullptr;
+        const bool a3i5 = (header.flags & hldata::kTextureA3I5) != 0;
         NEA_Material *material = NEA_MaterialCreate();
         NEA_Palette *palette = NEA_PaletteCreate();
         // A liquid's coordinates go through the texture matrix (WorldDraw
@@ -168,7 +280,7 @@ namespace hlrt
             *tint = static_cast<std::uint16_t>((r / header.paletteColours) | ((g / header.paletteColours) << 5) |
                                                ((b / header.paletteColours) << 10));
         }
-        ok = material != nullptr && palette != nullptr;
+        bool ok = material != nullptr && palette != nullptr;
         if (ok && a3i5)
         {
             ok = NEA_MaterialTexLoad(material, NEA_A3PAL32, header.width, header.height, flags,
@@ -183,7 +295,6 @@ namespace hlrt
                                      static_cast<std::size_t>(header.paletteColours) * 2,
                                      NEA_TEX4X4) == 1;
         }
-        std::free(data);
         if (!ok)
         {
             // Most likely out of texture or palette memory. Give back whatever

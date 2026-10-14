@@ -17,6 +17,7 @@
 #include "game/Game.hpp"
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 #include "render/Camera.hpp"
 #include "render/ModelDraw.hpp"
 #include "render/WorldDrawParts.hpp"
@@ -241,12 +242,14 @@ namespace hlrt
             if (surface->texture != bound)
             {
                 bound = surface->texture;
-                const NEA_Material *material =
-                    bound == kNoTexture ? nullptr : textureCache.material(textureCache.shown(bound, switched));
-                if (material != nullptr)
-                    NEA_MaterialUse(material);
-                else
+                if (bound == kNoTexture)
                     GFX_TEX_FORMAT = 0;
+                else
+                {
+                    const unsigned picture = textureCache.shown(bound, switched);
+                    noteTextureDrawn(picture);
+                    textureCache.use(picture);
+                }
                 if (bound != kNoTexture && (view.textures[bound].flags & kTextureScroll))
                 {
                     // The belt: its picture goes the way the belt goes, so
@@ -621,8 +624,7 @@ namespace hlrt
         // it is drawn through a projection whose z row is the w row's
         // values, a hair short -- every point of it then sits just inside
         // the far plane as far as clipping goes, while its depth stays its
-        // distance. The projection is read back because it is NEA's, and in
-        // two-pass mode is one half's.
+        // distance. The projection is read back because it is NEA's.
         const LevelView &view = level.view;
         const unsigned first = view.header->skyTexture - 1u;
 
@@ -795,12 +797,17 @@ namespace hlrt
         // cut off it goes out until it is no fog at all.
         {
             // (As the player has it: none; only where a view is cut; or
-            // always there, at their distance -- and nearer for a cut.)
+            // always there, at their distance -- and nearer for a cut.
+            // For heavy maps, the middle one is the last: most views are cut,
+            // and fog that comes and goes with the cut would pump.)
             const GraphicsSettings &say = settings.graphics;
+            const bool heavy = level.loaded() &&
+                               levelIsHeavy(level.view.header->worstPolygons, level.view.header->worstVertices);
+            const bool always = say.fog == kFogAlways || (say.fog == kFogWhenNeeded && heavy);
             int want = kNoFog;
             if (say.fog != kFogOff && say.fogStrength > 0)
             {
-                if (say.fog == kFogAlways)
+                if (always)
                     want = fogAlwaysEnd(say.fogDistance, say.drawDistance);
                 if (stats_.budgetHit)
                 {
@@ -822,8 +829,7 @@ namespace hlrt
             fogOn_ = fogEnd_ < kNoFog;
             // What is behind everything is the fog's colour while there is
             // fog, or the far end of a cut view would show against it; and
-            // black otherwise. (Set here, between passes: in the two-pass
-            // modes NEA writes it again for each half, with its own alpha.)
+            // black otherwise. (Set here, between passes.)
             const std::uint16_t behind =
                 fogOn_ ? kFogColour[say.fogColour < kFogColours ? say.fogColour : 0] : std::uint16_t(0);
             if (behind != behind_)
@@ -854,7 +860,7 @@ namespace hlrt
             held_ = 0;
 
         // What was counted and not used. The lesser of the last two passes
-        // of this half, and three quarters of that: the view may be turning
+        // and three quarters of that: the view may be turning
         // towards somewhere with less off the screen.
         constexpr int kMostSparePolygons = 600;
         constexpr int kMostSpareVertices = 1500;
@@ -862,16 +868,16 @@ namespace hlrt
         int vertices = stats_.vertices - stats_.hwVertices;
         polygons = polygons < 0 ? 0 : polygons;
         vertices = vertices < 0 ? 0 : vertices;
-        const int p = polygons < unusedPolygons_[pass_] ? polygons : unusedPolygons_[pass_];
-        const int v = vertices < unusedVertices_[pass_] ? vertices : unusedVertices_[pass_];
-        unusedPolygons_[pass_] = polygons;
-        unusedVertices_[pass_] = vertices;
-        sparePolygons_[pass_] = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
-        spareVertices_[pass_] = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
-        sparePolygons_[pass_] = sparePolygons_[pass_] * spareQuarters_ / 4;
-        spareVertices_[pass_] = spareVertices_[pass_] * spareQuarters_ / 4;
+        const int p = polygons < unusedPolygons_ ? polygons : unusedPolygons_;
+        const int v = vertices < unusedVertices_ ? vertices : unusedVertices_;
+        unusedPolygons_ = polygons;
+        unusedVertices_ = vertices;
+        sparePolygons_ = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
+        spareVertices_ = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
+        sparePolygons_ = sparePolygons_ * spareQuarters_ / 4;
+        spareVertices_ = spareVertices_ * spareQuarters_ / 4;
         // None of it while the hardware is complaining.
         if (held_ > 0)
-            sparePolygons_[pass_] = spareVertices_[pass_] = 0;
+            sparePolygons_ = spareVertices_ = 0;
     }
 } // namespace hlrt

@@ -11,7 +11,7 @@
 // direction at once; the runtime also culls to the view frustum and to a far
 // distance, and a 90-degree view usually sees well under half of it. So a map
 // whose worst leaf fits is safe, and one that does not is a candidate for
-// two-pass rendering rather than a failure.
+// runtime fog rather than a failure.
 
 #include <map>
 #include <string>

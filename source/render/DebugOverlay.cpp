@@ -8,6 +8,7 @@
 #include "Settings.hpp"
 #include "data/ModelCache.hpp"
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
@@ -26,7 +27,7 @@ namespace hlrt
 #ifdef HLDS_PROFILE
         constexpr int kRows = 9;
 #else
-        constexpr int kRows = 6;
+        constexpr int kRows = 7;
 #endif
     } // namespace
 
@@ -43,8 +44,8 @@ namespace hlrt
         switch (row_)
         {
         case 0:
-            std::snprintf(line, sizeof(line), "%-8s %-3s %s fps %2d cpu %3d%%", mapName_,
-                          global.isDSi ? "DSi" : "DS", global.video == Global::Video::TwoPassDma ? "2D" : global.twoPass ? "2P" : "1P",
+            std::snprintf(line, sizeof(line), "%-8s %-3s fps %2d cpu %3d%%", mapName_,
+                          global.isDSi ? "DSi" : "DS",
                           static_cast<int>(NEA_GetFPS()), static_cast<int>(NEA_GetCPUPercent()));
             break;
         case 1:
@@ -141,6 +142,21 @@ namespace hlrt
                           gpuStats.takeLowLines(), gpuStats.underflows(), gpuStats.overflows(),
                           -worldDraw.heldBack(), worldDraw.fogDistance());
             break;
+#ifndef HLDS_PROFILE
+        case 6:
+        {
+            // How many streamed textures are in video memory,
+            // what came and went, how many recently visible are drawn flat,
+            // how much memory the plan counts in use compared to the total.
+            const StreamStats st = textureStream.stats();
+            if (textureStream.active())
+                std::snprintf(line, sizeof(line), "t%d/%d +%d-%d f%d %d/%dK r%d", st.resident, st.streamed, st.loads,
+                              st.evictions, st.flatNow, st.texelKb, st.capacityKb, st.copies);
+            else
+                line[0] = '\0';
+            break;
+        }
+#endif
 #ifdef HLDS_PROFILE
         case 6:
             std::snprintf(line, sizeof(line), "us frm %5u mov %4u lgc %4u",

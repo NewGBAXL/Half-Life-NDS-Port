@@ -29,12 +29,6 @@ namespace hlrt
         void show(const hldata::MessageRecord &message, const char *text);
         /// `ms` more milliseconds.
         void tick(int ms);
-        /// Before each pass is drawn. (In the two-pass mode that joins its
-        /// halves in video memory, every other picture on the screen is a
-        /// capture of the whole screen -- the writing with it: over that
-        /// one the sprites add nothing, or it would be written twice as
-        /// bright every other frame.)
-        void pass();
         /// Nothing written: the map is going.
         void clear();
 

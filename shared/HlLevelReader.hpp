@@ -158,7 +158,7 @@ namespace hldata
         const auto *h = reinterpret_cast<const LevelHeader *>(data);
         if (std::memcmp(h->magic, kLevelMagic, sizeof(kLevelMagic)) != 0)
             return LevelError::BadMagic;
-        if (h->version != kLevelVersion || h->sectionCount != kSectionCount)
+        if (!levelVersionOk(h->version, h->minReader) || h->sectionCount != kSectionCount)
             return LevelError::BadVersion;
         if (h->fileSize != size)
             return LevelError::BadSize;

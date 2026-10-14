@@ -15,10 +15,28 @@
 // the converter's BspFile makes about a .bsp. The renderer and the hull trace
 // run in ITCM with no bounds checks; they can because of that one pass.
 //
-// VERSIONING. Bump kLevelVersion on ANY change to a record or to what a field
-// means. The DS refuses a file whose version is not exactly its own and tells
-// the player to run the converter again; there is no migration, because the
-// source of truth is the player's copy of the game and re-cooking is cheap.
+// VERSIONING. A level file says two things of itself, and this build knows
+// three of its own (the "min and target" of it):
+//
+//   file   version     the format it was written in (the target of the
+//                      converter that cooked it)
+//   file   minReader   the oldest build that can read it: a change a build
+//                      from before it cannot make sense of raises this to the
+//                      new version; one it can (an unused field filled in) does
+//                      not
+//   build  kLevelVersion      the newest format this build writes and knows
+//   build  kLevelMinVersion   the oldest format this build still reads
+//   build  kLevelSaveSince    the oldest format whose SAVES this build still
+//                      accepts (HlSave.hpp): what a save holds of a map is
+//                      indices into its records, so only a change to those
+//                      moves it
+//
+// Bump kLevelVersion on ANY change to a record or to what a field means.
+// Then raise kLevelMinVersion (and kLevelMinReader) only if the old layout is
+// no longer read, and kLevelSaveSince only if saves of the old one would no
+// longer find what they point at. A file outside what a build reads is
+// refused with "convert again": the source of truth is the player's copy of
+// the game and re-cooking is cheap.
 //
 // Coordinates keep Half-Life's axes (X forward, Y left, Z up). The swap to the
 // geometry engine's axes lives in the view matrix, not in the data.
@@ -35,6 +53,32 @@ namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
     inline constexpr std::uint16_t kLevelVersion = 27;
+    /// The oldest level format this build reads.
+    inline constexpr std::uint16_t kLevelMinVersion = 27;
+    /// The oldest build that can read what it writes.
+    inline constexpr std::uint16_t kLevelMinReader = 27;
+    /// The oldest level format whose saves are still read.
+    /// 26 -> 27 added fields to the texture table only, which no save points at.
+    inline constexpr std::uint16_t kLevelSaveSince = 26;
+    /// What the 3D engine is given to draw, kept under the
+    /// hardware's polygons and vertices limit.
+    inline constexpr int kPassPolygons = 1700;
+    inline constexpr int kPassVertices = 5200;
+    /// Whether a map whose worst view is big enough where it needs fog use.
+    inline constexpr bool levelIsHeavy(unsigned worstPolygons, unsigned worstVertices)
+    {
+        return worstVertices > 2u * kPassVertices || worstPolygons > 2u * kPassPolygons;
+    }
+    /// Whether this build can read a level file that says `version` and `minReader` of itself.
+    inline constexpr bool levelVersionOk(std::uint16_t version, std::uint16_t minReader)
+    {
+        return version >= kLevelMinVersion && minReader <= kLevelVersion;
+    }
+    /// Whether a save made against maps of level format `version` is still about the maps this build reads.
+    inline constexpr bool levelSaveVersionOk(std::uint16_t version)
+    {
+        return version >= kLevelSaveSince && version <= kLevelVersion;
+    }
 
     enum class Section : std::uint16_t
     {
@@ -98,7 +142,7 @@ namespace hldata
         std::int16_t maxs[3];
         std::uint16_t visLeafCount; ///< leaves 1..n have a visibility row
         /// The most the PVS of any one leaf lists, before the runtime's own
-        /// frustum and distance culling. What the two-pass choice is made from.
+        /// frustum and distance culling. What the fog renderer is judged from.
         std::uint16_t worstPolygons;
         std::uint16_t worstVertices;
         /// The map's sky: one more than the index in Textures of the first
@@ -108,8 +152,12 @@ namespace hldata
         /// What the player holds: one more than the index in ModelRefs of the
         /// first-person model drawn in front of the view; 0 for none.
         std::uint16_t viewModel;
-        std::uint16_t reserved1;
-        std::uint32_t reserved[6];
+        /// The oldest build that can read this file.
+        std::uint16_t minReader;
+        /// The most texels of texture the PVS of any one leaf lists, at the
+        /// sizes they are cooked at; what the streaming of textures is sized from.
+        std::uint32_t worstTexels;
+        std::uint32_t reserved[5];
     };
 
     struct Plane
@@ -226,6 +274,13 @@ namespace hldata
         std::uint8_t frames;
         std::uint8_t otherFrames;
         std::uint16_t other;
+        /// The average of the texture's own colour, drawn in while the
+        /// texture itself is not in video memory. 0x7FFF when not known.
+        std::uint16_t average;
+        /// The percentage of map leaves whose PVS lists a surface wearing it.
+        /// The textures every view wants are kept resident in video memory.
+        std::uint8_t share;
+        std::uint8_t reservedTexture;
     };
 
     /// How a brush entity is drawn. From the entity's "rendermode" and
@@ -971,7 +1026,7 @@ namespace hldata
     static_assert(sizeof(Surface) == 24);
     static_assert(sizeof(Model) == 44);
     static_assert(sizeof(ClipNode) == 8);
-    static_assert(sizeof(TextureRef) == 32);
+    static_assert(sizeof(TextureRef) == 36);
     static_assert(sizeof(EntityRecord) == 32);
     static_assert(sizeof(Brush) == 40);
     static_assert(sizeof(LogicRecord) == 80);

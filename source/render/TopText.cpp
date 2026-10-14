@@ -308,14 +308,6 @@ namespace hlrt
         }
     }
 
-    void TopText::pass()
-    {
-        if (!ready_)
-            return;
-        const bool captured = global.video == Global::Video::TwoPass && NEA_TwoPassGetPass() == 1;
-        REG_BLDALPHA = (captured ? 0 : 16) | (16 << 8);
-    }
-
     void TopText::clear()
     {
         for (int s = 0; s < kSlots; ++s)

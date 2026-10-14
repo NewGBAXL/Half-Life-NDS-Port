@@ -43,6 +43,10 @@ namespace hldata
     /// A conveyor's belt: its coordinates go through the texture matrix
     /// too, which slides them along at the belt's speed.
     inline constexpr std::uint32_t kTextureScroll = 16;
+    /// A streamed texture the console may keep out of video memory,
+    /// plain and opaque, drawn as the texture's flat color until the texture has been read in.
+    /// Everything else is resident in video memory for the lifespan of the map.
+    inline constexpr std::uint32_t kTextureStreamed = 32;
     /// What it is made of, for how a step on it sounds: bits 8..11 hold a
     /// Material (the game's sound/materials.txt, by the texture's name).
     inline constexpr int kTextureMaterialShift = 8;

@@ -578,7 +578,7 @@ namespace hlds
             left->clear();
         if (right != nullptr)
             right->clear();
-        static mp3dec_t decoder;
+        thread_local mp3dec_t decoder;
         mp3dec_init(&decoder);
         std::vector<mp3d_sample_t> pcm(MINIMP3_MAX_SAMPLES_PER_FRAME);
         std::size_t at = 0;

@@ -31,21 +31,19 @@ Milestone 11, "levels of detail".
   on screen (about 12% fewer vertices over the campaign).
 - World textures in the DS's 4x4 compressed format; textures with holes
   (grates, fences) in A3I5, with soft edges. Both are sized per map to fit the
-  texture and palette banks.
+  texture and palette banks. With `--stream-textures` the plain opaque ones
+  are cooked at the game's own size (up to 128 on a side, where they were
+  halved) and read in from the card as they come into view; see "Streaming
+  textures" below.
 - The DS renders the world with PVS, frustum and back-face culling against a
-  polygon and vertex budget. Single-pass rendering (60 fps) is the default; two-pass (30 fps, twice the
-  capacity), in two methods, and a per-map automatic choice are in the pause
-  menu. "Two-pass" joins the halves in video memory; "Two-pass DMA" builds
-  each picture in main memory and shows it only when it is whole (a third
-  texture bank is free, 190 KB of RAM is not, and it costs more CPU). Back faces are rejected on the CPU, surface by surface; the
-  hardware's own test is off, because it goes by a polygon's first three
-  vertices and misjudges very thin ones; the converter orders every polygon
-  so that those three make a real corner. In two-pass mode each displayed frame is one game state: the left
-  pass captures the whole composited screen, so the two halves never come
-  from different moments. (What two-pass cannot keep is the 3D picture's
-  18-bit colour: the half that is not being drawn comes from display
-  capture, which is 15-bit. "Two-pass DMA" shows both halves from capture,
-  so at least they match; plain "Two-pass" shows one half live.)
+  polygon and vertex budget, in one pass, at 60 fps. What a view asks for beyond
+  the budget is left out from the far end, and a map the converter judged HEAVY
+  (its worst view is over about twice a pass's budget) has the fog on always,
+  at the player's distance, unless the fog is set to off or to "always" already.
+  In the others it comes in only where a view is cut (see "Fog" below). Back faces
+  are rejected on the CPU, surface by surface; the hardware's own test is off,
+  because it goes by a polygon's first three vertices and misjudges very thin
+  ones; the converter orders every polygon so that those three make a real corner.
 - On a DSi the world's surfaces go to the geometry engine as one display
   list, fed by the DSi's own DMA (NDMA) while the processor works out where
   the models' bones are. (Not while the DSP option is on: a DMA to the
@@ -126,9 +124,14 @@ Milestone 11, "levels of detail".
   to the byte: all 95 maps of the campaign pass it. What a save does not
   hold: the maps on either side of the one the player is in keep only
   what is broken, killed and picked up there; a sound half played and an
-  effect on the screen start again (the music goes on from where it was); a save is of one build of the game and one cooking of its maps
-  (another's is listed as "from another version", not loaded); the saves
-  of the game's earlier builds (`slot0.sav`, `slot1.sav`) are not read.
+  effect on the screen start again (the music goes on from where it was);
+  a save and a cooked map each say what format they were written in and the
+  oldest build that can read them, and a build knows the newest format it
+  writes and the oldest it reads (`HlLevel.hpp`, VERSIONING; `HlSave.hpp`):
+  a change that only adds to a map's data, or that no save points at, does not
+  stop the saves already made from loading. One outside that range is listed as
+  "from another version", not loaded; the saves of the game's earlier builds
+  (`slot0.sav`, `slot1.sav`) are not read.
 - Models: the game's studio models, cooked to a DS format (one skin texture a
   model, animation as keys) and skinned by the hardware's matrix stack, at
   several levels of detail (below).
@@ -435,13 +438,15 @@ Milestone 11, "levels of detail".
 - The picture is the player's to tune: OPTIONS > GRAPHICS in the pause
   menu (`shared/HlFog.hpp` has what each choice stands for).
   - **Fog**: *off*, *when needed* (only while a view too heavy to draw
-    is being cut short -- what the fog was always for) or *always* (a
-    steady distance fog). **Strength** is how solid it gets at its far
-    end; it used to be solid black right up to the cut, a wall: it now
-    comes on along a curve and stops at seven tenths unless asked for
-    more. **Distance** is where an always-fog is whole (768 to 6144
+    is being cut short -- what the fog was always for; in a heavy map,
+    one whose worst view is over twice a pass's budget, it is always on,
+    for most of its views are cut) or *always* (a steady distance fog).
+  - **Strength** is how solid it gets at its far end; it used to be
+    solid black right up to the cut, a wall: it now comes on along a
+    curve and stops at seven tenths unless asked for more.
+  - **Distance** is where an always-fog is whole (768 to 6144
     units) and how close to the cut the other kind is allowed to sit.
-    **Colour**: black, grey, blue, brown or green -- the empty distance
+  - **Colour**: black, grey, blue, brown or green -- the empty distance
     behind everything takes the same colour, so a cut does not show as
     an edge.
   - **Model detail** (low / normal / high): how far off people and
@@ -592,13 +597,10 @@ Milestone 11, "levels of detail".
   frozen, until the next map's first picture is whole (`FrameFreeze`). The
   3D picture left on the screen is drawn by the hardware again every frame
   out of video memory, and a load writes over video memory: so the screen
-  is captured first and the capture shown in front of the 3D layer. In
-  single-pass that takes a bank of video memory, D, which textures no
-  longer use there (the two-pass DMA mode never had it, and every map
-  fits); plain two-pass captures into one of its own two; in the DMA mode
-  the picture is in main memory already. The very first load has no
-  picture to keep and shows the game's own loading picture (cooked from
-  your `cached.wad`); a load that changes the rendering mode shows black.
+  is captured first and the capture shown in front of the 3D layer. That
+  takes video memory, Bank D, which textures do not use (every map
+  fits without it). The very first load has no picture to keep and shows
+  the game's own loading picture (cooked from your `cached.wad`).
   That first picture is itself captured and its texture let go, so nothing
   drawn out of texture memory is on the screen while a map's textures are
   written into it. (The engine used to switch all four texture banks off
@@ -769,6 +771,51 @@ on flesh and two rings on a wall -- as loud as what the wall is made of lets
 them be, with that material's own sound -- the dent a fifth of a second after
 the blow, the hand left as its last swing left it, and put away before
 another weapon comes out (`shared/HlMonsters.hpp`, `crowbarBlow`).
+
+## Streaming textures
+
+A map cooked with `--stream-textures` has its plain opaque textures (one
+picture, no holes, not a liquid, belt, or similar) sized for what **one view**
+of the map lists and not for the whole map. They are cooked at the game's own
+size (each side the nearest power of two, 128 at most) and marked `kTextureStreamed`.
+If the worst view still does not fit what the 4x4 bank pair has left (after the
+sky, the models' skins and the textures that are resident), the ones doing least
+in that view are halved until it does (`TextureBudget.cpp`, `StreamOptions`).
+The report says how many there are, how much they come to in all, what the worst view
+lists of them and how much room they have. Everything else is planned as
+before, within 40 percent of the texel budget.
+
+The level (format version 27+) carries what the console needs: each texture's
+**average colour** (`TextureRef::average`), the **share** of the map's
+leaves that see it (`TextureRef::share`), and the most texels one leaf's view
+lists (`LevelHeader::worstTexels`).
+
+On the console `TextureCache` does not load a streamed texture. It draws it
+as a flat colour and `TextureStream` reads the real one in and out of video memory
+as described in `shared/HlTextureStream.hpp`, testable on PC (`test_texturestream`).
+
+- Every surface drawn notes its texture (`noteTextureDrawn`). One drawn in
+  the last six frames is wanted above all else; one drawn in the last
+  hundred and twenty a little.
+- What there is room for is found when the map has loaded (`begin`): what NEA
+  has left after everything that is not streamed. The textures most leaves see
+  (a share of 60 and up, as much as a third of the room) are put there for good,
+  then the rest by share. A map whose streamed textures all fit has all of them
+  there, for good, and never streams.
+- At the end of each frame (`update`) the best-wanted textures that are not in
+  memory are read from the card, a few kilobytes a frame (4 KB on a DS, 8 on a
+  DSi). When there is no room, a resident texture makes way for one wanted
+  more than twice as much; what is nearly as wanted is left alone, so that two
+  textures cannot take each other's place for ever.
+- They are written to video memory only right after the vertical blank
+  (`upload`, called straight after `NEA_WaitForVBL`), when the 3D engine is
+  not reading it. NEA places each texture; if it has no room where the plan
+  thought there was, the plan is told how much the memory really holds.
+
+The debug readout shows it: `tex 72/75 +63 -0 flat 0 210/211K` is textures
+in memory of those streamed, loaded and let go since the map began, how many
+seen lately are being drawn flat, and the room the plan counts in use of what
+it counts there is.
 
 ## What the converter writes
 

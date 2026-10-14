@@ -55,6 +55,11 @@ namespace
                      "      --geometry <mode>  guarded (default): merge faces and drop mid-edge\n"
                      "                         vertices where the picture provably does not\n"
                      "                         change. lossless: keep every vertex of the map\n"
+                     "      --stream-textures  plain textures only the world wears are cooked at\n"
+                     "                         their own size and streamed in as they come into\n"
+                     "                         view, not shrunk until the whole map fits\n"
+                     "      --jobs <n>         maps cooked at once\n"
+                     "                         (default: threads available, up to 6)\n"
                      "      --plain-tiles      do not vary the game's '-' textures face by\n"
                      "                         face: fewer textures and polygons, and\n"
                      "                         floors that repeat\n"
@@ -192,6 +197,9 @@ namespace
                     r.worstPolygons, r.worstVertices, r.brushes, r.logicRecords,
                     r.unsupportedEntities, r.unsupportedClasses, r.texturesUsed,
                     r.texturesEncoded, r.texelKb, r.alphaTexelKb);
+        if (r.streamedTextures != 0)
+            std::printf("  %d streamed: %d KB texels total; single view up to %d KB (%d KB free), %d KB resident\n",
+                        r.streamedTextures, r.streamTotalKb, r.streamWorstViewKb, r.streamRegionKb, r.streamResidentKb);
         printArchive(r);
         if (r.stoodIn != 0)
             std::printf("  a multiplayer map: %d of its pickups are of weapons not in the port yet, and are "
@@ -246,6 +254,10 @@ namespace
                     return usage();
                 options.guardedMerges = mode == "guarded";
             }
+            else if (args[i] == "--stream-textures")
+                options.streamTextures = true;
+            else if (args[i] == "--jobs" && i + 1 < args.size())
+                options.jobs = std::atoi(args[++i].c_str());
             else if (args[i] == "--plain-tiles")
                 hlds::setRandomTiling(false);
             else if (args[i] == "--start" && i + 1 < args.size())
