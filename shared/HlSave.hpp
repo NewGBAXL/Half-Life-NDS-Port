@@ -99,7 +99,7 @@ namespace hldata
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 6;
+    inline constexpr std::uint16_t kSaveVersion = 7;
     /// A save with a map's whole state in it is tens of kilobytes; one that
     /// claims to be more than this is not one.
     inline constexpr std::uint32_t kSaveMaxBytes = 256 * 1024;

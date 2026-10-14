@@ -52,13 +52,14 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 27;
+    inline constexpr std::uint16_t kLevelVersion = 28;
     /// The oldest level format this build reads.
-    inline constexpr std::uint16_t kLevelMinVersion = 27;
+    inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes.
-    inline constexpr std::uint16_t kLevelMinReader = 27;
+    inline constexpr std::uint16_t kLevelMinReader = 28;
     /// The oldest level format whose saves are still read.
-    /// 26 -> 27 added fields to the texture table only, which no save points at.
+    /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
+    /// none that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
