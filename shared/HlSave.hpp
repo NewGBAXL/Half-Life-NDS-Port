@@ -208,7 +208,7 @@ namespace hldata
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSaveMagic, sizeof(header.magic)) != 0)
             return kSaveNone;
-        if (header.version != kSaveVersion || header.levelVersion != kLevelVersion)
+        if (header.version != kSaveVersion || !levelSaveVersionOk(header.levelVersion))
             return kSaveOther;
         if (size < kSaveHeadBytes || header.payloadBytes > kSaveMaxBytes ||
             crc32(bytes + sizeof(header), sizeof(SaveHeading)) != header.headingCrc)

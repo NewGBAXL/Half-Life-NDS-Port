@@ -94,6 +94,7 @@ namespace hlds
         LevelHeader header{};
         std::memcpy(header.magic, kLevelMagic, sizeof(header.magic));
         header.version = kLevelVersion;
+        header.minReader = kLevelMinReader;
         header.sectionCount = kSectionCount;
         header.fileSize = static_cast<std::uint32_t>(out.size());
         for (int i = 0; i < 3; ++i)
@@ -104,6 +105,7 @@ namespace hlds
         header.visLeafCount = level.visLeafCount;
         header.worstPolygons = level.worstPolygons;
         header.worstVertices = level.worstVertices;
+        header.worstTexels = level.worstTexels;
         header.skyTexture = level.skyTexture;
         header.viewModel = level.viewModel;
         header.crc32 = crc32(out.data() + sizeof(LevelHeader),

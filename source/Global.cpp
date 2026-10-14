@@ -51,20 +51,10 @@ void Global::Init()
 
 }
 
-void Global::InitVideo(Video want)
+void Global::InitVideo()
 {
     videoReady_ = true;
-
-    // The DMA mode keeps two pictures in main memory. If there is no room
-    // for them it says so, and the other two-pass mode needs none.
-    if (want == Video::TwoPassDma && NEA_Init3D_TwoPass_DMA() != 0)
-        want = Video::TwoPass;
-    if (want == Video::TwoPass)
-        NEA_Init3D_TwoPass_FB();
-    else if (want == Video::SinglePass)
-        NEA_Init3D();
-    video = want;
-    twoPass = want != Video::SinglePass;
+    NEA_Init3D();
     // NEA puts the 3D screen on top by default; said explicitly because the
     // whole control scheme depends on the touch screen NOT being the 3D one.
     NEA_MainScreenSetOnTop();
@@ -79,15 +69,12 @@ void Global::InitVideo(Video want)
 
     // Room for a map's worth of textures: NEA's defaults (128 materials, 64
     // palettes) are below what one retail map uses, and every 4x4 compressed
-    // texture has a palette of its own. The banks must be said explicitly: in
-    // two-pass mode C and D (or D alone, in the DMA mode) are the capture
-    // buffers, and "all of them" would hand those to the texture allocator.
-    // Single-pass keeps D back as well: it is where the last picture is
-    // captured to and shown from while a map loads (FrameFreeze). Every map
-    // fits without it -- the DMA mode has always had the same three.
-    NEA_TextureSystemReset(256, 256, video == Video::TwoPass ? NEA_VRAM_AB : NEA_VRAM_ABC);
-    if (video == Video::SinglePass)
-        vramSetBankD(VRAM_D_LCD);
+    // texture has a palette of its own. The banks must be defined explicitly:
+    // "all of them" would hand Bank D to the texture allocator, and Bank D
+    // is held back. Every map fits without it. (Compressed textures live in
+    // Banks A and C with their indexes in Bank B.)
+    NEA_TextureSystemReset(512, 1024, NEA_VRAM_ABC);
+    vramSetBankD(VRAM_D_LCD);
 
     // The projection the world is drawn through. NEA rebuilds it every frame
     // from these, so they are set once.

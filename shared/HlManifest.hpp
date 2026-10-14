@@ -122,7 +122,8 @@ namespace hldata
         std::memcpy(&header, data, sizeof(header));
         if (std::memcmp(header.magic, kManifestMagic, sizeof(header.magic)) != 0)
             return ManifestError::NotAManifest;
-        if (header.version != kManifestVersion || header.levelVersion != kLevelVersion)
+        if (header.version != kManifestVersion ||
+            header.levelVersion < kLevelMinVersion || header.levelVersion > kLevelVersion)
             return ManifestError::OtherVersion;
         if (header.payloadBytes != size - sizeof(header) ||
             crc32(data + sizeof(header), header.payloadBytes) != header.crc32)

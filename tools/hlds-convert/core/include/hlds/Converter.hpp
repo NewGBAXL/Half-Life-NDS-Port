@@ -37,6 +37,8 @@ namespace hlds
         bool compress = true; ///< LZ77 inside the archives, where it pays (NpacWriter.hpp)
         std::filesystem::path ptexconv; ///< empty: look for it
         bool textures = true;
+        int jobs = 0; /// maps cooked concurrently, one per thread
+        bool streamTextures = false; /// stream the plain textures only worn by world
         double lightScale = LightBake::kDefaultScale;
         double lightPower = LightBake::kDefaultPower;
         bool guardedMerges = true; ///< CookOptions::guardedMerges
@@ -60,6 +62,11 @@ namespace hlds
         int texturesUsed = 0;
         int texturesEncoded = 0;
         int texelKb = 0;
+        int streamedTextures = 0;   ///< (0 when the map's textures are not streamed)
+        int streamWorstViewKb = 0;  ///< texels the worst view lists of them
+        int streamRegionKb = 0;     ///< what they may take of one view
+        int streamResidentKb = 0;   ///< and what the rest of its 4x4 textures take for good
+        int streamTotalKb = 0;      ///< all the streamed textures together
         int alphaTexelKb = 0; ///< A3I5 texels, a byte each
         int brushes = 0;
         int logicRecords = 0;

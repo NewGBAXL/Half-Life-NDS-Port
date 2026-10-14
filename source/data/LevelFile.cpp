@@ -33,7 +33,7 @@ namespace hlrt
         NEA_NpacUnmount("peek");
         return got &&
                std::memcmp(header.magic, hldata::kLevelMagic, sizeof(hldata::kLevelMagic)) == 0 &&
-               header.version == hldata::kLevelVersion;
+               hldata::levelVersionOk(header.version, header.minReader);
     }
 
     bool Level::load(std::string &error)

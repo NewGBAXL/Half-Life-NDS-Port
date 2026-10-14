@@ -11,6 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <map>
+#include <mutex>
+#include <thread>
 #include <cctype>
 
 #include "HlLevelReader.hpp"
@@ -427,17 +430,47 @@ namespace hlds
         result.modelTexelKb = modelTexels / 1024;
 
         const int skyTexels = (skyName.empty() ? 0 : 6 * kSkySize * kSkySize) + modelTexels;
-        const TexturePlan plan =
-            planTextures(bsp, textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads)),
-                         kWorldTexelBudget - skyTexels,
-                         kPaletteColourBudget - (skyName.empty() ? 0 : 6 * 256) -
-                             static_cast<int>(models.size()) * kModelSkinColours - kSpriteColourBudget,
-                         kAlphaTexelBudget - kSpriteTexelBudget);
-        if (!plan.fits)
-            result.warnings.push_back("its textures do not fit the DS even at their smallest");
-        result.texturesUsed = plan.usedTextures;
-        result.texelKb = plan.texels / 1024;
-        result.alphaTexelKb = plan.alphaTexels / 1024;
+        StreamOptions streamOptions;
+        streamOptions.enabled = options_.streamTextures;
+        const TextureNeeds textureWants = textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads));
+        const int colourBudget = kPaletteColourBudget - (skyName.empty() ? 0 : 6 * 256) -
+                                 static_cast<int>(models.size()) * kModelSkinColours - kSpriteColourBudget;
+        // Plan maps to use 3 texture banks, with few exceptions
+        auto planFor = [&](int worldBudget)
+        {
+            StreamOptions options = streamOptions;
+            return planTextures(bsp, textureWants, worldBudget - skyTexels, colourBudget,
+                                kAlphaTexelBudget - kSpriteTexelBudget, options);
+        };
+        TexturePlan plan = planFor(streamOptions.enabled ? kSinglePassTexelBudget : kWorldTexelBudget);
+        auto reportPlan = [&]()
+        {
+            if (!plan.fits && std::find(result.warnings.begin(),
+                    result.warnings.end(), "textures do not fit even at smallest resolution") == result.warnings.end())
+            {
+                result.warnings.push_back("textures do not fit even at smallest resolution");
+            }
+            result.texturesUsed = plan.usedTextures;
+            result.texelKb = plan.texels / 1024;
+            result.alphaTexelKb = plan.alphaTexels / 1024;
+            result.streamedTextures = result.streamWorstViewKb = result.streamRegionKb = 0;
+            result.streamResidentKb = result.streamTotalKb = 0;
+            if (plan.streamedTextures != 0)
+            {
+                long total = 0;
+                for (std::size_t t = 0; t < plan.streamed.size(); ++t)
+                {
+                    if (plan.streamed[t])
+                        total += static_cast<long>(plan.sizes[t].width) * plan.sizes[t].height;
+                }
+                result.streamedTextures = plan.streamedTextures;
+                result.streamWorstViewKb = plan.worstViewTexels / 1024;
+                result.streamRegionKb = plan.regionTexels / 1024;
+                result.streamResidentKb = plan.residentTexels / 1024;
+                result.streamTotalKb = static_cast<int>(total / 1024);
+            }
+        };
+        reportPlan();
 
         CookOptions cookOptions;
         cookOptions.lightScale = options_.lightScale;
@@ -500,8 +533,10 @@ namespace hlds
         // The chapter this map is part of (asked of all the game's maps,
         // once: each chapter is named by the map that opens it).
         {
+            static std::mutex scanLock;
             static std::filesystem::path scanned;
             static std::vector<std::pair<std::string, std::string>> titled;
+            const std::lock_guard<std::mutex> lock(scanLock);
             if (scanned != options_.gameDir)
             {
                 titled = chapterTitles(options_.gameDir, &titles);
@@ -514,6 +549,62 @@ namespace hlds
         std::vector<std::uint8_t> bytes;
         if (!cookLevel(bsp, cookOptions, plan, level, report, result.error))
             return result;
+
+        // Store color such that it can be properly drawn
+        // even if the texture is not loaded yet.
+        {
+            std::map<std::string, std::uint16_t> averages;
+            for (hldata::TextureRef &ref : level.textures)
+            {
+                if ((ref.flags & hldata::kTextureSky) != 0)
+                    continue;
+                const std::string name(ref.name);
+                const auto known = averages.find(name);
+                if (known != averages.end())
+                {
+                    ref.average = known->second;
+                    continue;
+                }
+                IndexedImage image;
+                std::string ignored;
+                bool have = false;
+                for (const BspTexture &t : bsp.textures)
+                {
+                    if (t.embedded && t.name == name && t.pixels.size() == static_cast<std::size_t>(t.width) * t.height &&
+                        t.palette.size() >= 768)
+                    {
+                        image.width = t.width;
+                        image.height = t.height;
+                        image.pixels = t.pixels;
+                        image.palette = t.palette;
+                        have = true;
+                        break;
+                    }
+                }
+                have = have || wads.read(name, image, ignored);
+                std::uint16_t average = 0x7FFF;
+                if (have && !image.pixels.empty() && image.palette.size() >= 768)
+                {
+                    const bool key = !name.empty() && name[0] == '{';
+                    std::uint64_t sum[3] = {0, 0, 0}, count = 0;
+                    for (const std::uint8_t index : image.pixels)
+                    {
+                        if (key && index == 255)
+                            continue; // the colour that is a hole
+                        for (int c = 0; c < 3; ++c)
+                            sum[c] += image.palette[index * 3 + c];
+                        ++count;
+                    }
+                    if (count != 0)
+                    {
+                        auto five = [&](int c) { return static_cast<std::uint16_t>((sum[c] / count) >> 3); };
+                        average = static_cast<std::uint16_t>(five(0) | (five(1) << 5) | (five(2) << 10));
+                    }
+                }
+                averages[name] = average;
+                ref.average = average;
+            }
+        }
 
         // The map's sounds: each read, brought to the console's rate and
         // packed. All of a map's sounds are in memory while it is played, so
@@ -1092,20 +1183,48 @@ namespace hlds
             if (!packCommon(stageDir(), dataDir(options_.cardRoot), options_.compress, report, why))
                 common_.warnings.push_back("the common archive was not made: " + why);
         }
-        for (std::size_t i = 0; i < names.size(); ++i)
+        // Process several maps at once
+        unsigned jobs = options_.jobs > 0 ? static_cast<unsigned>(options_.jobs)
+                                          : std::min(std::max(1u, std::thread::hardware_concurrency()), 6u);
+        jobs = std::max(1u, std::min<unsigned>(jobs, static_cast<unsigned>(names.size())));
+        std::atomic<std::size_t> next{0};
+        std::atomic<int> failedCount{0};
+        std::mutex callbacks;
+        auto work = [&]()
         {
-            if (cancel != nullptr && cancel->load())
-                break;
-            if (progress)
-                progress(i, names[i]);
-            MapResult result = cookMap(names[i]);
-            if (result.ok)
-                packInto(result);
-            if (!result.ok)
-                ++failed;
-            if (done)
-                done(result);
+            for (;;)
+            {
+                const std::size_t i = next.fetch_add(1);
+                if (i >= names.size() || (cancel != nullptr && cancel->load()))
+                    break;
+                if (progress)
+                {
+                    const std::lock_guard<std::mutex> lock(callbacks);
+                    progress(i, names[i]);
+                }
+                MapResult result = cookMap(names[i]);
+                if (result.ok)
+                    packInto(result);
+                if (!result.ok)
+                    ++failedCount;
+                if (done)
+                {
+                    const std::lock_guard<std::mutex> lock(callbacks);
+                    done(result);
+                }
+            }
+        };
+        if (jobs <= 1)
+            work();
+        else
+        {
+            std::vector<std::thread> pool;
+            for (unsigned n = 0; n < jobs; ++n)
+                pool.emplace_back(work);
+            for (std::thread &thread : pool)
+                thread.join();
         }
+        failed += failedCount.load();
 
         if (!writeManifest(error))
             return failed + 1;

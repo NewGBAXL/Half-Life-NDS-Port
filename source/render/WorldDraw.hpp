@@ -73,8 +73,8 @@ namespace hlrt
         // Kept under the hardware's 2048 / 6144: clipping against the screen's
         // edges turns one polygon into one with more vertices, and that is
         // counted against the same RAM.
-        static constexpr int kPolygonBudget = 1700;
-        static constexpr int kVertexBudget = 5200;
+        static constexpr int kPolygonBudget = hldata::kPassPolygons;
+        static constexpr int kVertexBudget = hldata::kPassVertices;
 
         // How every polygon of a level is sent.
         //
@@ -131,8 +131,6 @@ namespace hlrt
         /// quarter of it away, and a second of passes that are not slow
         /// gives a quarter back.
         void govern(bool overflow, bool underflow, int lines, bool slow);
-        /// Which half is about to be drawn (always 0 in single-pass).
-        void setPass(int pass) { pass_ = pass & 1; }
         /// How hard the view is to fit, 0 to 3: raised while passes run out
         /// of room, let down slowly when they have room to spare. What it
         /// costs first is what is least seen -- the far and small: surfaces
@@ -158,10 +156,10 @@ namespace hlrt
         }
         /// Set the hardware's fog for the pass about to be drawn.
         void applyFog();
-        int polygonBudget() const { return kPolygonBudget - held_ + sparePolygons_[pass_]; }
-        int vertexBudget() const { return kVertexBudget - held_ * 3 + spareVertices_[pass_]; }
+        int polygonBudget() const { return kPolygonBudget - held_ + sparePolygons_; }
+        int vertexBudget() const { return kVertexBudget - held_ * 3 + spareVertices_; }
         /// For the overlay: what is being held back (negative: added).
-        int heldBack() const { return held_ - sparePolygons_[pass_]; }
+        int heldBack() const { return held_ - sparePolygons_; }
 
         /// Where the brush entities are: one hldata::BrushState per Brush
         /// record, owned and moved by the game (Game::brushStates). Null
@@ -218,11 +216,10 @@ namespace hlrt
         int held_ = 0; ///< polygons kept back from the budget by govern()
         int spareQuarters_ = 4; ///< how much of what could be added is (0..4)
         int quickPasses_ = 0;
-        int pass_ = 0;
-        int sparePolygons_[2] = {0, 0}; ///< added to it, for each half
-        int spareVertices_[2] = {0, 0};
-        int unusedPolygons_[2] = {0, 0}; ///< what the last pass of each half did not use
-        int unusedVertices_[2] = {0, 0};
+        int sparePolygons_ = 0; ///< added to it
+        int spareVertices_ = 0;
+        int unusedPolygons_ = 0; ///< what the last pass did not use
+        int unusedVertices_ = 0;
         WorldStats stats_;
     };
 

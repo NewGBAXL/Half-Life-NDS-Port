@@ -1,9 +1,43 @@
 #include "hlds/AtomicWrite.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <fstream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace hlds
 {
+    namespace
+    {
+        /// Files that have already been read by a previous map do not need to
+        /// be reprocessed for the next map. Biggest offenders include
+        /// halflife.wad and shared map sounds and models.
+        constexpr std::uint64_t kCacheLimit = 384ull * 1024 * 1024;
+        constexpr std::uint64_t kCacheFileLimit = 96ull * 1024 * 1024;
+
+        struct CachedFile
+        {
+            std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+            std::uintmax_t size = 0;
+            std::filesystem::file_time_type time;
+            std::uint64_t used = 0;
+        };
+
+        std::mutex cacheMutex;
+        std::map<std::string, CachedFile> cache;
+        std::uint64_t cacheTotal = 0;
+        std::uint64_t cacheClock = 0;
+        std::atomic<std::uint64_t> tempCounter{0};
+
+        bool worthKeeping(const std::filesystem::path &path)
+        {
+            return path.parent_path().filename() != "maps";
+        }
+    } // namespace
+
     bool writeFileAtomic(const std::filesystem::path &path,
                          const std::vector<std::uint8_t> &bytes, std::string &error)
     {
@@ -17,8 +51,9 @@ namespace hlds
                 return false;
             }
         }
+        // Unique name so multiple simultaneous cooks same shared file don't conflict.)
         std::filesystem::path temp = path;
-        temp += ".tmp";
+        temp += ".tmp" + std::to_string(tempCounter.fetch_add(1));
         {
             std::ofstream out(temp, std::ios::binary | std::ios::trunc);
             if (!out)
@@ -44,19 +79,95 @@ namespace hlds
             std::filesystem::remove(temp, ec);
             return false;
         }
+        // Attempt to r/w the file before silently failing.
+        for (int attempt = 0; attempt < 40; ++attempt)
+        {
+            std::ifstream check(path, std::ios::binary);
+            if (check)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
         return true;
     }
 
     bool readFile(const std::filesystem::path &path, std::vector<std::uint8_t> &bytes,
                   std::string &error)
     {
-        std::ifstream in(path, std::ios::binary);
+        std::error_code ec;
+        const bool keep = worthKeeping(path);
+        const std::string key = path.string();
+        std::uintmax_t statSize = 0;
+        std::filesystem::file_time_type time{};
+        if (keep)
+        {
+            statSize = std::filesystem::file_size(path, ec);
+            if (!ec)
+                time = std::filesystem::last_write_time(path, ec);
+            if (!ec)
+            {
+                std::shared_ptr<const std::vector<std::uint8_t>> found;
+                {
+                    const std::lock_guard<std::mutex> lock(cacheMutex);
+                    const auto it = cache.find(key);
+                    if (it != cache.end() && it->second.size == statSize && it->second.time == time)
+                    {
+                        it->second.used = ++cacheClock;
+                        found = it->second.bytes;
+                    }
+                }
+                if (found)
+                {
+                    bytes = *found;
+                    return true;
+                }
+            }
+        }
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        // Try again a handful of times when opening files as r/w access might have just been granted.
+        for (int attempt = 1; !in && attempt <= 5 && std::filesystem::exists(path, ec); ++attempt)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100 * attempt));
+            in.clear();
+            in.open(path, std::ios::binary | std::ios::ate);
+        }
         if (!in)
         {
             error = "cannot open " + path.string();
             return false;
         }
-        bytes.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::streamoff size = in.tellg();
+        in.seekg(0, std::ios::beg);
+        bytes.resize(size > 0 ? static_cast<std::size_t>(size) : 0);
+        if (size > 0 && !in.read(reinterpret_cast<char *>(bytes.data()), size))
+        {
+            bytes.clear();
+            error = "cannot read " + path.string();
+            return false;
+        }
+        if (keep && !ec && bytes.size() <= kCacheFileLimit)
+        {
+            auto copy = std::make_shared<const std::vector<std::uint8_t>>(bytes);
+            const std::lock_guard<std::mutex> lock(cacheMutex);
+            const auto old = cache.find(key);
+            if (old != cache.end())
+            {
+                cacheTotal -= old->second.bytes->size();
+                cache.erase(old);
+            }
+            while (cacheTotal + copy->size() > kCacheLimit && !cache.empty())
+            {
+                auto oldest = cache.begin();
+                for (auto it = cache.begin(); it != cache.end(); ++it)
+                {
+                    if (it->second.used < oldest->second.used)
+                        oldest = it;
+                }
+                cacheTotal -= oldest->second.bytes->size();
+                cache.erase(oldest);
+            }
+            cacheTotal += copy->size();
+            cache[key] = CachedFile{copy, statSize, time, ++cacheClock};
+        }
         return true;
     }
 } // namespace hlds

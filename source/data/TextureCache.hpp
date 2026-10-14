@@ -12,10 +12,18 @@
 // A texture that is missing or unreadable is not an error. Its material stays
 // null and the renderer draws those surfaces in their baked light alone --
 // a grey wall is a better thing to show a player than a refusal to start.
+//
+// Streamed textures are not loaded here. They are drawn as a flat colour until
+// TextureStream has read the real one in, and again after it has made way for another.
+// Either way what a surface binds is two words (bind()), which is why the surfaces
+// that name them can all be drawn alike.
 
+#include <cstddef>
 #include <cstdint>
 
 #include <NEAMain.h>
+
+#include "HlTexture.hpp"
 
 namespace hlrt
 {
@@ -30,8 +38,23 @@ namespace hlrt
         /// has just been torn down and has already freed them.
         void forget();
 
-        /// Null for a texture that could not be loaded.
+        /// Null for a texture that could not be loaded,
+        /// and for a streamed one that is not currently in video memory.
         NEA_Material *material(unsigned index) const { return materials_[index]; }
+        /// Whether `index` is one the streaming looks after.
+        bool streamed(unsigned index) const { return streamed_ != nullptr && streamed_[index] != 0; }
+        /// Whether there is anything to bind for `index`:
+        /// a material, or (for a streamed texture) its flat colour.
+        bool present(unsigned index) const { return materials_[index] != nullptr || streamed(index); }
+        /// Do what NEA_MaterialUse does for `index`, for what is drawn next:
+        /// its texture, or if streamed and not in memory, its flat colour.
+        /// Returns false, with no texture, if missing.
+        bool use(unsigned index) const;
+        /// TextureStream's: the texture has been read into video memory,
+        /// or has been let go (back to its flat colour).
+        void attachStreamed(unsigned index, NEA_Material *material, NEA_Palette *palette);
+        void detachStreamed(unsigned index);
+        int streamedCount() const { return streamedCount_; }
         /// The same choice as two command parameters, for a display list
         /// (where a register cannot be written): the texture's (0: none) and
         /// its palette's.
@@ -62,15 +85,30 @@ namespace hlrt
                              int expectA3I5, NEA_Material *&material, NEA_Palette *&palette,
                              std::uint16_t *tint = nullptr);
 
+        /// The two halves of loadFile. readFile puts a file's header and
+        /// the rest of it (texels, index, palette) in `body`, which has room
+        /// for `capacity` bytes, after checking it against what is expected;
+        /// false if it is missing, wrong or too big. create makes the
+        /// material and palette from them.
+        static bool readFile(const char *path, int expectWidth, int expectHeight, int expectA3I5,
+                             hldata::TextureHeader &header, std::uint8_t *body, std::size_t capacity);
+        static bool create(const hldata::TextureHeader &header, const std::uint8_t *body, bool liquid,
+                           NEA_Material *&material, NEA_Palette *&palette, std::uint16_t *tint = nullptr);
+
         TextureCache() = default;
         TextureCache(const TextureCache &) = delete;
         TextureCache &operator=(const TextureCache &) = delete;
 
     private:
         bool loadOne(unsigned index);
+        bool makeFlat(unsigned index, std::uint16_t colour);
 
         NEA_Material **materials_ = nullptr;
         NEA_Palette **palettes_ = nullptr;
+        NEA_Palette **flatPalettes_ = nullptr;
+        NEA_Material *flatTexture_ = nullptr;
+        std::uint8_t *streamed_ = nullptr;
+        int streamedCount_ = 0;
         std::uint32_t *binds_ = nullptr;
         std::uint16_t *tints_ = nullptr;
         int count_ = 0;

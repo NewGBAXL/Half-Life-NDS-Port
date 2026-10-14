@@ -77,22 +77,9 @@ namespace hlrt
         constexpr std::uint16_t kOrange = RGB15(31, 20, 2);
         constexpr std::uint16_t kRed = RGB15(31, 3, 2);
 
-        /// In the two-pass mode that joins its halves in video memory, the
-        /// whole screen as it is shown is what is captured (see main.cpp's
-        /// drawScene): the same here, so that the picture is whole.
-        void captureWhole()
-        {
-            if (global.video == Global::Video::TwoPass && NEA_TwoPassGetPass() == 0)
-            {
-                REG_DISPCAPCNT = DCAP_BANK(DCAP_BANK_VRAM_C) | DCAP_SIZE(DCAP_SIZE_256x192) |
-                                 DCAP_MODE(DCAP_MODE_A) | DCAP_SRC_A(DCAP_SRC_A_COMPOSITED) | DCAP_ENABLE;
-            }
-        }
-
         NEA_Material *loadingShown = nullptr;
         void drawLoading()
         {
-            captureWhole();
             if (loadingShown == nullptr)
                 return;
             NEA_MaterialUse(loadingShown);
@@ -314,17 +301,11 @@ namespace hlrt
             loadingPalette_ = palette;
         }
         loadingShown = static_cast<NEA_Material *>(loadingMaterial_);
-        // Enough pictures of it that it is what every part of the screen
-        // shows: one, where a picture is one pass; where it is two, both
-        // halves, and round again for the half that was shown a frame late.
-        const int frames = global.twoPass ? 6 : 2;
-        for (int n = 0; n < frames; ++n)
+        // Enough pictures of it that it is what the whole screen shows.
+        for (int n = 0; n < 2; ++n)
         {
             NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
-            if (global.twoPass)
-                NEA_ProcessTwoPass(drawLoading);
-            else
-                NEA_Process(drawLoading);
+            NEA_Process(drawLoading);
         }
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
         // What is on the screen now is kept as a picture (FrameFreeze), as

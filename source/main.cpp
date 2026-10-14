@@ -9,6 +9,7 @@
 #include "data/ModelCache.hpp"
 #include "data/SpriteCache.hpp"
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 #include "game/Game.hpp"
 #include "game/Input.hpp"
 #include "game/Player.hpp"
@@ -44,50 +45,23 @@ namespace
             swiWaitForVBlank();
     }
 
-    /// How a map is drawn under a render setting. For Auto it is the map that
-    /// says: the converter wrote the worst case the PVS can ask for in the
-    /// level's header. That bound counts every direction at once and the view
-    /// only ever looks in one, so a map needs two passes when it is over
-    /// about twice a single pass's budget.
-    Global::Video videoFor(hldata::RenderMode mode, const hldata::LevelHeader &header)
-    {
-        switch (mode)
-        {
-        case hldata::RenderMode::TwoPass:
-            return Global::Video::TwoPass;
-        case hldata::RenderMode::TwoPassDma:
-            return Global::Video::TwoPassDma;
-        case hldata::RenderMode::SinglePass:
-            return Global::Video::SinglePass;
-        default:
-            return header.worstVertices > 2 * hlrt::WorldDraw::kVertexBudget ||
-                           header.worstPolygons > 2 * hlrt::WorldDraw::kPolygonBudget
-                       ? Global::Video::TwoPass
-                       : Global::Video::SinglePass;
-        }
-    }
-
     std::string currentMap;
 
     /// How many frames are handed to the hardware before the curtain goes
-    /// up on a map: the first has then been on the screen for one (and,
-    /// where a picture is two passes, both halves of it are in) -- and the
+    /// up on a map: the first has then been on the screen for one, and the
     /// map has had a few frames to put itself in order. (Seen: the first
     /// map's first frames with a pale band across their top, which a
     /// curtain of two frames let through.)
-    int curtainFrames()
+    constexpr int curtainFrames()
     {
-        return global.twoPass ? 14 : 12;
+        return 12;
     }
 
     /// A line in perf.txt about the map being played: what the hardware made
     /// of it (GpuStats).
     void logPerformance()
     {
-        const char *mode = global.video == Global::Video::TwoPassDma ? "2D"
-                           : global.twoPass                           ? "2P"
-                                                                      : "1P";
-        hlrt::gpuStats.writeLog(currentMap.c_str(), mode);
+        hlrt::gpuStats.writeLog(currentMap.c_str(), "1P");
         // With the DSi's DSP in use, how it got on over that map.
         if (hlrt::sound.extended())
         {
@@ -151,25 +125,6 @@ namespace
 
     void drawScene()
     {
-        // NEA's two-pass shows the left half a frame before the right half
-        // that goes with it: every other frame is the new left beside the old
-        // right, and the picture tears down the middle whenever the view
-        // turns. During the left pass, though, what is ON SCREEN is whole --
-        // the captured left half with the live right half of the same moment
-        // -- so capture that, the composited screen, instead of the 3D layer
-        // alone. NEA then shows the capture in front for the right pass, and
-        // being a whole opaque picture it covers the early left half behind
-        // it. Written here because this runs straight after NEA has set the
-        // register, well before the capture starts at the first line.
-        // (The DMA mode has no need of it: it shows a picture only when both
-        // of its halves are in.)
-        if (global.video == Global::Video::TwoPass && NEA_TwoPassGetPass() == 0)
-        {
-            REG_DISPCAPCNT = DCAP_BANK(DCAP_BANK_VRAM_C) | DCAP_SIZE(DCAP_SIZE_256x192) |
-                             DCAP_MODE(DCAP_MODE_A) | DCAP_SRC_A(DCAP_SRC_A_COMPOSITED) |
-                             DCAP_ENABLE;
-        }
-
         // NEA leaves all four lights on and the modelview at identity. The
         // world is lit by its vertex colours: no lights.
         hlrt::worldDraw.applyFog();
@@ -179,8 +134,6 @@ namespace
         hlrt::worldDraw.draw();
         hlrt::hudDraw.draw();
     }
-    /// The header of the map that is loaded (which says how it is drawn).
-    hldata::LevelHeader currentHeader{};
 
     enum class LoadResult
     {
@@ -209,13 +162,10 @@ namespace
         clock.mark("peek");
         hlrt::bottomScreen.showMessage("LOADING", name.c_str());
         // The last picture of the map being left stays on the screen while
-        // this one loads, if there is one and the way of drawing does not
-        // change (FrameFreeze). Otherwise nothing of the old picture is seen
-        // from here on: the hardware would go on drawing it out of video
-        // memory, which is about to be written over.
-        const Global::Video want = videoFor(settings.renderMode, header);
-        const bool kept = hlrt::level.loaded() && want == global.video && !hlrt::screenFade.curtained() &&
-                          hlrt::frameFreeze.freeze();
+        // this one loads, if there is one (FrameFreeze). Otherwise nothing of
+        // the old picture is seen from here on: the hardware would go on
+        // drawing it out of video memory, which is about to be written over.
+        const bool kept = hlrt::level.loaded() && !hlrt::screenFade.curtained() && hlrt::frameFreeze.freeze();
         if (!kept)
             hlrt::screenFade.curtainDown();
 
@@ -232,27 +182,10 @@ namespace
         hlrt::sound.unload();
         hlrt::game.destroy();
         hlrt::worldDraw.destroy();
-        // The 3D engine is brought up again only if this map is drawn the
-        // other way (the automatic setting): the textures go with it.
-        if (want != global.video)
-        {
-            hlrt::textureCache.forget();
-            hlrt::spriteCache.forget();
-            hlrt::modelCache.forget();
-            hlrt::level.unload();
-            hlrt::hudDraw.forget();
-            global.InitVideo(want);
-            hlrt::hudDraw.load();
-            hlrt::bottomScreen.reset();
-            hlrt::bottomScreen.create();
-            hlrt::bottomScreen.showMessage("LOADING", name.c_str());
-        }
-        else
-        {
-            hlrt::textureCache.destroy();
-            hlrt::spriteCache.destroy();
-            hlrt::modelCache.destroy();
-        }
+        hlrt::textureStream.end();
+        hlrt::textureCache.destroy();
+        hlrt::spriteCache.destroy();
+        hlrt::modelCache.destroy();
 
         // With no picture kept: the game's loading picture, on the screen
         // and left there while the map is read (video memory is empty just
@@ -281,6 +214,9 @@ namespace
         clock.mark("spr");
         made = made && hlrt::modelCache.create();
         clock.mark("mdl");
+        // What video memory has left is for the textures that stream.
+        hlrt::textureStream.begin();
+        clock.mark("stream");
         made = made && hlrt::game.create();
         if (!made)
         {
@@ -290,7 +226,6 @@ namespace
         hlrt::worldDraw.setBrushStates(hlrt::game.brushStates());
         hlrt::game.restoreMap(hldata::nameHash(name.c_str()));
         currentMap = name;
-        currentHeader = header;
         hlrt::debugOverlay.setMapName(currentMap.c_str());
 
         hlrt::player.spawn();
@@ -471,24 +406,14 @@ namespace
         std::FILE *file = std::fopen(global.dataPath("debug_start.txt").c_str(), "r");
         if (file == nullptr)
             return false;
-        // (A sixth number in it is how to draw: 1 single-pass, 2 two-pass,
-        // 3 two-pass DMA -- for this run, not saved.)
-        // (And the readout is on: whoever starts this way wants to see it.)
+        // (The readout is on: whoever starts this way wants to see it.)
         settings.debugReadout = true;
-        // (... and a seventh, how many models may be drawn at once.)
+        // (The sixth number, the seconds until the player dies, is read by
+        // Player. The seventh is how many models may be drawn at once.)
         int n[7] = {0, 0, 0, 0, -1, 0, 0};
         const int given = std::fscanf(file, "%d %d %d %d %d %d %d", &n[0], &n[1], &n[2], &n[3], &n[4], &n[5], &n[6]);
         if (given == 7 && n[6] > 0)
             hlrt::modelDraw.setLimit(n[6]);
-        if (given >= 6)
-        {
-            if (n[5] == 1)
-                settings.renderMode = hldata::RenderMode::SinglePass;
-            else if (n[5] == 2)
-                settings.renderMode = hldata::RenderMode::TwoPass;
-            else if (n[5] == 3)
-                settings.renderMode = hldata::RenderMode::TwoPassDma;
-        }
         std::fclose(file);
         return true;
     }
@@ -510,20 +435,14 @@ int main(int argc, char *argv[])
     // maps more than eight are almost never in sight together anyway.
     hlrt::modelDraw.setLimit(isDSiMode() ? 12 : 8);
 
-    // The manifest says what the converter put on the card and which map to
-    // start in. Read before the 3D engine is up, because the map decides how
-    // the engine is brought up.
+    // The manifest says what the converter put on the card and which map to start in.
     std::string startMap;
     const Global::DataStatus status = global.ReadManifest(startMap);
 
     settings.load();
     const bool debugging = debugStart();
 
-    hldata::LevelHeader header{};
-    const bool haveHeader =
-        status == Global::DataStatus::Ok &&
-        hlrt::Level::peekHeader(startMap, header);
-    global.InitVideo(haveHeader ? videoFor(settings.renderMode, header) : Global::Video::SinglePass);
+    global.InitVideo();
 
     if (status != Global::DataStatus::Ok)
         haltWith("Cannot start:", Global::DataStatusTitle(status), Global::DataStatusHint(status));
@@ -595,6 +514,8 @@ int main(int argc, char *argv[])
     while (true)
     {
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+        // Upload/update texture stream while 3D engine is not reading it.
+        hlrt::textureStream.upload();
         {
             const hlrt::DebugLog::Perf::Scope frame(hlrt::DebugLog::Section::Frame);
 
@@ -687,31 +608,6 @@ int main(int argc, char *argv[])
                     {
                         paused = false;
                         settings.save();
-                        // A changed mode takes effect here, on the way out of
-                        // the menu, and only on a frame boundary (pass 0): the
-                        // 3D engine is brought up again in the other mode and
-                        // the textures, which went with it, are loaded again.
-                        const Global::Video want =
-                            videoFor(settings.renderMode, currentHeader);
-                        if (want != global.video)
-                        {
-                            // (The models themselves stay as they are:
-                            // only their skins went with the engine.)
-                            hlrt::screenFade.curtainDown();
-                            hlrt::textureCache.forget();
-                            hlrt::spriteCache.forget();
-                            hlrt::modelCache.forgetSkins();
-                            hlrt::hudDraw.forget();
-                            global.InitVideo(want);
-                            hlrt::hudDraw.load();
-                            hlrt::bottomScreen.reset();
-                            hlrt::bottomScreen.create();
-                            hlrt::textureCache.create();
-                            hlrt::spriteCache.create();
-                            hlrt::modelCache.loadSkins();
-                            hlrt::screenFade.curtainUp(curtainFrames());
-                            lastVblank = Global::vblanks();
-                        }
                         // (Once the card has been written to and the
                         // pictures are back: nothing then stands in the
                         // sound's way.)
@@ -798,33 +694,12 @@ int main(int argc, char *argv[])
                 }
             };
 
-            // In two-pass mode the game advances once per DISPLAYED frame:
-            // the right half has to be drawn from the same place the left
-            // one was, or the two do not meet in the middle. Normally that
-            // is just before the left pass. In the DMA mode it is just after
-            // the right one instead, so that nothing stands between the
-            // vertical blank and NEA's part of a pass: that is where it
-            // copies the half captured a frame ago out of video memory, and
-            // if a long step made it late, the capture it copied would be
-            // of the other half.
-            const bool stepsLate = global.video == Global::Video::TwoPassDma;
-            if (!stepsLate && (!global.twoPass || NEA_TwoPassGetPass() == 0))
-                step();
-
-            if (global.twoPass)
-            {
-                hlrt::topText.pass();
-                hlrt::worldDraw.setPass(NEA_TwoPassGetPass());
-                hlrt::camera.buildPlanes(NEA_TwoPassGetPass() == 0 ? hlrt::ViewHalf::Left
-                                                                   : hlrt::ViewHalf::Right);
-                NEA_ProcessTwoPass(drawScene);
-            }
-            else
-            {
-                hlrt::worldDraw.setPass(0);
-                NEA_Process(drawScene);
-            }
+            step();
+            NEA_Process(drawScene);
             hlrt::sound.frame();
+            // What is in view now says what to read for the next frames;
+            // a few kilobytes a frame, more where the card is quicker.
+            hlrt::textureStream.update(isDSiMode() ? 8192 : 4096);
             // What the hardware made of the pass before this one, and the
             // budget corrected by it.
             {
@@ -842,9 +717,6 @@ int main(int argc, char *argv[])
                 hlrt::worldDraw.govern(seen.overflow, seen.underflow, seen.lines,
                                        took > 1 && took < 60);
             }
-            if (stepsLate && global.video == Global::Video::TwoPassDma &&
-                NEA_TwoPassGetPass() == 0)
-                step();
         }
         hlrt::DebugLog::Perf::endFrame();
         hlrt::DebugLog::Perf::logEvery(currentMap.c_str(), 512);

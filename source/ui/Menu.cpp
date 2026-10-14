@@ -35,7 +35,6 @@ namespace hlrt
             kNewGame,
             kOptions,
             kCommand,
-            kRender,
             kDsp,
             kMusic,
             kEffects,
@@ -85,10 +84,9 @@ namespace hlrt
                                    {Kind::Value, kReadout, "Debug readout"},
                                    {Kind::Button, kBack, "BACK"}};
 
-        // How the picture is drawn: the rendering mode, the fog, and how
-        // much detail is given up for speed (shared/HlFog.hpp).
-        const Row kGraphicsRows[] = {{Kind::Value, kRender, ""},
-                                     {Kind::Value, kFog, "Fog"},
+        // How the picture is drawn:
+        // the fog, and how much detail is given up for speed (shared/HlFog.hpp).
+        const Row kGraphicsRows[] = {{Kind::Value, kFog, "Fog"},
                                      {Kind::Slider, kFogStrength, "Fog strength"},
                                      {Kind::Slider, kFogDistance, "Fog distance"},
                                      {Kind::Value, kFogColour, "Fog colour"},
@@ -301,9 +299,6 @@ namespace hlrt
         char text[48];
         switch (item.id)
         {
-        case kRender:
-            std::snprintf(text, sizeof(text), "%s", Settings::name(settings.renderMode));
-            break;
         case kDsp:
             std::snprintf(text, sizeof(text), "%s: %s", item.label,
                           dead ? "not on a DS" : (sound.extended() ? "on" : "off"));
@@ -492,11 +487,6 @@ namespace hlrt
             break;
         case kDrawDistance:
             settings.graphics.drawDistance = static_cast<std::uint8_t>((settings.graphics.drawDistance + 1) % kDrawDistances);
-            drawRow(row, false);
-            break;
-        case kRender:
-            // (It takes effect on the way out of the menu.)
-            settings.renderMode = Settings::next(settings.renderMode);
             drawRow(row, false);
             break;
         case kDsp:

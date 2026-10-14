@@ -3,7 +3,7 @@
 // Two things are worth more than they look. The reader's promise is that a map
 // it accepts can be indexed without checks, so the corrupt-file cases here are
 // the ones that keep a damaged download from becoming a crash in the cooker.
-// And the PVS polygon count is the number the two-pass decision is made from,
+// And the PVS polygon count is the number a map is judged for heavy fog use from,
 // so it is pinned on a level small enough to count by hand.
 
 #include <cstdio>

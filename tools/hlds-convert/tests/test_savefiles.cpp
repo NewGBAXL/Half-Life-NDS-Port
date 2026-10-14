@@ -176,7 +176,8 @@ int main()
     {
         MemoryCard other = card;
         other.files["save1.sav"] = other.files["quick.sav"];
-        other.files["save1.sav"][4] ^= 0x7F; // (its version)
+        other.files["save1.sav"][4] = static_cast<std::uint8_t>(kSaveVersion + 1); // (its version)
+        other.files["save1.sav"][5] = 0;
         other.files["save2.sav"] = other.files["quick.sav"];
         other.files["save2.sav"][sizeof(SaveHeader) + 9] ^= 1; // (its heading)
         other.files["save4.sav"] = {'n', 'o', 't', ' ', 'o', 'n', 'e'};

@@ -22,6 +22,7 @@ namespace hlds
         std::uint16_t visLeafCount = 0;
         std::uint16_t worstPolygons = 0;
         std::uint16_t worstVertices = 0;
+        std::uint32_t worstTexels = 0;
         std::uint16_t skyTexture = 0; ///< LevelHeader::skyTexture
         std::uint16_t viewModel = 0;  ///< LevelHeader::viewModel
 

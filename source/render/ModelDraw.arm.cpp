@@ -130,8 +130,7 @@ namespace hlrt
     HL_ITCM void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
                               const fx *turn, int id, int level)
     {
-        // The pose is kept: a model is drawn twice for one moment in
-        // two-pass mode, and one that is holding still (a body, someone
+        // The pose is kept: one that is holding still (a body, someone
         // waiting on a frame) is the same from frame to frame.
         const BoneMatrix *pose = posed(actor, model, modelIndex, id);
         const DebugLog::Perf::Scope scope(DebugLog::Section::Models);

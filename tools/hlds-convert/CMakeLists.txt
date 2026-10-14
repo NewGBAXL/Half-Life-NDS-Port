@@ -143,6 +143,7 @@ if(HLDS_BUILD_TESTS)
             test_savefiles
             test_savestate
             test_texture
+            test_texturestream
             test_wad)
         add_executable(${test_name} tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE hlds_convert_core)

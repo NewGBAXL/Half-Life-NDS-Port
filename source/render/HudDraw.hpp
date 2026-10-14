@@ -8,8 +8,7 @@
 // Both are the game's own pictures, cooked to the card (shared/HlUi.hpp); a
 // card without them has neither. They are drawn as flat quads a little way
 // in front of the eye, through the same projection as the world: that is
-// right in every render mode (in the two-pass modes each half's own frustum
-// takes its part of them), and nearer than anything else can be.
+// right whatever the view, and nearer than anything else can be.
 
 #include <cstdint>
 

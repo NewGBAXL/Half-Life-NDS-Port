@@ -190,12 +190,12 @@ namespace
         data.volume[kVolumeVoices] = 3;
         data.volume[kVolumeAmbience] = 0;
         data.debugReadout = 1;
-        data.renderMode = static_cast<std::uint8_t>(RenderMode::TwoPassDma);
+        data.renderMode = 3;
         std::vector<std::uint8_t> bytes = writeSettings(data);
         SettingsData back;
         check(bytes.size() <= 64 && readSettings(bytes.data(), bytes.size(), back) && back.volume[kVolumeVoices] == 3 &&
                   back.volume[kVolumeAmbience] == 0 && back.volume[kVolumeMusic] == 8 && back.debugReadout == 1 &&
-                  back.renderMode == static_cast<std::uint8_t>(RenderMode::TwoPassDma),
+                  back.renderMode == 3,
               "settings read back as they were written, the volumes and the readout among them");
         data.volume[kVolumeMusic] = 11;
         bytes = writeSettings(data);

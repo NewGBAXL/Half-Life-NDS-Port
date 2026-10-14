@@ -17,6 +17,7 @@
 #include "HlPlaneMath.hpp"
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 #include "audio/Sound.hpp"
 #include "render/Camera.hpp"
 #include "render/WorldDrawParts.hpp"
@@ -211,7 +212,9 @@ namespace hlrt
                 {
                     // What NEA_MaterialUse writes to registers, as commands.
                     bound = surface.texture;
-                    const std::uint32_t *bind = textureCache.bind(textureCache.shown(bound));
+                    const unsigned picture = textureCache.shown(bound);
+                    noteTextureDrawn(picture);
+                    const std::uint32_t *bind = textureCache.bind(picture);
                     *at++ = FIFO_COMMAND_PACK(FIFO_PAL_FORMAT, FIFO_COLOR, FIFO_TEX_FORMAT, FIFO_NOP);
                     *at++ = bind[1];
                     *at++ = 0x7FFF;
@@ -274,12 +277,11 @@ namespace hlrt
                 if (surface.texture != bound)
                 {
                     bound = surface.texture;
-                    // (Whichever picture of it is due: TextureCache.)
-                    const NEA_Material *material = textureCache.material(textureCache.shown(bound));
-                    if (material != nullptr)
-                        NEA_MaterialUse(material);
-                    else
-                        GFX_TEX_FORMAT = 0; // not on the card: baked light alone
+                    // Textures not on the card are baked light alone,
+                    // textures streamed and not in memory yet are flattened.
+                    const unsigned picture = textureCache.shown(bound);
+                    noteTextureDrawn(picture);
+                    textureCache.use(picture);
                 }
                 const std::uint32_t *word = view.gxStream + surface.gxOfs;
                 // The FIFO takes packed command words as they are; a write

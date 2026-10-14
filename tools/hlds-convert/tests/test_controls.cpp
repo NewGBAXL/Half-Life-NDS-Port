@@ -445,7 +445,7 @@ namespace
         old.leftHanded = 1;
         old.viewBob = 1;
         old.volume[kVolumeMusic] = 3;
-        old.renderMode = static_cast<std::uint8_t>(RenderMode::TwoPass);
+        old.renderMode = 3;
         constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
         yas::mem_ostream os;
         yas::binary_oarchive<yas::mem_ostream, flags> oa(os);
@@ -461,7 +461,7 @@ namespace
         std::memcpy(file.data() + sizeof(header), buf.data, buf.size);
         SettingsData read;
         check(readSettings(file.data(), file.size(), read) && read.leftHanded == 1 && read.viewBob == 1 &&
-                  read.volume[kVolumeMusic] == 3 && read.renderMode == static_cast<std::uint8_t>(RenderMode::TwoPass) &&
+                  read.volume[kVolumeMusic] == 3 && read.renderMode == 3 &&
                   read.controlScheme == kControlsClassic && read.padTurns == 0 && read.padLooks == 0,
               "settings saved before there were layouts are read as they were, with the classic layout");
     }
