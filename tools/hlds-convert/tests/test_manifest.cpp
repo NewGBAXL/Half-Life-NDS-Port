@@ -60,10 +60,17 @@ int main()
     bad[4] ^= 0x40;
     check(readManifest(bad.data(), bad.size(), back) == ManifestError::OtherVersion,
           "another manifest version");
+    check(manifestRefusal(bad.data(), bad.size()).find("format " + std::to_string(kManifestVersion ^ 0x40)) !=
+              std::string::npos,
+          "... and the screen says which");
     bad = bytes;
     bad[6] ^= 0x40;
     check(readManifest(bad.data(), bad.size(), back) == ManifestError::OtherVersion,
           "another LEVEL version: the maps it lists are not for this build");
+    check(manifestRefusal(bad.data(), bad.size()).find("maps are format " + std::to_string(kLevelVersion ^ 0x40)) !=
+              std::string::npos,
+          "... and the screen says which");
+    check(manifestRefusal(bytes.data(), bytes.size()).empty(), "a manifest that is fine has nothing to say");
     check(readManifest(bytes.data(), bytes.size() - 1, back) == ManifestError::NotAManifest,
           "a truncated payload is caught by its length");
     bad = bytes;

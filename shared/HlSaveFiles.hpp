@@ -73,6 +73,9 @@ namespace hldata
     {
         int status = kSaveNone; ///< kSave*
         SaveHeading heading;
+        /// For kSaveOther: the numbers its header had (0: not known), to say
+        /// why it is not read (saveRefusal). Not in the index: found again.
+        std::uint16_t version = 0, minReader = 0, levelVersion = 0;
     };
     struct SaveIndex
     {
@@ -101,6 +104,17 @@ namespace hldata
         {
             return std::string(saveSlotFile(slot)) + ".new";
         }
+
+        inline void noteHeader(const std::vector<std::uint8_t> &bytes, SaveSlot &slot)
+        {
+            SaveHeader header;
+            if (slot.status != kSaveOther || bytes.size() < sizeof(header))
+                return;
+            std::memcpy(&header, bytes.data(), sizeof(header));
+            slot.version = header.version;
+            slot.minReader = header.minReader;
+            slot.levelVersion = header.levelVersion;
+        }
     } // namespace detail
 
     /// One slot put right after a write that was cut off, and what it is
@@ -125,7 +139,10 @@ namespace hldata
         }
         bytes.clear();
         if (card.read(saveSlotFile(slot), bytes, kSaveHeadBytes))
+        {
             out.status = readSaveHeading(bytes.data(), bytes.size(), out.heading);
+            detail::noteHeader(bytes, out);
+        }
         return out;
     }
 
@@ -194,6 +211,12 @@ namespace hldata
             index.slots[i].heading = file.slots[i].heading;
             index.slots[i].heading.map[sizeof(index.slots[i].heading.map) - 1] = 0;
             index.slots[i].heading.chapter[sizeof(index.slots[i].heading.chapter) - 1] = 0;
+            if (index.slots[i].status == kSaveOther)
+            {
+                std::vector<std::uint8_t> head;
+                if (card.read(saveSlotFile(i), head, kSaveHeadBytes))
+                    detail::noteHeader(head, index.slots[i]);
+            }
         }
     }
 
@@ -265,7 +288,8 @@ namespace hldata
         if (slot.status == kSaveNone)
             return "EMPTY";
         if (slot.status == kSaveOther)
-            return "FROM ANOTHER VERSION";
+            return slot.version != 0 ? saveRefusal(slot.version, slot.minReader, slot.levelVersion)
+                                     : "FROM ANOTHER VERSION";
         if (slot.status == kSaveBad)
             return "DAMAGED";
         const SaveHeading &h = slot.heading;

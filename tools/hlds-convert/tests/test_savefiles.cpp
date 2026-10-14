@@ -176,7 +176,7 @@ int main()
     {
         MemoryCard other = card;
         other.files["save1.sav"] = other.files["quick.sav"];
-        other.files["save1.sav"][4] = static_cast<std::uint8_t>(kSaveVersion + 1); // (its version)
+        other.files["save1.sav"][4] = static_cast<std::uint8_t>(kSaveMinVersion - 1); // (its version, currently unread)
         other.files["save1.sav"][5] = 0;
         other.files["save2.sav"] = other.files["quick.sav"];
         other.files["save2.sav"][sizeof(SaveHeader) + 9] ^= 1; // (its heading)
@@ -184,8 +184,24 @@ int main()
         other.files.erase(kSaveIndexFile);
         SaveIndex listed;
         saveIndexLoad(other, listed);
-        check(listed.slots[kSlotManual].status == kSaveOther && saveLine(listed.slots[kSlotManual]) == "FROM ANOTHER VERSION",
-              "a save of another version is listed as that");
+        check(listed.slots[kSlotManual].status == kSaveOther &&
+                  saveLine(listed.slots[kSlotManual]) ==
+                      "SAVE V" + std::to_string(kSaveMinVersion - 1) + ", NEED V" + std::to_string(kSaveMinVersion) + "+",
+              "a save of another version is listed as that, with the numbers");
+        // ... and found again from the files when the list is read back from its index.
+        SaveIndex again;
+        saveIndexLoad(other, again, false);
+        check(saveLine(again.slots[kSlotManual]) == saveLine(listed.slots[kSlotManual]),
+              "... also from the saved list");
+        check(saveRefusal(kSaveVersion, kSaveVersion + 1, kLevelVersion) ==
+                  "SAVE NEEDS V" + std::to_string(kSaveVersion + 1) + ", HAVE V" + std::to_string(kSaveVersion),
+              "a save that needs a newer game says which");
+        check(saveRefusal(kSaveVersion, kSaveMinReader, kLevelSaveSince - 1) ==
+                  "MAPS L" + std::to_string(kLevelSaveSince - 1) + ", NEED L" + std::to_string(kLevelSaveSince) + "+",
+              "one of maps too old says which");
+        check(saveRefusal(kSaveVersion, kSaveMinReader, kLevelVersion + 1) ==
+                  "MAPS L" + std::to_string(kLevelVersion + 1) + ", HAVE L" + std::to_string(kLevelVersion),
+              "and one of maps too new");
         check(listed.slots[kSlotManual + 1].status == kSaveBad && listed.slots[kSlotManual + 3].status == kSaveNone,
               "a damaged one as damaged; what is no save at all as nothing");
         SaveData back;

@@ -92,7 +92,9 @@ public:
     /// one small file -- and done before the 3D engine is up.
     /// (`multiplayer`, if given: the names of the card's maps that a game
     /// between consoles can be played on.)
-    DataStatus ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer = nullptr) const;
+    /// (`why`, if given: for OtherVersion, the two numbers that did not match.)
+    DataStatus ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer = nullptr,
+                            std::string *why = nullptr) const;
 
     /// Two lines of player-facing explanation for a status: what is wrong and
     /// what to do about it. Never null.

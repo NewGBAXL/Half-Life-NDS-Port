@@ -439,7 +439,8 @@ int main(int argc, char *argv[])
     // The manifest says what the converter put on the card and which map to start in.
     std::string startMap;
     std::vector<std::string> multiplayerMaps;
-    const Global::DataStatus status = global.ReadManifest(startMap, &multiplayerMaps);
+    std::string dataWhy;
+    const Global::DataStatus status = global.ReadManifest(startMap, &multiplayerMaps, &dataWhy);
     hlrt::netGame.setMaps(multiplayerMaps);
 
     settings.load();
@@ -448,7 +449,11 @@ int main(int argc, char *argv[])
     global.InitVideo();
 
     if (status != Global::DataStatus::Ok)
-        haltWith("Cannot start:", Global::DataStatusTitle(status), Global::DataStatusHint(status));
+    {
+        // (What did not match, if it is known, before what to do about it.)
+        const std::string advice = (dataWhy.empty() ? std::string() : dataWhy + " ") + Global::DataStatusHint(status);
+        haltWith("Cannot start:", Global::DataStatusTitle(status), advice.c_str());
+    }
 
     hlrt::bottomScreen.create();
     hlrt::hudDraw.load();

@@ -66,11 +66,22 @@ int main()
     bad.pop_back();
     check(!readSave(bad.data(), bad.size(), untouched), "nor a truncated one");
 
-    // Version and the maps it follows. SaveHeader: version at 4, levelVersion at 6.
+    // Min and target. SaveHeader: version at 4, levelVersion at 6, minReader at 20.
+    bad = bytes;
+    bad[4] = static_cast<std::uint8_t>(kSaveMinVersion - 1);
+    bad[5] = 0;
+    check(!readSave(bad.data(), bad.size(), untouched), "nor one older than this build reads");
+    bad = bytes;
+    bad[20] = static_cast<std::uint8_t>(kSaveVersion + 1);
+    bad[21] = 0;
+    check(!readSave(bad.data(), bad.size(), untouched), "nor one that needs a newer build");
     bad = bytes;
     bad[4] = static_cast<std::uint8_t>(kSaveVersion + 1);
     bad[5] = 0;
-    check(!readSave(bad.data(), bad.size(), untouched), "nor one of another version");
+    {
+        SaveData newer;
+        check(readSave(bad.data(), bad.size(), newer), "but a newer one an old build can read is read");
+    }
     bad = bytes;
     bad[6] = static_cast<std::uint8_t>(kLevelSaveSince - 1); // made against maps older than the saves still follow
     bad[7] = 0;

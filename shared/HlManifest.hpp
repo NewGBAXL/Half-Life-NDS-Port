@@ -18,6 +18,7 @@
 // yas sees a byte of it.
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -115,6 +116,30 @@ namespace hldata
         NotAManifest, ///< too small, wrong magic, wrong length or bad checksum
         OtherVersion, ///< written by a converter this build does not match
     };
+
+    /// What is wrong with a manifest that readManifest called OtherVersion,
+    /// for the screen that says the game cannot start: the two numbers that
+    /// decided it. Empty for one that is not.
+    inline std::string manifestRefusal(const std::uint8_t *data, std::size_t size)
+    {
+        ManifestHeader header;
+        if (size < sizeof(header))
+            return std::string();
+        std::memcpy(&header, data, sizeof(header));
+        char text[128];
+        if (header.version != kManifestVersion)
+            std::snprintf(text, sizeof(text), "The card's manifest.bin is format %u; this version needs %u.",
+                          static_cast<unsigned>(header.version), static_cast<unsigned>(kManifestVersion));
+        else if (header.levelVersion < kLevelMinVersion)
+            std::snprintf(text, sizeof(text), "The card's maps are format %u; this version needs %u or newer.",
+                          static_cast<unsigned>(header.levelVersion), static_cast<unsigned>(kLevelMinVersion));
+        else if (header.levelVersion > kLevelVersion)
+            std::snprintf(text, sizeof(text), "The card's maps are format %u; this version reads up to %u.",
+                          static_cast<unsigned>(header.levelVersion), static_cast<unsigned>(kLevelVersion));
+        else
+            return std::string();
+        return text;
+    }
 
     /// Every check that can be made without yas is made before yas runs.
     inline ManifestError readManifest(const std::uint8_t *data, std::size_t size, Manifest &out)

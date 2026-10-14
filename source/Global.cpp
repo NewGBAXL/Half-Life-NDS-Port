@@ -120,7 +120,8 @@ std::size_t Global::heapHeadroom() const
     return static_cast<std::size_t>(getHeapLimit() - getHeapEnd());
 }
 
-Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer) const
+Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer,
+                                        std::string *why) const
 {
     if (!hasFat)
         return DataStatus::NoCard;
@@ -153,6 +154,8 @@ Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::
     case hldata::ManifestError::Ok:
         break;
     case hldata::ManifestError::OtherVersion:
+        if (why != nullptr)
+            *why = hldata::manifestRefusal(bytes.data(), bytes.size());
         return DataStatus::OtherVersion;
     default:
         return DataStatus::Damaged;

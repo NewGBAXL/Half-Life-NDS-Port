@@ -234,6 +234,28 @@ namespace
         saved[5] ^= 0x40; // (its fingerprint of the layout)
         check(!layMapState(saved.data(), saved.size(), a->logic, a->player, level),
               "... nor if it was written by a build that lays things out otherwise");
+
+        // A state as save version 6 wrote it, without the fields added since
+        // for games between consoles: laid over a map begun afresh, with
+        // those left as they began.
+        std::vector<std::uint8_t> older = takeMapState(a->logic, a->player, level, true);
+        std::vector<std::uint8_t> current = takeMapState(a->logic, a->player, level);
+        check(older.size() < current.size() && older != current, "a state of save version 6 is shorter");
+        std::unique_ptr<Game> fresh = load(dir, "c1a0", &globals);
+        if (fresh == nullptr)
+            return;
+        fresh->logic.sharing = true;
+        fresh->logic.struckCount = 3;
+        fresh->logic.struck[0] = 7;
+        check(layMapState(older.data(), older.size(), fresh->logic, fresh->player, level),
+              "a state of save version 6 is laid over the map");
+        check(fresh->logic.sharing && fresh->logic.struckCount == 3 && fresh->logic.struck[0] == 7,
+              "... and the fields added since keep what they had");
+        check(takeMapState(fresh->logic, fresh->player, level, true) == older,
+              "... and the rest is what it said");
+        older[5] ^= 0x40;
+        check(!layMapState(older.data(), older.size(), fresh->logic, fresh->player, level),
+              "... but not one with a layout of neither");
     }
 } // namespace
 
