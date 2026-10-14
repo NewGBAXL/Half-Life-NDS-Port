@@ -24,7 +24,7 @@ separated by `;`:
 | `sleep <s>` | wait |
 | `ready [s]` | wait until the game is on screen (the emulator can take half a minute over the card first; at most `s` seconds, 90 if not given) |
 | `key <keysym> <s>` | hold a key (your melonDS key mapping applies) |
-| `down <keysym>`, `up <keysym>` | press and let go of a key across other commands: two buttons at once |
+| `hold <keysym>`, `release <keysym>` | press and let go of a key across other commands: two buttons at once |
 | `drag <x0> <y0> <x1> <y1>` | stylus drag, in window pixels |
 | `tap <x> <y>` | a quick touch (two close together are a jump) |
 | `sweep <s> <px per step>` | hold the stylus and sweep left-right for a time |
@@ -54,3 +54,21 @@ screen at about y = 247.
 `EMU_START` may have a fifth number (a music track to start with; -1 for
 none) and a sixth: the seconds after which the player dies, once -- for
 seeing which save dying goes back to (`EMU_START="1120 2112 836 180 -1 50"`).
+
+## Two consoles
+
+`EMU_INSTANCES=2 tools/emu/play.sh ds "<script>"` runs two consoles linked by
+local wireless, side by side on a 640x480 screen: melonDS's second instance
+(System > Multiplayer > Launch new instance), started on the same ROM from
+its recent list before the script begins.
+
+- The first console is on the left, its touch screen from (0,222); the second
+  at the right, its touch screen from (320,222). (So a touch at (x,y) of the
+  touch screen is `tap x 222+y` or `tap 320+x 222+y`.)
+- `focus 0` / `focus 1` sends the keys to one or the other; `place <n> <x>
+  <y>` moves a window; `windows` lists where they are.
+- `debug_net.txt` on the card ("x y z yaw", whole units and degrees) puts the
+  host there when a match starts and the client 160 units in front of it,
+  facing it. Remove it afterwards.
+- The two instances share the card folder, and both are called "melonDS".
+

@@ -288,7 +288,8 @@ namespace hldata
                     w.heard->add(gunKind(event.a).fire[0], match.glide[from].pos, 110, kRadiusLarge);
                 break;
             case NetEventType::Hit:
-                if (event.a == match.me && from != match.me && match.playing && player.health > 0)
+                if (event.a == match.me && from != match.me && match.playing && player.health > 0 &&
+                    static_cast<std::uint8_t>(event.v[1]) == match.spawns)
                 {
                     playerHurt(player, event.v[0], from < kNetPlayers ? match.glide[from].pos : nullptr);
                     match.blamed = from;
@@ -621,8 +622,10 @@ namespace hldata
                     continue;
                 const int hurt = kNetActorHealth - actor.health;
                 actor.health = kNetActorHealth;
+                // (Which of their lives it was: a hit on one that is over
+                // by the time it arrives is not taken by the next.)
                 if (hurt > 0 && player.health > 0)
-                    netSay(match, netEvent(NetEventType::Hit, p, hurt > 30000 ? 30000 : hurt));
+                    netSay(match, netEvent(NetEventType::Hit, p, hurt > 30000 ? 30000 : hurt, netPlayer(match, p).spawns));
             }
             // What they struck of the map's.
             for (int n = 0; n < w.struckCount; ++n)
@@ -739,7 +742,8 @@ namespace hldata
             actor.yaw = heard.yaw;
             actor.mood = crouched ? 1 : 0;
             actor.flags = alive ? kActorSolid : 0;
-            actor.ai = 0;
+            // (Dead, they are no longer shot at: what is dead is passed by.)
+            actor.ai = alive ? 0 : kAiDead;
             // What they are doing, as a body does it.
             const int speed = (heard.velocity[0] < 0 ? -heard.velocity[0] : heard.velocity[0]) +
                               (heard.velocity[1] < 0 ? -heard.velocity[1] : heard.velocity[1]);

@@ -9,6 +9,7 @@
 #include "data/LevelFile.hpp"
 #include "game/Game.hpp"
 #include "game/Player.hpp"
+#include "render/Camera.hpp"
 #include "net/NetLink.hpp"
 
 namespace hlrt
@@ -206,6 +207,29 @@ namespace hlrt
         netStart(match_, game.logic, player.state, static_cast<int>(view.actorCount), model, spawns_.data(),
                  static_cast<int>(spawns_.size()), tokenOfThisConsole());
         phase_ = Phase::Playing;
+
+        // A development aid (tools/emu/play.sh with two consoles): "x y z
+        // yaw" in debug_net.txt, whole units and degrees, puts the host
+        // there and every client 160 units in front of it, facing it -- so
+        // that the two see each other from the first frame.
+        if (std::FILE *file = std::fopen(global.dataPath("debug_net.txt").c_str(), "r"))
+        {
+            int x, y, z, yaw;
+            if (std::fscanf(file, "%d %d %d %d", &x, &y, &z, &yaw) == 4)
+            {
+                const std::uint16_t turn = static_cast<std::uint16_t>(yaw * 65536 / 360);
+                fx sine, cosine;
+                fxSinCos(turn, sine, cosine);
+                const int far = match_.me == 0 ? 0 : 160 * match_.me;
+                player.state.origin[0] = fxFromInt(x) + far * cosine;
+                player.state.origin[1] = fxFromInt(y) + far * sine;
+                player.state.origin[2] = fxFromInt(z);
+                match_.respawned = false;
+                camera.yaw = static_cast<std::uint16_t>(match_.me == 0 ? turn : turn + 32768);
+                camera.pitch = 0;
+            }
+            std::fclose(file);
+        }
     }
 
     void NetGame::send()
@@ -386,7 +410,7 @@ namespace hlrt
 
     void NetGame::status(char *line, int room) const
     {
-        std::snprintf(line, static_cast<std::size_t>(room), "net %d me %d out %lu in %lu lost %u q %d",
+        std::snprintf(line, static_cast<std::size_t>(room), "net%d me%d o%lu i%lu x%u q%d",
                       static_cast<int>(phase_), match_.me, static_cast<unsigned long>(sent_),
                       static_cast<unsigned long>(heard_), netlink::dropped(),
                       isHost() ? match_.host.out.count : match_.client.out.count);

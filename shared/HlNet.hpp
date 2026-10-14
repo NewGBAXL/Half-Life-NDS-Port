@@ -80,7 +80,7 @@ namespace hldata
         Start,    ///< host: v[0..1] the map's name hash, v[2] frag limit, v[3] minutes, text = the map
         End,      ///< host: the match is over
         Shot,     ///< `from` fired weapon `a`: v[0] yaw, v[1] pitch (65536 to the circle), v[2] 1 = second trigger
-        Hit,      ///< `from` hit player `a`: v[0] damage, v[1] 1 = a bullet, v[2] where (a hit group)
+        Hit,      ///< `from` hit player `a`: v[0] damage, v[1] which of a's lives (their spawn count)
         Throw,    ///< `from` threw a grenade: v[0..2] from where (quarter units), v[3..5] how fast (units a second)
         Burst,    ///< `from`'s grenade went off at v[0..2] (quarter units)
         Died,     ///< `from` died; `a` = who did it (kNetPlayers: nobody else)

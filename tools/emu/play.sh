@@ -30,7 +30,17 @@ if [ -n "${EMU_AUDIO:-}" ]; then
     export SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE="$EMU_AUDIO"
     rm -f "$EMU_AUDIO"
 fi
-env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=xcb XDG_CONFIG_HOME="$CFG" EMU_SCRIPT="${2:-sleep 5}" \
-    xvfb-run -a -s "-screen 0 300x450x24" bash -c \
+SCRIPT="${2:-sleep 5}"
+# EMU_INSTANCES=2: two consoles linked by local wireless, side by side --
+# the emulator's second instance (System > Multiplayer > Launch new
+# instance), started on the same ROM from its recent list. The first is at
+# the left (its touch screen from 0,222), the second at x 320 (from 320,222);
+# "focus 0" or "focus 1" says which one the keys go to.
+if [ "${EMU_INSTANCES:-1}" = 2 ]; then
+    EMU_SCREEN="${EMU_SCREEN:-640x480}"
+    SCRIPT="sleep 6; place 0 0 0; sleep 0.5; tap 75 15; sleep 0.8; tap 120 387; sleep 0.8; tap 300 387; sleep 3; place 1 320 0; sleep 1; tap 340 15; sleep 1; tap 420 47; sleep 1; tap 200 47; sleep 12; $SCRIPT"
+fi
+env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=xcb XDG_CONFIG_HOME="$CFG" EMU_SCRIPT="$SCRIPT" \
+    xvfb-run -a -s "-screen 0 ${EMU_SCREEN:-300x450}x24" bash -c \
     '"${MELONDS:-melonDS}" half-life-nds-port.nds >"'"$CFG"'/melonDS.log" 2>&1 &
      python3 tools/emu/xin.py "$EMU_SCRIPT"; kill %1' 2>/dev/null || true

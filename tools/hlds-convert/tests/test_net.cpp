@@ -593,6 +593,20 @@ namespace
         check(scored, "... a frag for Anna and a death for Bob, on every console");
         check(!(anna.other(2).flags & kActorSolid) && anna.match->pose[2] == kPoseDead,
               "... and he lies there, in nobody's way");
+        // She goes on firing at him where he fell: none of it is his next life's.
+        for (int n = 0; n < 6; ++n)
+        {
+            fx from[3] = {anna.player().origin[0], anna.player().origin[1], anna.player().origin[2]};
+            const ActorState &body = anna.other(2);
+            fx at[3] = {body.pos[0], body.pos[1], body.pos[2] + fxFromInt(20)};
+            fx dir[3] = {at[0] - from[0], at[1] - from[1], at[2] - from[2]};
+            const fx length = fxLength(dir);
+            for (int i = 0; i < 3 && length > 0; ++i)
+                dir[i] = static_cast<fx>((static_cast<std::int64_t>(dir[i]) << kFxShift) / length);
+            fireLine(anna.g().logic, anna.player(), from, dir, 8192, 8, true, kMarkShot, nullptr);
+            room.run(10);
+        }
+
         bool told = false;
         for (int k = 0; k < host.match->noticeCount; ++k)
             told = told || (host.match->notices[k].type == NetEventType::Died && host.match->notices[k].who == 2 &&
@@ -603,6 +617,10 @@ namespace
                   (bob.player().inv.have & (1u << kWeaponGlock)) && bob.match->respawned,
               "three seconds on he is back, whole, with a pistol");
         check((anna.other(2).flags & kActorSolid) && anna.match->pose[2] != kPoseDead, "... and is seen to be");
+        // A claim on his last life that only arrives now: not his to take.
+        netSay(*anna.match, netEvent(NetEventType::Hit, 2, 40, spawnsBefore));
+        room.run(30);
+        check(bob.player().health == 100, "nothing his killer fired at his body, or at his last life, hurts him back here");
         // Falling to his death is nobody's frag.
         room.run(200); // (long past any blame)
         bob.player().health = 0;

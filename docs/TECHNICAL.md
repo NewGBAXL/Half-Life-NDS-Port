@@ -684,6 +684,12 @@ Milestone 11, "levels of detail".
     player USES or breaks is an event, done again on the others by someone
     standing where they stand. There is no periodic check yet that the
     consoles' doors and lifts agree.
+  - Played also between two linked melonDS instances (`tools/emu`, two
+    consoles): lobby, a match, hits and a kill seen and scored on both, the
+    respawn, pickups, two minutes of both moving and firing, and each side
+    leaving. A hit carries which of the victim's lives it was aimed at, and
+    a dead player is not shot at: shots at a body used to be taken by the
+    life after it.
   - `test_net` plays it: events through air that loses a fifth of the
     frames and delays the rest, with a client leaving and another coming;
     a lobby with no map loaded; and three whole games on crossfire -- seen

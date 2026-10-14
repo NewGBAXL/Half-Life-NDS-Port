@@ -169,8 +169,8 @@ way.
 - The others are seen as the game's player in the suit, moving as a whole
   body: no aiming up and down yet, and nothing in their hands.
 
-This is new and has been played between simulated consoles and in an
-emulator alone, not yet between real ones. DS Download Play, for consoles
+This is new: it has been played between simulated consoles and between two
+linked emulator instances, not yet between real consoles. DS Download Play, for consoles
 with no card, is planned on the same radio code and is not in yet.
 
 ## Contributing

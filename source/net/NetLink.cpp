@@ -162,7 +162,13 @@ namespace hlrt::netlink
         Wifi_MultiplayerFromClientSetPacketHandler(fromClient);
         waitForMode();
         Wifi_SetChannel(kChannel);
-        Wifi_MultiplayerHostName(name, static_cast<u8>(std::strlen(name)));
+        // (The beacon's name is UTF-16, a whole field of it: what clients
+        // see in their list.)
+        u16 wide[DSWIFI_BEACON_NAME_SIZE / sizeof(u16)] = {};
+        int length = 0;
+        for (; name[length] != 0 && length < static_cast<int>(sizeof(wide) / sizeof(wide[0])); ++length)
+            wide[length] = static_cast<u8>(name[length]);
+        Wifi_MultiplayerHostName(wide, static_cast<u8>(length));
         Wifi_MultiplayerAllowNewClients(true);
         Wifi_BeaconStart(kSsid, kGameId);
         hosting = true;

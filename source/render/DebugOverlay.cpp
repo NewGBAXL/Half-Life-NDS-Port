@@ -1,3 +1,4 @@
+#include "net/NetGame.hpp"
 #include "render/DebugOverlay.hpp"
 
 #include <cstdio>
@@ -95,7 +96,10 @@ namespace hlrt
             // how often the DSP ran short of music or echo to play, how often
             // it said its music had gone wrong, and the block of the track it
             // has been given).
-            if (sound.extended())
+            // (A game between consoles: the radio's account instead.)
+            if (netGame.on())
+                netGame.status(line, sizeof(line));
+            else if (sound.extended())
                 std::snprintf(line, sizeof(line), "dsp dry %lu flt %d blk %lu in %d",
                               static_cast<unsigned long>(dspAudio.dry()), dspAudio.faults(),
                               static_cast<unsigned long>(dspAudio.block()), dspAudio.heard());
@@ -114,6 +118,25 @@ namespace hlrt
             // with polygons dropped in this map, and what the budget is
             // holding back because of them.
             // ... and how far off the fog is whole, while a cut is fogged.
+            // (A game between consoles: where the first of the others is,
+            // as this console has them, and how they stand.)
+            if (netGame.playing())
+            {
+                const hldata::NetMatch &match = netGame.match();
+                int other = -1;
+                for (int p = 0; p < hldata::kNetPlayers && other < 0; ++p)
+                    if (p != match.me && hldata::netHere(match, p))
+                        other = p;
+                if (other >= 0)
+                {
+                    const hldata::NetPlayer &them = hldata::netPlayer(match, other);
+                    std::snprintf(line, sizeof(line), "p%d %5d %5d %5d f%02x h%d", other, them.pos[0] / 4,
+                                  them.pos[1] / 4, them.pos[2] / 4, them.flags, them.health);
+                }
+                else
+                    std::snprintf(line, sizeof(line), "nobody else");
+                break;
+            }
             std::snprintf(line, sizeof(line), "ln %2d u%3d o%3d %+d fog %d",
                           gpuStats.takeLowLines(), gpuStats.underflows(), gpuStats.overflows(),
                           -worldDraw.heldBack(), worldDraw.fogDistance());

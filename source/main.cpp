@@ -658,12 +658,22 @@ int main(int argc, char *argv[])
                     backToTitle();
                     return;
                 }
+                // Who killed whom, who came and went: a line at the top of
+                // the picture for a few seconds (the touch screen is the
+                // player's controls, and stays so).
                 {
                     char line[40];
-                    if (!paused && hlrt::netGame.notice(line, sizeof(line)) && line[0] != 0)
+                    if (hlrt::netGame.notice(line, sizeof(line)) && line[0] != 0)
                     {
-                        say(line);
-                        saidUntil = Global::vblanks() + 150;
+                        hldata::MessageRecord said{};
+                        said.x = -1;
+                        said.y = 20;
+                        said.effect = hldata::kMessageFade;
+                        said.colour = 31 | 20 << 5 | 4 << 10; // (the suit's orange)
+                        said.fadeInMs = 100;
+                        said.holdMs = 2500;
+                        said.fadeOutMs = 600;
+                        hlrt::topText.show(said, line);
                     }
                 }
 
