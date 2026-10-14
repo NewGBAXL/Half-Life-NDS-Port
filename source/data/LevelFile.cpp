@@ -97,9 +97,18 @@ namespace hlrt
         if (result != hldata::LevelError::Ok)
         {
             unload();
-            error = result == hldata::LevelError::BadVersion
-                        ? "Map is from another version. Convert again."
-                        : "Map file is damaged. Convert again.";
+            if (result == hldata::LevelError::BadVersion)
+            {
+                char text[96];
+                std::snprintf(text, sizeof(text), "Map is format %u (needs %u to %u). Convert again.",
+                              static_cast<unsigned>(header.version), static_cast<unsigned>(hldata::kLevelMinVersion),
+                              static_cast<unsigned>(hldata::kLevelVersion));
+                error = text;
+            }
+            else
+            {
+                error = "Map file is damaged. Convert again.";
+            }
             return false;
         }
         size_ = size;

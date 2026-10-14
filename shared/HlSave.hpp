@@ -17,6 +17,7 @@
 // yas reports a bad archive by throwing and the DS build has no exceptions.
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -99,7 +100,23 @@ namespace hldata
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 6;
+    inline constexpr std::uint16_t kSaveVersion = 7;
+    /// The oldest save format this build can read: 6.
+    /// Note some fields in save format 6 are unreadable.
+    /// kSaveMinReader is the oldest build that can read what this one writes;
+    /// it is stored in each save as minReader. Raise both when a change would
+    /// make an older reader misread a save; leave them alone when an older
+    /// reader would still read it correctly.
+    inline constexpr std::uint16_t kSaveMinVersion = 6;
+    inline constexpr std::uint16_t kSaveMinReader = 7;
+    /// Whether this build can read a save with these header values: its
+    /// version is one we still read, its minReader is not newer than this
+    /// build, and the maps it was made against are still compatible
+    /// (kLevelSaveSince).
+    inline constexpr bool saveVersionOk(std::uint16_t version, std::uint16_t minReader, std::uint16_t levelVersion)
+    {
+        return version >= kSaveMinVersion && minReader <= kSaveVersion && levelSaveVersionOk(levelVersion);
+    }
     /// A save with a map's whole state in it is tens of kilobytes; one that
     /// claims to be more than this is not one.
     inline constexpr std::uint32_t kSaveMaxBytes = 256 * 1024;
@@ -134,10 +151,29 @@ namespace hldata
         std::uint32_t payloadBytes;
         std::uint32_t crc32;        ///< of the payload
         std::uint32_t headingCrc;   ///< of the heading, which follows this
-        std::uint32_t spare;
+        std::uint16_t minReader;    ///< the oldest build that can read it (kSaveMinReader)
+        std::uint16_t spare;
     };
     static_assert(sizeof(SaveHeader) == 24);
     inline constexpr std::size_t kSaveHeadBytes = sizeof(SaveHeader) + sizeof(SaveHeading);
+
+    inline std::string saveRefusal(std::uint16_t version, std::uint16_t minReader, std::uint16_t levelVersion)
+    {
+        char text[64];
+        if (version < kSaveMinVersion)
+            std::snprintf(text, sizeof(text), "SAVE V%u, NEED V%u+", static_cast<unsigned>(version),
+                          static_cast<unsigned>(kSaveMinVersion));
+        else if (minReader > kSaveVersion)
+            std::snprintf(text, sizeof(text), "SAVE NEEDS V%u, HAVE V%u", static_cast<unsigned>(minReader),
+                          static_cast<unsigned>(kSaveVersion));
+        else if (levelVersion < kLevelSaveSince)
+            std::snprintf(text, sizeof(text), "MAPS L%u, NEED L%u+", static_cast<unsigned>(levelVersion),
+                          static_cast<unsigned>(kLevelSaveSince));
+        else
+            std::snprintf(text, sizeof(text), "MAPS L%u, HAVE L%u", static_cast<unsigned>(levelVersion),
+                          static_cast<unsigned>(kLevelVersion));
+        return text;
+    }
 
     // What a file turned out to be.
     inline constexpr int kSaveNone = 0;  ///< no save: not there, or not one
@@ -186,6 +222,7 @@ namespace hldata
         std::memcpy(header.magic, kSaveMagic, sizeof(header.magic));
         header.version = kSaveVersion;
         header.levelVersion = kLevelVersion;
+        header.minReader = kSaveMinReader;
         header.payloadBytes = static_cast<std::uint32_t>(buf.size);
         header.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf.data),
                              static_cast<std::uint32_t>(buf.size));
@@ -208,7 +245,7 @@ namespace hldata
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSaveMagic, sizeof(header.magic)) != 0)
             return kSaveNone;
-        if (header.version != kSaveVersion || !levelSaveVersionOk(header.levelVersion))
+        if (!saveVersionOk(header.version, header.minReader, header.levelVersion))
             return kSaveOther;
         if (size < kSaveHeadBytes || header.payloadBytes > kSaveMaxBytes ||
             crc32(bytes + sizeof(header), sizeof(SaveHeading)) != header.headingCrc)

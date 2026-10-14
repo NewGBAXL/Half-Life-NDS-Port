@@ -69,11 +69,36 @@ namespace hldata
     {
         inline constexpr std::size_t kStateFlags = yas::mem | yas::binary | yas::no_header;
 
+        /// Fields left out of what is written or read, by where they lie
+        /// and how big they are: how a state written before some fields
+        /// were added is read (see skipNewer).
+        struct Skips
+        {
+            const void *at[8] = {};
+            std::size_t size[8] = {};
+            int count = 0;
+            void add(const void *where, std::size_t bytes)
+            {
+                at[count] = where;
+                size[count++] = bytes;
+            }
+            bool has(const void *where, std::size_t bytes) const
+            {
+                for (int i = 0; i < count; ++i)
+                {
+                    if (at[i] == where && size[i] == bytes)
+                        return true;
+                }
+                return false;
+            }
+        };
+
         /// Writes each value.
         struct StateOut
         {
             yas::mem_ostream os;
             yas::binary_oarchive<yas::mem_ostream, kStateFlags> ar{os};
+            Skips skips;
             template <class T>
             void value(T &v)
             {
@@ -85,6 +110,7 @@ namespace hldata
         {
             yas::mem_istream is;
             yas::binary_iarchive<yas::mem_istream, kStateFlags> ar{is};
+            Skips skips;
             StateIn(const std::uint8_t *bytes, std::size_t size) : is(bytes, size) {}
             template <class T>
             void value(T &v)
@@ -98,6 +124,7 @@ namespace hldata
         {
             std::uint32_t bytes = 0;
             std::uint32_t print = 2166136261u;
+            Skips skips;
             template <class T>
             void value(T &)
             {
@@ -113,6 +140,8 @@ namespace hldata
         template <class A, class T>
         void stateField(A &a, T &v)
         {
+            if (a.skips.has(&v, sizeof(T)))
+                return;
             if constexpr (std::is_pointer_v<T> || std::is_member_pointer_v<T> || std::is_function_v<T>)
             {
             }
@@ -144,10 +173,29 @@ namespace hldata
                 stateField(a, first[i]);
         }
 
-        /// All of a map's state, through `a`.
-        template <class A>
-        void mapState(A &a, LogicWorld &w, PlayerState &player)
+        /// What was added to a map's state for games between consoles (save
+        /// version 7): a state written before it, and so without these, is
+        /// read as if they were not there, and they keep what they began
+        /// with.
+        inline void skipNewer(Skips &skips, LogicWorld &w)
         {
+            skips.add(&w.sharing, sizeof(w.sharing));
+            skips.add(&w.struck, sizeof(w.struck));
+            skips.add(&w.struckCount, sizeof(w.struckCount));
+        }
+        inline void skipNewer(Skips &skips, ActorWorld &actors)
+        {
+            skips.add(&actors.shared, sizeof(actors.shared));
+            skips.add(&actors.wanted, sizeof(actors.wanted));
+        }
+
+        /// All of a map's state, through `a`. `older`: as it was written
+        /// before the fields skipNewer leaves out.
+        template <class A>
+        void mapState(A &a, LogicWorld &w, PlayerState &player, bool older = false)
+        {
+            if (older)
+                skipNewer(a.skips, w);
             stateField(a, w);
             stateArray(a, w.states, w.recordCount);
             stateArray(a, w.brushStates, w.brushCount);
@@ -158,6 +206,8 @@ namespace hldata
             if (w.actors != nullptr)
             {
                 ActorWorld &actors = *w.actors;
+                if (older)
+                    skipNewer(a.skips, actors);
                 stateField(a, actors);
                 stateArray(a, actors.states, actors.count);
                 stateArray(a, actors.linkShut, actors.linkCount);
@@ -176,10 +226,11 @@ namespace hldata
         };
         static_assert(sizeof(StateHeading) == 40);
 
-        inline StateHeading stateHeading(LogicWorld &w, PlayerState &player, std::uint32_t level)
+        inline StateHeading stateHeading(LogicWorld &w, PlayerState &player, std::uint32_t level,
+                                         bool older = false)
         {
             StateMeasure measure;
-            mapState(measure, w, player);
+            mapState(measure, w, player, older);
             StateHeading h{};
             std::memcpy(h.magic, kStateMagic, sizeof(h.magic));
             h.print = measure.print;
@@ -197,11 +248,14 @@ namespace hldata
 
     /// The state of the map `w` is of, as it is now. `level`: the cooked
     /// map's own checksum (LevelHeader::crc32).
-    inline std::vector<std::uint8_t> takeMapState(LogicWorld &w, PlayerState &player, std::uint32_t level)
+    /// `older`: written as save version 6 had it, without the fields added
+    /// since (for the tests of reading one).
+    inline std::vector<std::uint8_t> takeMapState(LogicWorld &w, PlayerState &player, std::uint32_t level,
+                                                  bool older = false)
     {
-        const detail::StateHeading heading = detail::stateHeading(w, player, level);
+        const detail::StateHeading heading = detail::stateHeading(w, player, level, older);
         detail::StateOut out;
-        detail::mapState(out, w, player);
+        detail::mapState(out, w, player, older);
         const auto buf = out.os.get_intrusive_buffer();
         std::vector<std::uint8_t> bytes(sizeof(heading) + buf.size);
         std::memcpy(bytes.data(), &heading, sizeof(heading));
@@ -209,17 +263,32 @@ namespace hldata
         return bytes;
     }
 
-    /// Whether `bytes` is a state that can be laid over the map `w` is of:
-    /// this build's, of this cooked map, and whole.
-    inline bool mapStateFits(const std::uint8_t *bytes, std::size_t size, LogicWorld &w, PlayerState &player,
-                             std::uint32_t level)
+    /// Which way `bytes` is a state that can be laid over the map `w` is
+    /// of, of this cooked map and whole: 1 as this build writes it, 2 as
+    /// save version 6 did (without the fields added since), 0 not at all.
+    inline int mapStateFormat(const std::uint8_t *bytes, std::size_t size, LogicWorld &w, PlayerState &player,
+                              std::uint32_t level)
     {
         detail::StateHeading have;
         if (size < sizeof(have))
-            return false;
+            return 0;
         std::memcpy(&have, bytes, sizeof(have));
-        const detail::StateHeading want = detail::stateHeading(w, player, level);
-        return std::memcmp(&have, &want, sizeof(have)) == 0 && size == sizeof(have) + have.bytes;
+        if (size != sizeof(have) + have.bytes)
+            return 0;
+        for (int older = 0; older < 2; ++older)
+        {
+            const detail::StateHeading want = detail::stateHeading(w, player, level, older != 0);
+            if (std::memcmp(&have, &want, sizeof(have)) == 0)
+                return 1 + older;
+        }
+        return 0;
+    }
+
+    /// Whether `bytes` is a state that can be laid over the map `w` is of.
+    inline bool mapStateFits(const std::uint8_t *bytes, std::size_t size, LogicWorld &w, PlayerState &player,
+                             std::uint32_t level)
+    {
+        return mapStateFormat(bytes, size, w, player, level) != 0;
     }
 
     /// How long the map state at the head of `bytes` says it is, heading
@@ -241,10 +310,11 @@ namespace hldata
     inline bool layMapState(const std::uint8_t *bytes, std::size_t size, LogicWorld &w, PlayerState &player,
                             std::uint32_t level)
     {
-        if (!mapStateFits(bytes, size, w, player, level))
+        const int format = mapStateFormat(bytes, size, w, player, level);
+        if (format == 0)
             return false;
         detail::StateIn in(bytes + sizeof(detail::StateHeading), size - sizeof(detail::StateHeading));
-        detail::mapState(in, w, player);
+        detail::mapState(in, w, player, format == 2);
         if (w.actors != nullptr && w.actors->boxes != nullptr)
         {
             for (int i = 0; i < w.actors->count; ++i)
