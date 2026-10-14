@@ -1,3 +1,4 @@
+#include "net/NetGame.hpp"
 #include "game/Game.hpp"
 
 #include "HlMaterial.hpp"
@@ -551,6 +552,7 @@ namespace hlrt
         if (vblanks > kMaxVblanks)
             vblanks = kMaxVblanks;
         playMs_ += static_cast<std::uint64_t>(vblanks) * 1000 / 60;
+        std::uint32_t netDid = 0; // what the weapon did this frame, for a game between consoles
         // (A development aid: debug_start.txt's sixth number, the seconds
         // after which the player dies, once -- for seeing what dying goes
         // back to.)
@@ -582,7 +584,10 @@ namespace hlrt
                                    player.state.origin[2] + player.state.viewHeight};
                 const int target = logicFindUsable(logic, eye, camera.forward);
                 if (target >= 0)
+                {
                     logicUse(logic, player.state, target, -1, kUseSet);
+                    netGame.used(target); // (a game between consoles: they are told)
+                }
                 else
                     personUse(logic, eye, camera.forward); // (a scientist or a guard: follow, or stay)
             }
@@ -677,7 +682,7 @@ namespace hlrt
             // (A slot touched, or a step to the weapon before or after.)
             const int pick = input.weaponPick != 0 ? input.weaponPick
                                                    : weaponStepped(player.state.inv, input.weaponStep);
-            const std::uint32_t did = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
+            const std::uint32_t did = netDid = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
                                                   camera.right, camera.up, alive && input.attack,
                                                   false, ms, alive && input.second, alive ? pick : 0,
                                                   alive && input.reloadPressed);
@@ -758,6 +763,26 @@ namespace hlrt
         }
         const fx stoodAt[3] = {player.state.origin[0], player.state.origin[1], player.state.origin[2]};
         player.frame(vblanks);
+        // A game between consoles: what this player did goes out, what the
+        // others did comes in (HlNetGame.hpp). And a player just put back
+        // into the map looks where that place faces, with a weapon as it
+        // is first taken out.
+        if (netGame.playing())
+        {
+            netGame.tick(camera.yaw, camera.pitch, netDid, lamp.on, (vblanks * 1000 + 30) / 60);
+            NetMatch &match = netGame.match();
+            if (match.respawned)
+            {
+                match.respawned = false;
+                camera.yaw = fxAtan2Turns(player.state.facingXY[1], player.state.facingXY[0]);
+                camera.pitch = 0;
+                weapon_ = WeaponState();
+                weapon_.seed = 777u + static_cast<std::uint32_t>(match.spawns) * 7919u;
+                player.view = ViewState();
+                lamp = LampState();
+                lastHealth_ = player.state.health;
+            }
+        }
         // Their own footsteps, and what a blow sounds like from inside.
         if (!player.noclip)
         {

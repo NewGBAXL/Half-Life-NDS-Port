@@ -257,6 +257,13 @@ namespace hldata
         /// Set when the map asks for the game to be saved: the caller does
         /// it, and clears this.
         bool saveRequested = false;
+        /// A game between consoles (HlNetGame.hpp): what the player's shots
+        /// and blows have struck of the map's breakable things this tick --
+        /// the record and how hard, in pairs -- for the other consoles to
+        /// be told. Only kept while `sharing`; whoever reads it empties it.
+        bool sharing = false;
+        std::int16_t struck[16] = {};
+        int struckCount = 0;
         /// The boxes that can be pushed, as record indices: looked up once
         /// (-1: not yet), for whatever moves and has to ask what is in its
         /// way (detail::moveBrush).
@@ -1233,6 +1240,12 @@ namespace hldata
         if (state.dead || !detail::isBreakable(record) || (record.flags & kLogicTriggerOnly) ||
             record.extra[1] == 7)
             return;
+        if (w.sharing && w.struckCount < 8)
+        {
+            w.struck[w.struckCount * 2] = static_cast<std::int16_t>(index);
+            w.struck[w.struckCount * 2 + 1] = static_cast<std::int16_t>(damage > 32000 ? 32000 : damage);
+            ++w.struckCount;
+        }
         if (record.flags & kLogicInstant)
             damage = 0x7FFFFF;
         // state.phase holds the damage taken so far (a box that is pushed
@@ -3205,6 +3218,60 @@ namespace hldata
         }
     }
 
+    namespace detail
+    {
+        /// What record `i` does on being walked into by `player`: a trigger
+        /// that fires its targets, a door or a button that goes at a touch.
+        /// (Apart from logicTick so that it can be asked of someone who is
+        /// not this console's player: logicGhostTouch.)
+        inline void touchedBy(LogicWorld &w, PlayerState &player, int i)
+        {
+            const LogicRecord &record = w.records[i];
+            LogicState &state = w.states[i];
+            const auto kind = static_cast<LogicKind>(record.kind);
+            if ((kind == LogicKind::TriggerOnce || kind == LogicKind::TriggerMultiple) &&
+                     state.timer < 0)
+            {
+                const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
+                                    fxFromInt(record.mins[2])};
+                const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]),
+                                    fxFromInt(record.maxs[2])};
+                // Whoever it is for: the player, unless it ignores them; and
+                // if it says so, a box that is pushed into it (the sample
+                // cart sets off the resonance cascade this way).
+                bool touched = !(record.flags & kLogicNoPlayer) &&
+                               detail::playerTouchesBox(player, mins, maxs, 0);
+                for (int b = 0; !touched && (record.flags & kLogicPushables) && b < w.recordCount; ++b)
+                {
+                    const LogicRecord &other = w.records[b];
+                    if (other.kind != static_cast<std::uint8_t>(LogicKind::Pushable) ||
+                        other.brush == kNoBrush || w.states[b].dead ||
+                        !w.brushStates[other.brush].active)
+                        continue;
+                    const MoverHull &box = w.movers[other.brush];
+                    touched = box.mins[0] <= maxs[0] && box.maxs[0] >= mins[0] &&
+                              box.mins[1] <= maxs[1] && box.maxs[1] >= mins[1] &&
+                              box.mins[2] <= maxs[2] && box.maxs[2] >= mins[2];
+                }
+                if (touched && logicMasterAllows(w, i))
+                {
+                    logicUseTargets(w, player, i, kUseToggle, 0);
+                    if (kind == LogicKind::TriggerOnce || record.waitMs < 0)
+                        state.dead = true;
+                    else
+                        state.timer = record.waitMs;
+                }
+            }
+            else if ((record.flags & kLogicTouch) && record.brush != kNoBrush &&
+                     state.move == MoveState::AtBottom && w.brushStates[record.brush].active)
+            {
+                const MoverHull &mover = w.movers[record.brush];
+                if (detail::playerTouchesBox(player, mover.mins, mover.maxs, kTouchSlack))
+                    logicUse(w, player, i, -1, kUseToggle);
+            }
+        }
+    } // namespace detail
+
     /// Advance everything by `ms` milliseconds.
     inline void logicTick(LogicWorld &w, PlayerState &player, int ms)
     {
@@ -3431,46 +3498,8 @@ namespace hldata
                     detail::playerTouchesBox(player, mins, maxs, 0))
                     logicUse(w, player, i, -1, kUseToggle);
             }
-            else if ((kind == LogicKind::TriggerOnce || kind == LogicKind::TriggerMultiple) &&
-                     state.timer < 0)
-            {
-                const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
-                                    fxFromInt(record.mins[2])};
-                const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]),
-                                    fxFromInt(record.maxs[2])};
-                // Whoever it is for: the player, unless it ignores them; and
-                // if it says so, a box that is pushed into it (the sample
-                // cart sets off the resonance cascade this way).
-                bool touched = !(record.flags & kLogicNoPlayer) &&
-                               detail::playerTouchesBox(player, mins, maxs, 0);
-                for (int b = 0; !touched && (record.flags & kLogicPushables) && b < w.recordCount; ++b)
-                {
-                    const LogicRecord &other = w.records[b];
-                    if (other.kind != static_cast<std::uint8_t>(LogicKind::Pushable) ||
-                        other.brush == kNoBrush || w.states[b].dead ||
-                        !w.brushStates[other.brush].active)
-                        continue;
-                    const MoverHull &box = w.movers[other.brush];
-                    touched = box.mins[0] <= maxs[0] && box.maxs[0] >= mins[0] &&
-                              box.mins[1] <= maxs[1] && box.maxs[1] >= mins[1] &&
-                              box.mins[2] <= maxs[2] && box.maxs[2] >= mins[2];
-                }
-                if (touched && logicMasterAllows(w, i))
-                {
-                    logicUseTargets(w, player, i, kUseToggle, 0);
-                    if (kind == LogicKind::TriggerOnce || record.waitMs < 0)
-                        state.dead = true;
-                    else
-                        state.timer = record.waitMs;
-                }
-            }
-            else if ((record.flags & kLogicTouch) && record.brush != kNoBrush &&
-                     state.move == MoveState::AtBottom && w.brushStates[record.brush].active)
-            {
-                const MoverHull &mover = w.movers[record.brush];
-                if (detail::playerTouchesBox(player, mover.mins, mover.maxs, kTouchSlack))
-                    logicUse(w, player, i, -1, kUseToggle);
-            }
+            else
+                detail::touchedBy(w, player, i);
         }
 
         // 4. The switched lights: each style is as the last light of it
@@ -3532,6 +3561,45 @@ namespace hldata
                 break;
             }
         }
+    }
+
+    /// A game between consoles: someone who is not this console's player
+    /// (`ghost`: where their own console says they are) walks into things
+    /// here too -- the triggers they are in fire, the doors and buttons
+    /// they touch go, the lift they stand on starts, what gives way under
+    /// them begins to. Every console works that out for every player, so
+    /// the same things move on all of them. Nothing is done TO the ghost:
+    /// what hurts, pushes or carries someone is their own console's
+    /// business.
+    inline void logicGhostTouch(LogicWorld &w, PlayerState &ghost)
+    {
+        const bool sharing = w.sharing;
+        w.sharing = false; // (nothing a ghost does is told back)
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            LogicState &state = w.states[i];
+            if (state.dead)
+                continue;
+            const auto kind = static_cast<LogicKind>(record.kind);
+            const bool on = record.brush != kNoBrush && ghost.onGround &&
+                            ghost.groundMover == static_cast<int>(record.brush);
+            if (kind == LogicKind::PlatRot)
+            {
+                if (!(record.flags & kLogicToggle) && state.move == MoveState::AtBottom && on)
+                    detail::moverStart(w, i, MoveState::GoingUp);
+            }
+            else if (kind == LogicKind::Breakable)
+            {
+                if ((record.flags & kLogicPressure) && on && state.timer < 0)
+                    state.timer = record.delayMs > 0 ? static_cast<std::int32_t>(record.delayMs) : 100;
+            }
+            else if (kind != LogicKind::TriggerHurt && kind != LogicKind::TriggerPush &&
+                     kind != LogicKind::TriggerTeleport && kind != LogicKind::AutoSave &&
+                     kind != LogicKind::ChangeLevel && kind != LogicKind::Music)
+                detail::touchedBy(w, ghost, i);
+        }
+        w.sharing = sharing;
     }
 
     /// What USE would work on: the nearest usable thing within reach that the

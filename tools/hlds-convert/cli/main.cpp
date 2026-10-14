@@ -201,6 +201,10 @@ namespace
             std::printf("  %d streamed: %d KB texels total; single view up to %d KB (%d KB free), %d KB resident\n",
                         r.streamedTextures, r.streamTotalKb, r.streamWorstViewKb, r.streamRegionKb, r.streamResidentKb);
         printArchive(r);
+        if (r.stoodIn != 0)
+            std::printf("  a multiplayer map: %d of its pickups are of weapons not in the port yet, and are "
+                        "given as ones that are\n",
+                        r.stoodIn);
         if (r.pathNodes != 0)
             std::printf("  %d nodes, %d ways between them (%s; %d through doors and what breaks, %d not walked by a "
                         "trial over the world alone, %d ways down added)\n",

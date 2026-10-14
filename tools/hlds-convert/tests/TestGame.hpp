@@ -116,7 +116,9 @@ namespace hldstest
         std::string error;
         if (dir == nullptr || !parseEntities(g.bsp.entities, entities, error))
             return;
+        standInEntities(entities);
         std::vector<ModelNeed> needs = collectModelNeeds(entities);
+        addMultiplayerNeeds(entities, needs);
         for (const Entity &entity : entities)
         {
             if (entity.className() != "trigger_changelevel")

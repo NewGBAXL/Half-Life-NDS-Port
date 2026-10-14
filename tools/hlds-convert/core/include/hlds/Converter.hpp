@@ -71,6 +71,7 @@ namespace hlds
         int brushes = 0;
         int logicRecords = 0;
         int unsupportedEntities = 0; ///< entities whose class the port does not handle yet
+        int stoodIn = 0; ///< (a multiplayer map) pickups given as a weapon the port has, for one it has not
         int unsupportedClasses = 0;
         int models = 0;      ///< models cooked for the map's actors
         int actors = 0;

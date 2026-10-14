@@ -120,7 +120,7 @@ std::size_t Global::heapHeadroom() const
     return static_cast<std::size_t>(getHeapLimit() - getHeapEnd());
 }
 
-Global::DataStatus Global::ReadManifest(std::string &startMap) const
+Global::DataStatus Global::ReadManifest(std::string &startMap, std::vector<std::string> *multiplayer) const
 {
     if (!hasFat)
         return DataStatus::NoCard;
@@ -160,6 +160,11 @@ Global::DataStatus Global::ReadManifest(std::string &startMap) const
     if (manifest.startMap.empty() || manifest.find(manifest.startMap) == nullptr)
         return DataStatus::Damaged;
     startMap = manifest.startMap;
+    for (const hldata::ManifestMap &map : manifest.maps)
+    {
+        if (multiplayer != nullptr && map.spawns != 0)
+            multiplayer->push_back(map.name);
+    }
     return DataStatus::Ok;
 }
 

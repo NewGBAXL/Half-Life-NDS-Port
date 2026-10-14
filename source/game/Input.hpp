@@ -18,6 +18,8 @@ namespace hlrt
     {
     public:
         void poll();
+        /// Nothing is held (the menu is up over a game that goes on).
+        void quiet() { static_cast<hldata::ControlsOut &>(*this) = hldata::ControlsOut(); }
 
     private:
         hldata::ControlsState state_;

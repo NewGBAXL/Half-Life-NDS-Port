@@ -30,7 +30,7 @@
 namespace hldata
 {
     inline constexpr char kManifestMagic[4] = {'H', 'L', 'M', 'F'};
-    inline constexpr std::uint16_t kManifestVersion = 2;
+    inline constexpr std::uint16_t kManifestVersion = 3;
     /// The same on both sides, or nothing reads back.
     inline constexpr std::size_t kYasFlags = yas::mem | yas::binary | yas::no_header;
 
@@ -55,11 +55,14 @@ namespace hldata
         std::uint16_t worstPolygons = 0;
         std::uint16_t worstVertices = 0;
         std::uint16_t textureCount = 0;
+        /// How many places it has for a player to come into a game between
+        /// consoles; 0 for a map that is not a multiplayer map.
+        std::uint8_t spawns = 0;
 
         template <class Ar>
         void serialize(Ar &ar)
         {
-            ar &name &levelBytes &archiveBytes &worstPolygons &worstVertices &textureCount;
+            ar &name &levelBytes &archiveBytes &worstPolygons &worstVertices &textureCount &spawns;
         }
     };
 

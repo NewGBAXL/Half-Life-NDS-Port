@@ -87,7 +87,8 @@ namespace hldata
     inline constexpr int kBloodYellow = 2;
     inline int bloodOf(std::uint8_t kind)
     {
-        if (isGrunt(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
+        if (isGrunt(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
+            kind == static_cast<std::uint8_t>(ActorKind::Player))
             return kBloodRed;
         return isMonster(kind) ? kBloodYellow : kBloodNone;
     }
@@ -495,6 +496,15 @@ namespace hldata
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
+        if (actor.active && actor.kind == static_cast<std::uint8_t>(ActorKind::Player))
+        {
+            // Another player: what they take is theirs to take, on their
+            // own console. Here it is only counted, off a health nobody
+            // dies of (HlNetGame.hpp reads it and tells them). A bullet in
+            // the head is three, as the game has it for players.
+            actor.health = static_cast<std::int16_t>(actor.health - (bullet && group == kHitHead ? damage * 3 : damage));
+            return;
+        }
         if (actor.active && isTurret(actor.kind))
         {
             turretHurt(w, index, damage, bullet, group);
@@ -2221,7 +2231,7 @@ namespace hldata
     }
     inline bool canBeHurt(std::uint8_t kind)
     {
-        return fights(kind) || isPerson(kind);
+        return fights(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Player);
     }
 
     inline void bleed(LogicWorld &w, int index, const fx *at, const fx *dir, bool heavy)
@@ -2255,6 +2265,18 @@ namespace hldata
                 mins[i] = actor.pos[i] - fxFromInt(8);
                 maxs[i] = actor.pos[i] + fxFromInt(8);
             }
+            return;
+        }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Player))
+        {
+            // (The player's own size; `mood` says crouched.)
+            for (int i = 0; i < 2; ++i)
+            {
+                mins[i] = actor.pos[i] - fxFromInt(16);
+                maxs[i] = actor.pos[i] + fxFromInt(16);
+            }
+            mins[2] = actor.pos[2];
+            maxs[2] = actor.pos[2] + fxFromInt(actor.mood != 0 ? 36 : 72);
             return;
         }
         if (isPerson(actor.kind))
@@ -2396,6 +2418,35 @@ namespace hldata
         }
     } // namespace detail
 
+    /// The player takes what lies at actor `index`, if it is of any use to
+    /// them: it is theirs, it is heard, it is gone from where it lay, and
+    /// what taking it sets off is set off. False if it was of no use.
+    inline bool itemPickUp(LogicWorld &w, PlayerState &player, int index)
+    {
+        ActorWorld &a = *w.actors;
+        ActorState &actor = a.states[index];
+        if (!detail::itemTake(player, actor.item, a.got))
+            return false;
+        a.got |= kGotItem;
+        if (w.heard != nullptr)
+        {
+            const auto item = static_cast<ItemKind>(actor.item);
+            w.heard->add(item == ItemKind::HealthKit ? CommonSound::MedKit
+                         : (item == ItemKind::GlockClip || item == ItemKind::Buckshot ||
+                            item == ItemKind::Mp5Clip || item == ItemKind::AmmoBox ||
+                            item == ItemKind::ArGrenades || item == ItemKind::Ammo357)
+                             ? CommonSound::AmmoPickup
+                             : CommonSound::GunPickup,
+                         nullptr);
+        }
+        actor.active = false;
+        actorPlaceBox(a, index);
+        // What taking it sets off (the suit opens the way on).
+        if (actor.fires != 0)
+            logicFire(w, player, actor.fires, -1, kUseToggle, 0);
+        return true;
+    }
+
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
     {
         if (w.actors == nullptr || w.world == nullptr)
@@ -2434,27 +2485,20 @@ namespace hldata
                 continue;
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item))
             {
-                if (player.health > 0 &&
-                    detail::touchesPlayer(player, actor.pos, fxFromInt(12), fxFromInt(24)) &&
-                    detail::itemTake(player, actor.item, a.got))
+                if (player.health > 0 && detail::touchesPlayer(player, actor.pos, fxFromInt(12), fxFromInt(24)))
                 {
-                    a.got |= kGotItem;
-                    if (w.heard != nullptr)
+                    if (a.shared)
                     {
-                        const auto item = static_cast<ItemKind>(actor.item);
-                        w.heard->add(item == ItemKind::HealthKit ? CommonSound::MedKit
-                                     : (item == ItemKind::GlockClip || item == ItemKind::Buckshot ||
-                                        item == ItemKind::Mp5Clip || item == ItemKind::AmmoBox ||
-                                        item == ItemKind::ArGrenades || item == ItemKind::Ammo357)
-                                         ? CommonSound::AmmoPickup
-                                         : CommonSound::GunPickup,
-                                     nullptr);
+                        // Everybody's: wanted, if it would be of any use
+                        // (tried on a copy), and whoever runs the game says
+                        // who has it (itemPickUp, then).
+                        PlayerState trial = player;
+                        std::uint32_t ignored = 0;
+                        if (a.wanted == -1 && detail::itemTake(trial, actor.item, ignored))
+                            a.wanted = static_cast<std::int16_t>(i);
                     }
-                    actor.active = false;
-                    actorPlaceBox(a, i);
-                    // What taking it sets off (the suit opens the way on).
-                    if (actor.fires != 0)
-                        logicFire(w, player, actor.fires, -1, kUseToggle, 0);
+                    else
+                        itemPickUp(w, player, i);
                 }
                 continue;
             }

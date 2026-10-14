@@ -23,6 +23,52 @@ xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_i
 xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                       ctypes.c_ulong]
 display = x11.XOpenDisplay(None)
+x11.XDefaultRootWindow.restype = ctypes.c_ulong
+x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x11.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+                           ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+                           ctypes.POINTER(ctypes.c_uint)]
+x11.XFetchName.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_char_p)]
+x11.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x11.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+x11.XFree.argtypes = [ctypes.c_void_p]
+
+
+class XWindowAttributes(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_int), ('y', ctypes.c_int), ('width', ctypes.c_int), ('height', ctypes.c_int),
+                ('border_width', ctypes.c_int), ('depth', ctypes.c_int), ('visual', ctypes.c_void_p),
+                ('root', ctypes.c_ulong), ('c_class', ctypes.c_int), ('bit_gravity', ctypes.c_int),
+                ('win_gravity', ctypes.c_int), ('backing_store', ctypes.c_int),
+                ('backing_planes', ctypes.c_ulong), ('backing_pixel', ctypes.c_ulong),
+                ('save_under', ctypes.c_int), ('colormaps', ctypes.c_ulong), ('map_installed', ctypes.c_int),
+                ('map_state', ctypes.c_int), ('all_event_masks', ctypes.c_long),
+                ('your_event_mask', ctypes.c_long), ('do_not_propagate_mask', ctypes.c_long),
+                ('override_redirect', ctypes.c_int), ('screen', ctypes.c_void_p)]
+
+
+x11.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWindowAttributes)]
+
+
+def emulator_windows():
+    """The emulator's own windows (one per console), oldest first: the
+    top-level windows that are shown and are not menus."""
+    root = x11.XDefaultRootWindow(display)
+    r, p = ctypes.c_ulong(), ctypes.c_ulong()
+    children = ctypes.POINTER(ctypes.c_ulong)()
+    count = ctypes.c_uint()
+    x11.XQueryTree(display, root, ctypes.byref(r), ctypes.byref(p), ctypes.byref(children), ctypes.byref(count))
+    found = []
+    for i in range(count.value):
+        w = children[i]
+        attrs = XWindowAttributes()
+        x11.XGetWindowAttributes(display, w, ctypes.byref(attrs))
+        if attrs.map_state != 2 or attrs.override_redirect or attrs.width < 200 or attrs.height < 300:
+            continue
+        found.append((w, attrs.x, attrs.y, attrs.width, attrs.height))
+    if children:
+        x11.XFree(children)
+    return sorted(found)
 
 
 def move(x, y):
@@ -73,11 +119,32 @@ for command in sys.argv[1].split(';'):
         key(a[1], True)
         time.sleep(float(a[2]))
         key(a[1], False)
-    elif a[0] == 'down':
-        # down <key> / up <key>: hold a key across other commands (two
-        # buttons at once: "down z;key Down 0.1;up z").
+    elif a[0] == 'windows':
+        # windows: where the emulator's windows are (to the terminal)
+        for n, (w, x, y, width, height) in enumerate(emulator_windows()):
+            print('window %d: %dx%d at %d,%d' % (n, width, height, x, y), flush=True)
+    elif a[0] == 'place':
+        # place <n> <x> <y>: put the emulator's n-th window (0: the first)
+        # there. (Under Xvfb nothing arranges them: a second opens on top of
+        # the first.)
+        wins = emulator_windows()
+        n = int(a[1])
+        if n < len(wins):
+            x11.XMoveWindow(display, wins[n][0], int(a[2]), int(a[3]))
+            x11.XFlush(display)
+    elif a[0] == 'focus':
+        # focus <n>: the keys go to the emulator's n-th window
+        wins = emulator_windows()
+        n = int(a[1])
+        if n < len(wins):
+            x11.XRaiseWindow(display, wins[n][0])
+            x11.XSetInputFocus(display, wins[n][0], 2, 0)
+            x11.XFlush(display)
+    elif a[0] == 'hold':
+        # hold <key> / release <key>: a key held across other commands (two
+        # buttons at once: "hold z;key Down 0.1;release z").
         key(a[1], True)
-    elif a[0] == 'up':
+    elif a[0] == 'release':
         key(a[1], False)
     elif a[0] == 'ready':
         # ready [seconds]: wait until the game is on the top screen (the

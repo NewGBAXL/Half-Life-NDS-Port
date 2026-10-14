@@ -28,8 +28,8 @@ There are two ways. Both end with `half-life-nds-port.nds` in this folder.
 ### With Docker (any system)
 
 Nothing to install but [Docker](https://docs.docker.com/get-docker/). The
-image holds BlocksDS, the Nitro Engine Advanced fork, ptexconv, a compiler
-and CMake.
+image holds BlocksDS, the Nitro Engine Advanced and dswifi forks, ptexconv, a
+compiler and CMake.
 
 ```sh
 git clone https://github.com/Warioware64/Half-Life-NDS-Port.git
@@ -85,6 +85,7 @@ Install, under `$BLOCKSDSEXT` (`/opt/wonderful/thirdparty/blocksds/external`):
 | [BlocksDS](https://blocksds.skylyrac.net/docs/setup/) | the SDK and its ARM compiler (a current one: the code is C++26) |
 | `ptexconv` | `wf-pacman -S blocksds-ptexconv` |
 | [Nitro Engine Advanced](https://github.com/Warioware64/nitro-engine) | this fork, not the one BlocksDS packages: clone it and `make -f Makefile.blocksds install NEA_MAXMOD=1` |
+| [dswifi (DL)](https://github.com/Warioware64/dswifi) | the wireless: this fork, which also does DS Download Play; `make && make install` puts it beside the stock one as `dswifi_dl` |
 | [teak-llvm](https://github.com/Warioware64/teak-llvm) and [libteak](https://github.com/Warioware64/libteak) | optional, for DSP audio: `./build-teak.sh all` in the first, then `make install` in the second |
 
 and Python 3, CMake 3.20+, a C++20 compiler; Qt 6.8+ if you want the
@@ -147,6 +148,30 @@ from where it touched down.
 The pause menu's COMMAND opens a debug command line on the on-screen
 keyboard: `map <name>` goes to a map, `give` hands over every weapon with its
 ammunition and the suit, `heal` restores health, `noclip` flies.
+
+## Multiplayer
+
+Deathmatch between up to four consoles over the DS's local wireless, on the
+game's own multiplayer maps (crossfire, bounce, stalkyard...). Each console
+needs the ROM and a card with the game converted.
+
+On the title: MULTIPLAYER, then HOST GAME on one console -- choose the map
+and the limits -- and JOIN GAME on the others, which find it by themselves.
+The host presses START when everyone is in. Nobody can join a match under
+way.
+
+- You come in with the crowbar and the pistol; what lies about comes back
+  twenty or thirty seconds after it is taken; dead, you are back in three.
+- The pause menu shows the scores and does not stop the game. LEAVE GAME goes
+  back to the title; if the host leaves, the match is over for everyone.
+- Weapons the port has not got yet are stood in for on these maps by ones it
+  has (the converter says how many when it cooks a map).
+- The others are seen as the game's player in the suit, moving as a whole
+  body: no aiming up and down yet, and nothing in their hands.
+
+This is new: it has been played between simulated consoles and between two
+linked emulator instances, not yet between real consoles. DS Download Play, for consoles
+with no card, is planned on the same radio code and is not in yet.
 
 ## Contributing
 

@@ -128,6 +128,8 @@ namespace hlds
                     record.classId = static_cast<std::uint16_t>(EntityClass::Worldspawn);
                 else if (cls == "info_player_start")
                     record.classId = static_cast<std::uint16_t>(EntityClass::InfoPlayerStart);
+                else if (cls == "info_player_deathmatch")
+                    record.classId = static_cast<std::uint16_t>(EntityClass::InfoPlayerDeathmatch);
                 else
                     continue; // everything else arrives with the milestone that runs it
 
@@ -162,6 +164,7 @@ namespace hlds
         std::vector<Entity> entities;
         if (!parseEntities(bsp.entities, entities, error))
             return false;
+        standInEntities(entities);
 
         // The cooked format indexes these with 16 bits.
         if (bsp.faces.size() > 0xFFFF || bsp.nodes.size() > 0x7FFF ||

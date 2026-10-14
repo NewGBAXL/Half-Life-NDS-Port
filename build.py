@@ -46,11 +46,16 @@ arm9 = Arm9Binary(
     # its entry points is an empty inline (DebugLog.hpp), so the shipped
     # build carries none of it.
     defines=['NEA_MAXMOD', 'HL_HW_MATH'] + profile,
-    libs=['NEA', 'mm9', 'nds9', 'dswifi9d_noip'],
+    # The wireless is the dswifi fork that also does DS Download Play
+    # (github.com/Warioware64/dswifi, installed as "dswifi_dl" beside the
+    # stock one). Its headers have the stock names (dswifi9.h), so
+    # ${BLOCKSDS}/libs/dswifi must NOT be among the libdirs as well: which
+    # set of headers came first would decide the build.
+    libs=['NEA', 'mm9', 'nds9', 'dswifi_dl9_noip'],
     libdirs=[
         '${BLOCKSDS}/libs/libnds',
         '${BLOCKSDS}/libs/maxmod',
-        '${BLOCKSDS}/libs/dswifi',
+        '${BLOCKSDSEXT}/dswifi_dl',
         '${BLOCKSDSEXT}/nitro-engine-advanced',
     ],
     # -D_LITTLE_ENDIAN + force-including yas's endian config first locks yas to
@@ -63,8 +68,15 @@ arm9 = Arm9Binary(
 
 arm9.generate_elf()
 
+# The other processor's program has to be of the same build as the ARM9's
+# wireless library: the two share the structures they talk through, and the
+# library refuses a pair that do not match.
+arm7 = Arm7BinaryDefault(
+    elf_path='${BLOCKSDSEXT}/dswifi_dl/sys/arm7/arm7_dswifi_dl_maxmod.elf'
+)
+
 nds = NdsRom(
-    binaries=[arm9],
+    binaries=[arm9, arm7],
     nds_path='half-life-nds-port.nds',
     game_icon="Logo.bmp",
     game_title='HALF-LIFE DS',
