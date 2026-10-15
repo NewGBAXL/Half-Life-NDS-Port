@@ -38,7 +38,7 @@ namespace hlds
         std::filesystem::path ptexconv; ///< empty: look for it
         bool textures = true;
         int jobs = 0; /// maps cooked concurrently, one per thread
-        bool streamTextures = false; /// stream the plain textures only worn by world
+        bool streamTextures = true; /// stream the plain textures only worn by world
         double lightScale = LightBake::kDefaultScale;
         double lightPower = LightBake::kDefaultPower;
         bool guardedMerges = true; ///< CookOptions::guardedMerges

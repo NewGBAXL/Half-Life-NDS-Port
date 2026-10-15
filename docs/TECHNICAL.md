@@ -31,10 +31,10 @@ Milestone 11, "levels of detail".
   on screen (about 12% fewer vertices over the campaign).
 - World textures in the DS's 4x4 compressed format; textures with holes
   (grates, fences) in A3I5, with soft edges. Both are sized per map to fit the
-  texture and palette banks. With `--stream-textures` the plain opaque ones
-  are cooked at the game's own size (up to 128 on a side, where they were
-  halved) and read in from the card as they come into view; see "Streaming
-  textures" below.
+  texture and palette banks. Unless cooked with `--no-stream-textures`,
+  the plain opaque ones are cooked at the game's own size (up to 128 on a side,
+  where they were halved) and read in from the card as they come into view;
+  see "Streaming textures" below.
 - The DS renders the world with PVS, frustum and back-face culling against a
   polygon and vertex budget, in one pass, at 60 fps. What a view asks for beyond
   the budget is left out from the far end, and a map the converter judged HEAVY
@@ -774,7 +774,7 @@ another weapon comes out (`shared/HlMonsters.hpp`, `crowbarBlow`).
 
 ## Streaming textures
 
-A map cooked with `--stream-textures` has its plain opaque textures (one
+A map cooked without `--no-stream-textures` (streaming is the default) has its plain opaque textures (one
 picture, no holes, not a liquid, belt, or similar) sized for what **one view**
 of the map lists and not for the whole map. They are cooked at the game's own
 size (each side the nearest power of two, 128 at most) and marked `kTextureStreamed`.
@@ -830,7 +830,7 @@ Ones that do not fit are drawn bare, as any other skins that do not fit.
 Skins' sizes are worked out per map. Each skin is cooked at the smallest
 power-of-two atlas that holds its textures at three quarters of their width and
 height or better, then the largest are halved until what resident in video memory
-together fits `kMapSkinTexels`. With `--stream-textures` that limit then grows
+together fits `kMapSkinTexels`. When streaming, that limit then grows
 by what the worst view leaves of the room for the streamed textures.
 Across the campaign and test maps this took the models from about a third of
 their source texels (58% of the width and height) to about 72% (85%).
