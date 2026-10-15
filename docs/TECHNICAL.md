@@ -817,6 +817,29 @@ in memory of those streamed, loaded and let go since the map began, how many
 seen lately are being drawn flat, and the room the plan counts in use of what
 it counts there is.
 
+## Weapon skins
+
+Each map holds the skins of every weapon the player can hold, but only one
+is in hand at once. They are loaded as RAM-backed NEA materials; the texture
+is resident in main memory, and the palette stays in palette memory.
+When the player takes up a weapon, `Game::takeInHand` asks `ModelCache::wield`
+for it, and `ModelCache::apply` loads that skin into video memory, letting go
+of the previous one. Weapons whose skins is not in video memory yet are not drawn.
+Ones that do not fit are drawn bare, as any other skins that do not fit.
+
+Skins' sizes are worked out per map. Each skin is cooked at the smallest
+power-of-two atlas that holds its textures at three quarters of their width and
+height or better, then the largest are halved until what resident in video memory
+together fits `kMapSkinTexels`. With `--stream-textures` that limit then grows
+by what the worst view leaves of the room for the streamed textures.
+Across the campaign and test maps this took the models from about a third of
+their source texels (58% of the width and height) to about 72% (85%).
+
+`TextureStream::begin` leaves room for the largest weapon skin
+(`ModelCache::reservedBytes`) before it shares out the rest. The converter counts
+in a parallel way: models' video memory total is all base skins plus the largest
+weapon's, so the "skins" figure in its report is what is in video memory together.
+
 ## What the converter writes
 
 **On the card** a map is one file, `maps/<map>.npac`: an archive (Nitro

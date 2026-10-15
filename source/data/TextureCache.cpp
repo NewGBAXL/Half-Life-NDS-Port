@@ -228,7 +228,7 @@ namespace hlrt
 
     bool TextureCache::loadFile(const char *path, bool liquid, int expectWidth, int expectHeight,
                                 int expectA3I5, NEA_Material *&outMaterial, NEA_Palette *&outPalette,
-                                std::uint16_t *tint)
+                                std::uint16_t *tint, bool ramBacked)
     {
         outMaterial = nullptr;
         outPalette = nullptr;
@@ -244,19 +244,22 @@ namespace hlrt
         auto *data = static_cast<std::uint8_t *>(std::malloc(body));
         hldata::TextureHeader header;
         bool ok = data != nullptr && readFile(path, expectWidth, expectHeight, expectA3I5, header, data, body) &&
-                  create(header, data, liquid, outMaterial, outPalette, tint);
+                  create(header, data, liquid, outMaterial, outPalette, tint, ramBacked);
         std::free(data);
         return ok;
     }
 
     bool TextureCache::create(const hldata::TextureHeader &header, const std::uint8_t *data, bool liquid,
-                              NEA_Material *&outMaterial, NEA_Palette *&outPalette, std::uint16_t *tint)
+                              NEA_Material *&outMaterial, NEA_Palette *&outPalette, std::uint16_t *tint,
+                              bool ramBacked)
     {
         outMaterial = nullptr;
         outPalette = nullptr;
         const bool a3i5 = (header.flags & hldata::kTextureA3I5) != 0;
         NEA_Material *material = NEA_MaterialCreate();
         NEA_Palette *palette = NEA_PaletteCreate();
+        if (ramBacked && material != nullptr)
+            NEA_MaterialRamInit(material);
         // A liquid's coordinates go through the texture matrix (WorldDraw
         // makes that sway); everything else's are used as they are.
         const auto flags = static_cast<NEA_TextureFlags>(

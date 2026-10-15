@@ -35,6 +35,9 @@ namespace hlrt
         std::free(blocks_);
         std::free(materials_);
         std::free(palettes_);
+        std::free(kept_);
+        kept_ = nullptr;
+        wanted_ = resident_ = -1;
         views_ = nullptr;
         blocks_ = nullptr;
         materials_ = nullptr;
@@ -53,6 +56,52 @@ namespace hlrt
             materials_[i] = nullptr;
             palettes_[i] = nullptr;
         }
+        resident_ = -1; // (gone with the old engine; wanted_ stays, and is put back by apply)
+    }
+
+    void ModelCache::apply()
+    {
+        if (resident_ == wanted_ || kept_ == nullptr)
+            return;
+        if (resident_ >= 0 && materials_[resident_] != nullptr)
+            NEA_MaterialTexVramUnload(materials_[resident_]);
+        resident_ = -1;
+        if (wanted_ < 0)
+            return;
+        if (wanted_ >= count_ || kept_[wanted_] == 0 || materials_[wanted_] == nullptr)
+        {
+            wanted_ = -1; // not one that is kept in main memory: it is drawn as it is
+            return;
+        }
+        if (NEA_MaterialTexVramLoad(materials_[wanted_]) == 1)
+        {
+            resident_ = wanted_;
+        }
+        else
+        {
+            // No room in video memory: drawn bare, as a skin that did not fit always was.
+            kept_[wanted_] = 0;
+            wanted_ = -1;
+            ++bare_;
+        }
+    }
+
+    int ModelCache::reservedBytes() const
+    {
+        if (kept_ == nullptr)
+            return 0;
+        int most = 0, now = 0;
+        for (int i = 0; i < count_; ++i)
+        {
+            if (kept_[i] == 0 || views_[i].header == nullptr)
+                continue;
+            // 4x4: the texels (a quarter of a byte each) and the index (an eighth).
+            const int bytes = views_[i].header->atlasWidth * views_[i].header->atlasHeight * 3 / 8;
+            most = bytes > most ? bytes : most;
+            if (i == resident_)
+                now = bytes;
+        }
+        return most > now ? most - now : 0;
     }
 
     void ModelCache::loadSkins()
@@ -67,9 +116,19 @@ namespace hlrt
                 global.mapPath("mdl/") +
                 hldata::modelSkinFile(level.view.modelRefs[i].name, views_[i].header->atlasWidth,
                                       views_[i].header->atlasHeight);
+            // The weapons' are kept in main memory until one is taken up:
+            // of the six, one is in hand.
+            const bool weapon = level.view.modelRefs[i].name[0] == 'v' && level.view.modelRefs[i].name[1] == '_';
+            if (kept_ != nullptr)
+                kept_[i] = weapon ? 1 : 0;
             if (!TextureCache::loadFile(skin.c_str(), false, views_[i].header->atlasWidth,
-                                        views_[i].header->atlasHeight, 0, materials_[i], palettes_[i]))
+                                        views_[i].header->atlasHeight, 0, materials_[i], palettes_[i], nullptr,
+                                        weapon))
+            {
                 ++bare_;
+                if (kept_ != nullptr)
+                    kept_[i] = 0;
+            }
         }
     }
 
@@ -81,7 +140,9 @@ namespace hlrt
         blocks_ = static_cast<std::uint8_t **>(std::calloc(count + 1, sizeof(std::uint8_t *)));
         materials_ = static_cast<NEA_Material **>(std::calloc(count + 1, sizeof(NEA_Material *)));
         palettes_ = static_cast<NEA_Palette **>(std::calloc(count + 1, sizeof(NEA_Palette *)));
-        if (views_ == nullptr || blocks_ == nullptr || materials_ == nullptr || palettes_ == nullptr)
+        kept_ = static_cast<std::uint8_t *>(std::calloc(count + 1, 1));
+        if (views_ == nullptr || blocks_ == nullptr || materials_ == nullptr || palettes_ == nullptr ||
+            kept_ == nullptr)
         {
             destroy();
             return false;

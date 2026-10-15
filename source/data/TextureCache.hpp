@@ -81,9 +81,11 @@ namespace hlrt
         /// its own. `expect*` are what the file has to be to be the right
         /// one (0 / -1: anything). False, with nothing left allocated, if it
         /// is missing, wrong, or does not fit in video memory.
+        /// `ramBacked`: the texture is kept in main memory, and goes into video
+        /// memory only when NEA_MaterialTexVramLoad is asked.
         static bool loadFile(const char *path, bool liquid, int expectWidth, int expectHeight,
                              int expectA3I5, NEA_Material *&material, NEA_Palette *&palette,
-                             std::uint16_t *tint = nullptr);
+                             std::uint16_t *tint = nullptr, bool ramBacked = false);
 
         /// The two halves of loadFile. readFile puts a file's header and
         /// the rest of it (texels, index, palette) in `body`, which has room
@@ -93,7 +95,8 @@ namespace hlrt
         static bool readFile(const char *path, int expectWidth, int expectHeight, int expectA3I5,
                              hldata::TextureHeader &header, std::uint8_t *body, std::size_t capacity);
         static bool create(const hldata::TextureHeader &header, const std::uint8_t *body, bool liquid,
-                           NEA_Material *&material, NEA_Palette *&palette, std::uint16_t *tint = nullptr);
+                           NEA_Material *&material, NEA_Palette *&palette, std::uint16_t *tint = nullptr,
+                           bool ramBacked = false);
 
         TextureCache() = default;
         TextureCache(const TextureCache &) = delete;
