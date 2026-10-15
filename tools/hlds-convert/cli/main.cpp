@@ -55,9 +55,10 @@ namespace
                      "      --geometry <mode>  guarded (default): merge faces and drop mid-edge\n"
                      "                         vertices where the picture provably does not\n"
                      "                         change. lossless: keep every vertex of the map\n"
-                     "      --stream-textures  plain textures only the world wears are cooked at\n"
-                     "                         their own size and streamed in as they come into\n"
-                     "                         view, not shrunk until the whole map fits\n"
+                     "      --no-stream-textures  do not stream: by default plain textures only\n"
+                     "                         the world wears are cooked at their own size and\n"
+                     "                         streamed in as they come into view; without\n"
+                     "                         streaming they are shrunk until the whole map fits\n"
                      "      --jobs <n>         maps cooked at once\n"
                      "                         (default: threads available, up to 6)\n"
                      "      --plain-tiles      do not vary the game's '-' textures face by\n"
@@ -256,6 +257,8 @@ namespace
             }
             else if (args[i] == "--stream-textures")
                 options.streamTextures = true;
+            else if (args[i] == "--no-stream-textures")
+                options.streamTextures = false;
             else if (args[i] == "--jobs" && i + 1 < args.size())
                 options.jobs = std::atoi(args[++i].c_str());
             else if (args[i] == "--plain-tiles")
