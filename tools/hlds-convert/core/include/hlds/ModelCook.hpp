@@ -92,10 +92,19 @@ namespace hlds
         std::vector<std::string> missingClips; ///< asked for, not in the model
     };
 
+    /// A skin's atlas is the smallest that holds its textures at this fraction
+    /// of their width and height, or better.
+    inline constexpr double kAtlasMinScale = 0.75;
+    /// Smallest extra worth taking; below this the skins keep kMapSkinTexels.
+    inline constexpr int kSkinSpareMargin = 16 * 1024;
+    inline constexpr int kMaxExtraSkinTexels = 256 * 1024;
+    inline constexpr int kMinExtraSkinTexels = 16 * 1024;
     /// The most texels a model's skin may take, unless told less.
     inline constexpr int kModelSkinTexels = 256 * 256;
     /// What a map's models may take of the video memory between them: the
     /// largest skins are made smaller until they do (Converter).
+    /// The weapons' (v_*) are kept in main memory until one is taken up,
+    /// so only the largest of those counts.
     inline constexpr int kMapSkinTexels = 208 * 1024;
 
     /// Cook `mdl` with the sequences named in `clipNames` (labels, any case).

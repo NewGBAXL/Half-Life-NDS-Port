@@ -130,6 +130,9 @@ namespace hlrt
     HL_ITCM void ModelDraw::drawActor(const ActorState &actor, const ModelView &model, unsigned modelIndex,
                               const fx *turn, int id, int level)
     {
+        // Weapons whose skins are not in video memory yet are not shown.
+        if (!modelCache.drawable(modelIndex))
+            return;
         // The pose is kept: one that is holding still (a body, someone
         // waiting on a frame) is the same from frame to frame.
         const BoneMatrix *pose = posed(actor, model, modelIndex, id);

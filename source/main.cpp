@@ -556,6 +556,7 @@ int main(int argc, char *argv[])
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
         // Upload/update texture stream while 3D engine is not reading it.
         hlrt::textureStream.upload();
+        hlrt::modelCache.apply();
         {
             const hlrt::DebugLog::Perf::Scope frame(hlrt::DebugLog::Section::Frame);
 

@@ -12,6 +12,7 @@
 #include "HlTexture.hpp"
 #include "HlTextureStream.hpp"
 #include "data/LevelFile.hpp"
+#include "data/ModelCache.hpp"
 #include "data/TextureCache.hpp"
 
 namespace hlrt
@@ -225,7 +226,7 @@ namespace hlrt
         // What there is room for: what NEA has left, less what it will want
         // back for what is not the planner's (the sky of a map that comes
         // later, a weapon's skin).
-        const int texelFree = NEA_TextureFreeMem();
+        const int texelFree = NEA_TextureFreeMem() - modelCache.reservedBytes();
         const int paletteFree = NEA_PaletteFreeMem();
         const std::uint32_t texelRoom =
             texelFree > static_cast<int>(kMemoryMargin) ? (texelFree - kMemoryMargin) / 100 * kMemoryPercent : 0;

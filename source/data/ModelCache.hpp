@@ -1,7 +1,8 @@
 #pragma once
 
 // The models of the loaded map: each one's cooked file (mdl/<map>/<name>.hmd)
-// held in memory and opened, and its skin (mdl/<name>.htx) in video memory.
+// held in memory and opened, and its skin (mdl/<name>.htx) in video memory,
+// except weapons' (v_*), of which only the one in hand is in video memory.
 //
 // One entry per ModelRef of the level, in the level's order. A model that is
 // not on the card, or does not fit, is simply not there: its view's header is
@@ -33,6 +34,21 @@ namespace hlrt
         int count() const { return count_; }
         NEA_Material *skin(unsigned index) const { return materials_[index]; }
         int missing() const { return missing_; }
+
+        /// `index`: weapon in hand; -1: none.
+        void wield(int index) { wanted_ = index; }
+        /// Do what wield() asked: straight after the vertical blank.
+        void apply();
+        /// Whether the model can be drawn: not a weapon whose skin is not
+        /// in video memory yet.
+        bool drawable(unsigned index) const
+        {
+            return kept_ == nullptr || index >= static_cast<unsigned>(count_) || kept_[index] == 0 ||
+                   resident_ == static_cast<int>(index);
+        }
+        /// How much video memory the weapons will want that is not taken yet,
+        /// for whoever else shares the memory to leave.
+        int reservedBytes() const;
         /// Models whose skin did not load (not on the card, or no room).
         int bare() const { return bare_; }
 
@@ -47,6 +63,9 @@ namespace hlrt
         std::uint8_t **blocks_ = nullptr;
         NEA_Material **materials_ = nullptr;
         NEA_Palette **palettes_ = nullptr;
+        std::uint8_t *kept_ = nullptr;
+        int wanted_ = -1;
+        int resident_ = -1;
         int count_ = 0;
         int missing_ = 0;
         int bare_ = 0;

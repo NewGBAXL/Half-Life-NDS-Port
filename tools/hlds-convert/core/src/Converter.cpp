@@ -393,38 +393,81 @@ namespace hlds
             ModelOut out;
             if (!cookOne(need, skin, out, false))
                 continue;
-            modelTexels += out.atlas.width * out.atlas.height;
             models.push_back(std::move(out));
             skinOf.push_back(skin);
             needOf.push_back(n);
         }
-        // Too much between them for the map's own textures to have room: the
-        // largest skin is halved, again and again, until it is not.
-        while (modelTexels > kMapSkinTexels)
+        // What is in video memory together. The weapons' skins (v_*) are
+        // kept in main memory until one is taken up (ModelCache), so of those
+        // only the largest counts; the rest all do.
+        auto heldModel = [&](std::size_t m) { return needs[needOf[m]].name.rfind("v_", 0) == 0; };
+        auto largestHeld = [&]()
         {
-            std::size_t largest = models.size();
-            int most = 64 * 64;
+            std::size_t best = models.size();
+            int most = 0;
             for (std::size_t m = 0; m < models.size(); ++m)
             {
                 const int texels = models[m].atlas.width * models[m].atlas.height;
-                if (texels > most)
+                if (heldModel(m) && texels > most)
                 {
                     most = texels;
-                    largest = m;
+                    best = m;
                 }
             }
-            if (largest == models.size())
-                break; // nothing left to take from
-            ModelOut smaller;
-            if (!cookOne(needs[needOf[largest]], most / 2, smaller, true) ||
-                smaller.atlas.width * smaller.atlas.height >= most)
+            return best;
+        };
+        auto residentTexels = [&]()
+        {
+            const std::size_t held = largestHeld();
+            int sum = 0;
+            for (std::size_t m = 0; m < models.size(); ++m)
             {
-                skinOf[largest] = 0;
-                break;
+                if (!heldModel(m) || m == held)
+                    sum += models[m].atlas.width * models[m].atlas.height;
             }
-            modelTexels += smaller.atlas.width * smaller.atlas.height - most;
-            models[largest] = std::move(smaller);
-        }
+            return sum;
+        };
+        // As cooked at their full size, before any is made smaller: what fitSkins starts from.
+        const std::vector<ModelOut> fullModels = models;
+        const std::vector<int> fullSkinOf = skinOf;
+        // Too much between them for the map's own textures to have room: the
+        // largest skin is halved, again and again, until it is not.
+        auto fitSkins = [&](int budget)
+        {
+            models = fullModels;
+            skinOf = fullSkinOf;
+            modelTexels = residentTexels();
+            while (modelTexels > budget)
+            {
+                std::size_t largest = models.size();
+                int most = 64 * 64;
+                const std::size_t held = largestHeld();
+                for (std::size_t m = 0; m < models.size(); ++m)
+                {
+                    // (Making a weapon's smaller that is not the largest gives nothing back.)
+                    if (heldModel(m) && m != held)
+                        continue;
+                    const int texels = models[m].atlas.width * models[m].atlas.height;
+                    if (texels > most)
+                    {
+                        most = texels;
+                        largest = m;
+                    }
+                }
+                if (largest == models.size())
+                    break; // nothing left to take from
+                ModelOut smaller;
+                if (!cookOne(needs[needOf[largest]], most / 2, smaller, true) ||
+                    smaller.atlas.width * smaller.atlas.height >= most)
+                {
+                    skinOf[largest] = 0;
+                    break;
+                }
+                models[largest] = std::move(smaller);
+                modelTexels = residentTexels();
+            }
+        };
+        fitSkins(kMapSkinTexels);
         for (const ModelOut &out : models)
         {
             result.modelKb += static_cast<int>(out.bytes.size() / 1024);
@@ -436,7 +479,7 @@ namespace hlds
         result.models = static_cast<int>(models.size());
         result.modelTexelKb = modelTexels / 1024;
 
-        const int skyTexels = (skyName.empty() ? 0 : 6 * kSkySize * kSkySize) + modelTexels;
+        const int skyOnlyTexels = skyName.empty() ? 0 : 6 * kSkySize * kSkySize;
         StreamOptions streamOptions;
         streamOptions.enabled = options_.streamTextures;
         const TextureNeeds textureWants = textureNeeds(bsp, brushes, findHiddenTextures(bsp, wads));
@@ -446,10 +489,30 @@ namespace hlds
         auto planFor = [&](int worldBudget)
         {
             StreamOptions options = streamOptions;
-            return planTextures(bsp, textureWants, worldBudget - skyTexels, colourBudget,
+            return planTextures(bsp, textureWants, worldBudget - skyOnlyTexels - modelTexels, colourBudget,
                                 kAlphaTexelBudget - kSpriteTexelBudget, options);
         };
         TexturePlan plan = planFor(streamOptions.enabled ? kSinglePassTexelBudget : kWorldTexelBudget);
+        // With streaming, what the worst view leaves of the room for the
+        // streamed textures goes to the skins: larger ones, as long as the
+        // textures are no smaller for it.
+        if (streamOptions.enabled && plan.streamedTextures != 0 && plan.fits)
+        {
+            const int spare = plan.regionTexels - plan.worstViewTexels - kSkinSpareMargin;
+            int extra = spare < kMaxExtraSkinTexels ? spare : kMaxExtraSkinTexels;
+            for (int attempt = 0; attempt < 3 && extra >= kMinExtraSkinTexels; ++attempt, extra /= 2)
+            {
+                fitSkins(kMapSkinTexels + extra);
+                const TexturePlan larger = planFor(kSinglePassTexelBudget);
+                if (larger.fits && larger.worstViewTexels >= plan.worstViewTexels && larger.shrunk <= plan.shrunk)
+                {
+                    plan = larger;
+                    break;
+                }
+                fitSkins(kMapSkinTexels);
+            }
+        }
+        result.modelTexelKb = modelTexels / 1024;
         auto reportPlan = [&]()
         {
             if (!plan.fits && std::find(result.warnings.begin(),

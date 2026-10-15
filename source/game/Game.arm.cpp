@@ -213,6 +213,7 @@ namespace hlrt
         const int weapon = player.state.inv.current;
         inHand_ = weapon;
         held = ActorState();
+        modelCache.wield(-1);
         if (weapon <= kWeaponNone || weapon >= kWeaponCount)
             return;
         // By name: a map has the models of what can be held in it.
@@ -222,6 +223,7 @@ namespace hlrt
                 continue;
             held.active = true;
             held.model = static_cast<std::uint16_t>(m);
+            modelCache.wield(static_cast<int>(m)); // (its skin is put into video memory after the next blank)
             held.kind = static_cast<std::uint8_t>(ActorKind::Generic);
             held.light = 28;
             const ModelView *model = actorModel(actors, held);
