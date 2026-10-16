@@ -746,9 +746,16 @@ namespace hlds
             clip.firstEvent = static_cast<std::uint16_t>(out.events.size());
             for (const MdlEvent &event : seq.events)
             {
-                // 1003: fire the target named in the options. 1004 and
-                // 5004: a sound, 1008: a sound from the mouth -- all three
-                // name a file. The rest are for the monster's own code.
+                // 1000: the one playing it is dead from here on (a script's
+                // fall, a dying guard): said of the clip. 1003: fire the
+                // target named in the options. 1004 and 5004: a sound, 1008:
+                // a sound from the mouth -- all three name a file. The rest
+                // are for the monster's own code.
+                if (event.event == 1000)
+                {
+                    clip.flags |= kClipDies;
+                    continue;
+                }
                 if (event.options.empty())
                     continue;
                 ModelEvent record{};
@@ -809,10 +816,14 @@ namespace hlds
                         }
                     }
                 }
-                if (b == 0 && frameCount > 1)
+                if (b == 0 && frameCount > 0)
                 {
-                    clip.endOffset[0] = fxFromDouble(frames[frameCount - 1].pos[0] - frames[0].pos[0]);
-                    clip.endOffset[1] = fxFromDouble(frames[frameCount - 1].pos[1] - frames[0].pos[1]);
+                    // (Where the root is at the end, as the game finds it:
+                    // the bone's own place, not how far it went.)
+                    for (int a = 0; a < 2; ++a)
+                        clip.endOffset[a] = fxFromDouble(frames[frameCount - 1].pos[a]);
+                    clip.endUp = static_cast<std::int16_t>(
+                        std::clamp(std::lround(frames[frameCount - 1].pos[2]), -32768L, 32767L));
                 }
 
                 // Turning and place are keyed apart, each at the largest

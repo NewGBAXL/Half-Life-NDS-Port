@@ -1040,21 +1040,24 @@ namespace hldata
             }
             unlockedSound(w, index);
             if (record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) &&
-                state.move == MoveState::AtBottom &&
+                state.move == MoveState::AtBottom && record.extra[0] % 3 == kYaw &&
                 !(record.flags & (kLogicOneWay | kLogicStartOpen)) && record.brush != kNoBrush)
             {
                 // It opens AWAY from the player: which way that is depends on
                 // which side of the hinge they are and which way they face.
                 // The game's test: the turn from "hinge to player" to "hinge to
-                // a point just ahead of the player".
+                // a point just ahead of the player". Only a door on an upright
+                // hinge (the game's own rule): a lever that tips or rolls
+                // always goes the way the map says. And the way the map says
+                // is what is turned round (its sign kept: a negative distance,
+                // "reverse direction").
                 const fx *pivot = w.brushStates[record.brush].pos;
                 const std::int64_t vx = player.origin[0] - pivot[0];
                 const std::int64_t vy = player.origin[1] - pivot[1];
                 const std::int64_t nx = vx + player.facingXY[0] * 10;
                 const std::int64_t ny = vy + player.facingXY[1] * 10;
                 const bool flip = (vx * ny - vy * nx) < 0;
-                const fx magnitude = record.move[0] < 0 ? -record.move[0] : record.move[0];
-                state.travel[0] = flip ? -magnitude : magnitude;
+                state.travel[0] = flip ? -record.move[0] : record.move[0];
             }
             if ((record.flags & kLogicToggle) && state.move == MoveState::AtTop)
                 moverStart(w, index, MoveState::GoingDown);
@@ -1067,6 +1070,11 @@ namespace hldata
 
     namespace detail
     {
+        /// A train's state.bits is the corner it is at, or last left; with
+        /// this bit, the corner it is HEADING to (a train that came from the
+        /// map before, on its way to a corner no corner of this map leads to).
+        inline constexpr std::uint32_t kTrainHeading = 0x10000;
+
         /// Where a train's brush has to be for its middle to be on a corner.
         inline void trainPosAt(const LogicWorld &w, int index, std::uint16_t corner, fx *out)
         {
@@ -1090,6 +1098,23 @@ namespace hldata
             const auto at = static_cast<std::uint16_t>(state.bits);
             if (record.brush == kNoBrush || at == kNoCorner)
                 return;
+            if (state.bits & kTrainHeading)
+            {
+                // On its way to `at` itself (stopped on the way, and set
+                // off again): on to it, from where it is.
+                fx target[3];
+                trainPosAt(w, index, at, target);
+                for (int a = 0; a < 3; ++a)
+                {
+                    state.base[a] = w.brushStates[record.brush].pos[a];
+                    state.travel[a] = target[a] - state.base[a];
+                }
+                state.phase = 0;
+                state.move = MoveState::GoingUp;
+                state.timer = -1;
+                state.running = true;
+                return;
+            }
             const PathCorner &here = w.corners[at];
             if (here.next == kNoCorner)
             {
@@ -1175,7 +1200,9 @@ namespace hldata
                 return;
             state.phase = phase;
             if (phase == kFractionOne)
-                trainArrived(w, player, index, w.corners[state.bits].next);
+                trainArrived(w, player, index,
+                             (state.bits & kTrainHeading) ? static_cast<std::uint16_t>(state.bits)
+                                                         : w.corners[static_cast<std::uint16_t>(state.bits)].next);
         }
     } // namespace detail
 
@@ -2292,26 +2319,52 @@ namespace hldata
             return true;
         }
 
+        /// A monster whose scene is over wakes (HlMonsters.hpp).
+        inline void scriptRouse(LogicWorld &w, int actorIndex);
+
         inline void scriptDone(LogicWorld &w, PlayerState &player, int index)
         {
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
             ActorState &actor = w.actors->states[state.bits];
-            // Where acting it out has carried them is where they now are.
+            // What acting it out has done (GoldSrc's CineCleanup): a clip
+            // with the "dead" event leaves a body, as it lies on the last
+            // frame -- where the clip has it, which may be far from where it
+            // stands (a scientist's fall down a shaft). Else the actor is
+            // where the clip's root ended, across (unless that is no way at
+            // all), then let down to a floor within 256 units; with none, as
+            // high as the clip ended, and falling.
             const ModelView *model = actorModel(*w.actors, actor);
-            if (model != nullptr && actor.clip >= 0 && actor.scriptPhase == kActorPlaying)
+            const bool played = model != nullptr && actor.clip >= 0 && actor.scriptPhase == kActorPlaying;
+            const bool dies = played && (model->clips[actor.clip].flags & kClipDies) != 0;
+            fx endUp = 0;
+            const fx was[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+            if (played && !dies)
             {
                 const ModelClip &clip = model->clips[actor.clip];
                 fx sine, cosine;
                 fxSinCos(actor.yaw, sine, cosine);
-                actor.pos[0] += fxMul(clip.endOffset[0], cosine) - fxMul(clip.endOffset[1], sine);
-                actor.pos[1] += fxMul(clip.endOffset[0], sine) + fxMul(clip.endOffset[1], cosine);
+                const fx dx = fxMul(clip.endOffset[0], cosine) - fxMul(clip.endOffset[1], sine);
+                const fx dy = fxMul(clip.endOffset[0], sine) + fxMul(clip.endOffset[1], cosine);
+                const fx d[3] = {dx, dy, 0};
+                if (fxLength(d) >= fxFromInt(8))
+                {
+                    actor.pos[0] += dx;
+                    actor.pos[1] += dy;
+                }
+                endUp = fxFromInt(clip.endUp);
             }
-            // A prop stays as the script left it; a person goes back to
-            // standing about, on the ground.
-            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
-                actor.kind == static_cast<std::uint8_t>(ActorKind::Pose))
+            if (dies)
             {
+                actor.frozen = true;
+                actor.ai = kAiDead;
+                actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
+                actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
+            }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
+                     actor.kind == static_cast<std::uint8_t>(ActorKind::Pose))
+            {
+                // A prop stays as the script left it.
                 actor.frozen = true;
             }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
@@ -2321,7 +2374,30 @@ namespace hldata
             else
             {
                 actorRest(actor);
-                actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(64));
+                const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 + 18)};
+                const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 - 256)};
+                const Trace tr = traceHull(w.world->standing, from, to);
+                if (tr.startSolid || tr.allSolid)
+                {
+                    // (In something: back where the clip began.)
+                    for (int k = 0; k < 3; ++k)
+                        actor.pos[k] = was[k];
+                }
+                else if (tr.fraction < kFractionOne)
+                {
+                    actor.pos[2] = tr.endPos[2] - fxFromInt(36);
+                }
+                else if (played)
+                {
+                    // Nothing under them: where the clip left them, and down.
+                    actor.pos[2] += endUp;
+                    actor.airborne = true;
+                    actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
+                    actor.groundMover = -1;
+                }
+                // A monster comes out of its scene looking for a fight (the
+                // zombie through the wall).
+                scriptRouse(w, static_cast<int>(state.bits));
             }
             actor.script = -1;
             actor.scriptPhase = kActorFree;

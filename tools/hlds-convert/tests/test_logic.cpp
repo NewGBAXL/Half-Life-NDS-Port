@@ -868,6 +868,39 @@ namespace
         check(!g.player.onLadder, "and cannot be climbed");
     }
 
+    /// Which way a hinged thing turns: a door on an upright hinge away from
+    /// whoever opens it, its mapped way turned round; a lever that tips or
+    /// rolls always its mapped way (c1a2c's freezer levers).
+    void testHingeDirections()
+    {
+        auto turnFrom = [](const char *keys, int side)
+        {
+            BoxRoom room;
+            room.brushes = {brush("func_door_rotating", keys, 0, -2, 0, 48, 2, 100)};
+            Game g;
+            build(g, room);
+            if (!g.ok)
+                return fx(0);
+            const int door = g.recordOfModel(1);
+            // Standing to one side of it, facing across it.
+            g.player.origin[0] = fxFromInt(64);
+            g.player.origin[1] = fxFromInt(60 * side);
+            g.player.facingXY[0] = 0;
+            g.player.facingXY[1] = -side * kFxOne;
+            g.use(door);
+            return g.states[door].travel[0];
+        };
+        // (Use only; "reverse direction"; 90 degrees is 16384.)
+        const char *lever = "\"origin\" \"40 0 0\"\n\"distance\" \"90\"\n\"spawnflags\" \"386\"\n\"targetname\" \"l\"\n";
+        const fx leverNorth = turnFrom(lever, 1), leverSouth = turnFrom(lever, -1);
+        check(leverNorth == -16384 && leverSouth == -16384,
+              "a lever that tips turns its mapped way, reversed as the map says, from either side");
+        const char *door = "\"origin\" \"40 0 0\"\n\"distance\" \"90\"\n\"spawnflags\" \"258\"\n\"targetname\" \"d\"\n";
+        const fx doorNorth = turnFrom(door, 1), doorSouth = turnFrom(door, -1);
+        check(doorNorth == -doorSouth && (doorNorth == 16384 || doorNorth == -16384),
+              "a door on an upright hinge still turns away from whoever opens it");
+    }
+
     /// A door on a hinge: collision against a turned brush, and the door's
     /// own rules.
     void testRotatingDoors()
@@ -1581,6 +1614,7 @@ int main()
     testTrains();
     testLadders();
     testRotatingDoors();
+    testHingeDirections();
     testRotation();
     testUse();
     testBreakingAndPushing();

@@ -471,6 +471,88 @@ namespace
     }
 } // namespace
 
+namespace
+{
+    int actorNamed(const Game &g, const char *name)
+    {
+        const std::uint32_t hash = nameHash(name);
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            if (g.actors.states[i].active && g.actors.states[i].nameHash == hash)
+                return i;
+        }
+        return -1;
+    }
+
+    /// c1a2b's scenes end as the game's do: the zombie that bursts through
+    /// the window lands on the floor below it; the one that breaks the wall
+    /// comes for the player; the scientist hanging in the shaft falls, and is
+    /// a body at the end of it.
+    void testScenes(const char *dir)
+    {
+        auto g = load(dir, "c1a2b");
+        check(g != nullptr, "c1a2b loads");
+        if (g == nullptr)
+            return;
+        const int jumper = actorNamed(*g, "jumperz"), breakout = actorNamed(*g, "breakout"),
+                  cliff = actorNamed(*g, "cliff");
+        check(jumper >= 0 && breakout >= 0 && cliff >= 0, "its zombies and the dangling scientist are there");
+        if (jumper < 0 || breakout < 0 || cliff < 0)
+            return;
+        // The player in the room the window and the wall give onto.
+        g->player.origin[0] = fxFromInt(590);
+        g->player.origin[1] = fxFromInt(-1634);
+        g->player.origin[2] = fxFromInt(420);
+        for (int f = 0; f < 30; ++f)
+            g->frame();
+        logicEnqueue(g->logic, static_cast<std::uint16_t>(nameOf(*g, "zombie")), 0, kUseToggle, -1, 0);
+        logicEnqueue(g->logic, static_cast<std::uint16_t>(nameOf(*g, "dangler")), 0, kUseToggle, -1, 0);
+        bool rose = false;
+        for (int f = 0; f < 12 * 30; ++f)
+        {
+            g->frame();
+            g->player.health = 100; // (not the point here)
+            rose = rose || g->actors.states[breakout].ai != kAiIdle;
+        }
+        const ActorState &j = g->actors.states[jumper];
+        check(!j.airborne && fxToInt(j.pos[2]) > 370 && fxToInt(j.pos[2]) < 400,
+              "the zombie through the window is on the floor below it, not in the air");
+        check(rose, "the zombie through the wall comes out for the player");
+        const ActorState &c = g->actors.states[cliff];
+        check(c.ai == kAiDead && c.frozen, "the scientist in the shaft falls, and is a body where he fell");
+    }
+
+    /// c1a3's silo: the scientist who beats on the glass runs off through a
+    /// tripmine's beam, and it blows him apart.
+    void testTripmine(const char *dir)
+    {
+        auto g = load(dir, "c1a3");
+        check(g != nullptr, "c1a3 loads");
+        if (g == nullptr)
+            return;
+        const int glassman = actorNamed(*g, "glassman");
+        check(glassman >= 0, "the scientist behind the glass is there");
+        if (glassman < 0)
+            return;
+        // (The player well away, where nothing reaches them.)
+        g->player.origin[0] = fxFromInt(422);
+        g->player.origin[1] = fxFromInt(1400);
+        g->player.origin[2] = fxFromInt(40);
+        for (int f = 0; f < 30; ++f)
+            g->frame();
+        logicEnqueue(g->logic, static_cast<std::uint16_t>(nameOf(*g, "beatglass")), 0, kUseToggle, -1, 0);
+        bool gone = false;
+        for (int f = 0; f < 40 * 30 && !gone; ++f)
+        {
+            g->frame();
+            g->player.health = 100;
+            const ActorState &a = g->actors.states[glassman];
+            gone = !a.active || a.ai >= kAiDying;
+        }
+        check(gone, "running off, he sets off the tripmine and it kills him");
+    }
+} // namespace
+
 int main()
 {
     testStyles();
@@ -483,6 +565,8 @@ int main()
         testValve(dir);
         testLights(dir);
         testMicrowave(dir);
+        testScenes(dir);
+        testTripmine(dir);
     }
     else
     {

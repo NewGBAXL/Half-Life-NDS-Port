@@ -35,15 +35,6 @@
 
 namespace hldata
 {
-    // What a monster is doing (ActorState::ai).
-    inline constexpr std::uint8_t kAiIdle = 0;
-    inline constexpr std::uint8_t kAiChase = 1;
-    inline constexpr std::uint8_t kAiAttack = 2;
-    inline constexpr std::uint8_t kAiLeap = 3;
-    inline constexpr std::uint8_t kAiFlinch = 4;
-    inline constexpr std::uint8_t kAiDying = 5;
-    inline constexpr std::uint8_t kAiDead = 6;
-
     // What happened to the player's things (ActorWorld::got).
     inline constexpr std::uint32_t kGotItem = 1;   ///< something was picked up
     inline constexpr std::uint32_t kGotWeapon = 2; ///< ... and it was a weapon not had before
@@ -400,7 +391,7 @@ namespace hldata
             {
                 // Something lying dead, caught in it: it comes apart (the
                 // game's rule: a blast of more than what is left of it).
-                if ((isMonster(actor.kind) || isGrunt(actor.kind)) && share(middle) >= 40)
+                if ((isMonster(actor.kind) || isGrunt(actor.kind) || isPerson(actor.kind)) && share(middle) >= 40)
                     gibBurst(w, i);
                 continue;
             }
@@ -439,7 +430,7 @@ namespace hldata
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
-        const bool human = actor.kind == static_cast<std::uint8_t>(ActorKind::Grunt);
+        const bool human = isGrunt(actor.kind) || isPerson(actor.kind);
         const int model = human ? a.humanGibs : a.alienGibs;
         const int pieces = gibPieces(a, model);
         if (pieces == 0)
@@ -550,6 +541,10 @@ namespace hldata
                 actor.scriptPhase = kActorFree;
             }
             actor.ai = kAiDead;
+            // Taken well past dead (the game's 30 more than they had: a
+            // tripmine, a grenade at their feet), they come apart.
+            if (personHealth(actor.kind) + actor.health < -30 && gibBurst(w, index))
+                return;
             actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
             actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
             // (Falling, if this map's model was given how: else as they
@@ -878,6 +873,15 @@ namespace hldata
             }
         }
 
+        inline void peopleGround(LogicWorld &w, ActorState &actor, int ms);
+
+        inline void scriptRouse(LogicWorld &w, int actorIndex)
+        {
+            ActorState &actor = w.actors->states[actorIndex];
+            if (isMonster(actor.kind) && actor.ai == kAiIdle)
+                monsterWake(*w.actors, actor);
+        }
+
         inline void monsterTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             ActorWorld &a = *w.actors;
@@ -903,6 +907,13 @@ namespace hldata
             // A script's, for now.
             if (actor.script >= 0)
                 return;
+            // Falling (left in the air by its script, or its floor gone):
+            // nothing else until it lands.
+            if (actor.airborne && w.brushStates != nullptr && w.movers != nullptr)
+            {
+                peopleGround(w, actor, ms);
+                return;
+            }
             if (actor.cooldownMs > 0)
                 actor.cooldownMs -= ms;
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
@@ -2146,7 +2157,10 @@ namespace hldata
             for (int i = 0; i < a.count; ++i)
             {
                 const ActorState &actor = a.states[i];
-                if (i == index || !actor.active || !fights(actor.kind) || isMine(actor.kind) || actor.ai >= kAiDying)
+                // (Anyone at all breaks the beam: a scientist running from
+                // the silo's glass, as much as a soldier.)
+                if (i == index || !actor.active || !(fights(actor.kind) || isPerson(actor.kind)) || isMine(actor.kind) ||
+                    actor.ai >= kAiDying)
                     continue;
                 fx mins[3], maxs[3];
                 targetBox(actor, mins, maxs);

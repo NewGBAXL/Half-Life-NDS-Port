@@ -22,6 +22,15 @@
 
 namespace hldata
 {
+    // What a monster is doing (ActorState::ai).
+    inline constexpr std::uint8_t kAiIdle = 0;
+    inline constexpr std::uint8_t kAiChase = 1;
+    inline constexpr std::uint8_t kAiAttack = 2;
+    inline constexpr std::uint8_t kAiLeap = 3;
+    inline constexpr std::uint8_t kAiFlinch = 4;
+    inline constexpr std::uint8_t kAiDying = 5;
+    inline constexpr std::uint8_t kAiDead = 6;
+
     /// Actors that may arrive from the map before, on top of the map's own.
     inline constexpr int kMaxVisitors = 4;
 

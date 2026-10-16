@@ -127,6 +127,13 @@ namespace
         ActorState s;
         s.kind = kind(ActorKind::Scientist);
         s.pos[2] = fxFromInt(100);
+        {
+            // A clip that falls a long way: points all the way to its end.
+            const DrawPoints falling = actorViewPoints(s, 72, 40, -1500);
+            check(falling.count == DrawPoints::kMost &&
+                      falling.at[falling.count - 1][2] == static_cast<std::int16_t>(fxToInt(s.pos[2]) - 1500),
+                  "a body falling in its clip is in view all the way down");
+        }
         const DrawPoints stood = actorViewPoints(s, 72, 40);
         check(stood.count == 2 && stood.at[0][2] == 136 && stood.at[1][2] == 172, "someone standing: middle and head");
         s.kind = kind(ActorKind::Miniturret);

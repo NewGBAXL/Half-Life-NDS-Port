@@ -451,7 +451,8 @@ namespace hlds
         for (const Entity &entity : entities)
         {
             const ActorInfo info = actorOf(entity);
-            if (info.is && info.kind == ActorKind::Grunt)
+            if (info.is && (info.kind == ActorKind::Grunt || info.kind == ActorKind::Scientist ||
+                            info.kind == ActorKind::Guard || info.kind == ActorKind::Sitter))
                 people = true;
             else if (info.is && (info.kind == ActorKind::Headcrab || info.kind == ActorKind::Zombie ||
                                  info.kind == ActorKind::Barnacle || info.kind == ActorKind::Slave ||
@@ -1124,6 +1125,9 @@ namespace hlds
                         fxFromDouble((double(model->mins[a]) + model->maxs[a]) / 2 + origin[a]);
                 const auto first = cornerOfName.find(std::string(entity.value("target")));
                 trainCorner = first != cornerOfName.end() ? first->second : kNoCorner;
+                // Known by the same name in the next map (a lift that goes
+                // from one map into the next): it crosses the level change.
+                record.extra[3] = hashOf(entity.value("globalname"));
                 // A train keeps the angles it is given (it is not a door,
                 // for which "angle" is a way to go): built round an origin,
                 // it is drawn turned about it. (pitch, yaw, roll.)

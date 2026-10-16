@@ -314,7 +314,13 @@ namespace hlrt
             // In view if any part of it is: a ball round its middle and one
             // round its head, for something standing; all the way down its
             // tongue, for a barnacle.
-            const DrawPoints points = actorViewPoints(actor, model->header->maxs[2], model->header->radius);
+            // (A clip that carries it far down -- a fall -- counts all the way.)
+            const int clipDown = actor.clip >= 0 && actor.clip < static_cast<int>(model->header->clipCount) &&
+                                         model->clips[actor.clip].endUp < 0
+                                     ? model->clips[actor.clip].endUp
+                                     : 0;
+            const DrawPoints points =
+                actorViewPoints(actor, model->header->maxs[2], model->header->radius, clipDown);
             bool visible = false;
             for (int k = 0; k < points.count && !visible; ++k)
                 visible = worldDraw.ballVisible(points.at[k], model->header->radius);

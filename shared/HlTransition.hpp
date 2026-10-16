@@ -65,6 +65,13 @@ namespace hldata
         Visitor visitors[kMaxVisitors];
     };
 
+    /// A visitor slot that is not someone: where a func_train that crosses
+    /// is HEADING (the corner it was on its way to), from the landmark; its
+    /// name is the train's. No model has this name, so a build that does not
+    /// know it lets it be. (In a slot, so that what a save keeps of an
+    /// Arrival keeps its form.)
+    inline constexpr std::uint32_t kTrainHeadingVisitor = nameHash("#train heading");
+
     /// How near the landmark an actor has to be to come along.
     inline constexpr fx kVisitorRange = fxFromInt(2048);
 
@@ -188,6 +195,59 @@ namespace hldata
                     ++taken;
             }
         }
+        // A lift the player is riding that the next map knows by the same
+        // name (func_train with a globalname): where its middle is, how fast
+        // it goes, whether it is going, and which corner it is going to.
+        for (int i = 0; i < w.recordCount && here != nullptr && arrival.train == 0; ++i)
+        {
+            const LogicRecord &train = w.records[i];
+            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || train.extra[3] == 0 ||
+                train.brush == kNoBrush)
+                continue;
+            // On it: what they stand on, or (in the middle of a jump) just
+            // above its top, over it.
+            const MoverHull &hull = w.movers[train.brush];
+            const fx feet = player.origin[2] - (player.ducked ? fxFromInt(18) : fxFromInt(36));
+            const bool over = player.origin[0] >= hull.mins[0] && player.origin[0] <= hull.maxs[0] &&
+                              player.origin[1] >= hull.mins[1] && player.origin[1] <= hull.maxs[1] &&
+                              feet >= hull.maxs[2] - fxFromInt(2) && feet <= hull.maxs[2] + fxFromInt(72);
+            if (player.groundMover != static_cast<std::int16_t>(train.brush) && !over &&
+                !detail::playerAboard(w, player, train.brush))
+                continue;
+            const LogicState &state = w.states[i];
+            const BrushState &car = w.brushStates[train.brush];
+            arrival.train = train.extra[3];
+            for (int a = 0; a < 3; ++a)
+                arrival.trainOffset[a] =
+                    car.pos[a] + train.move[a] - w.brushes[train.brush].origin[a] - here->origin[a];
+            arrival.trainSpeed = state.speed;
+            // (Going: on its way, or at a corner about to go on -- the level
+            // change is fired as it comes to one.)
+            arrival.trainSelfDriven = state.running;
+            const auto at = static_cast<std::uint16_t>(state.bits);
+            const std::uint16_t heading =
+                !arrival.trainSelfDriven || at == kNoCorner
+                    ? kNoCorner
+                    : ((state.bits & detail::kTrainHeading) ? at : w.corners[at].next);
+            if (heading != kNoCorner)
+            {
+                int slot = kMaxVisitors - 1;
+                for (int v = 0; v < kMaxVisitors; ++v)
+                {
+                    if (arrival.visitors[v].model == 0)
+                    {
+                        slot = v;
+                        break;
+                    }
+                }
+                Arrival::Visitor &mark = arrival.visitors[slot];
+                mark = Arrival::Visitor();
+                mark.model = kTrainHeadingVisitor;
+                mark.name = train.extra[3];
+                for (int a = 0; a < 3; ++a)
+                    mark.offset[a] = w.corners[heading].pos[a] - here->origin[a];
+            }
+        }
         arrival.changeTarget = record.extra[2];
         arrival.changeDelayMs = static_cast<std::int32_t>(record.extra[3]);
         return arrival;
@@ -303,6 +363,57 @@ namespace hldata
                 state.bits = node;
             // Standing on it from the first instant, so that it carries them
             // from the first instant.
+            player.onGround = true;
+            player.groundMover = static_cast<std::int16_t>(train.brush);
+            break;
+        }
+
+        // The lift they came up in (a func_train of the same global name):
+        // this map's takes up where that one was, and goes on to the corner
+        // it was going to -- found where it is -- as in the game, where a
+        // lift carried across keeps its own way.
+        for (int i = 0; i < w.recordCount && arrival.train != 0; ++i)
+        {
+            const LogicRecord &train = w.records[i];
+            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || train.extra[3] != arrival.train ||
+                train.brush == kNoBrush)
+                continue;
+            fx pos[3];
+            for (int a = 0; a < 3; ++a)
+                pos[a] = here->origin[a] + arrival.trainOffset[a] - train.move[a] + w.brushes[train.brush].origin[a];
+            const std::uint16_t turned[3] = {static_cast<std::uint16_t>(train.extra[0]),
+                                             static_cast<std::uint16_t>(train.extra[1]),
+                                             static_cast<std::uint16_t>(train.extra[2])};
+            logicPlaceBrushTurned(w, train.brush, pos, turned);
+            LogicState &state = w.states[i];
+            if (arrival.trainSpeed > 0)
+                state.speed = arrival.trainSpeed;
+            state.move = MoveState::AtBottom;
+            state.running = false;
+            state.timer = -1;
+            for (const Arrival::Visitor &mark : arrival.visitors)
+            {
+                if (mark.model != kTrainHeadingVisitor || mark.name != arrival.train || !arrival.trainSelfDriven)
+                    continue;
+                // (The corner where it was going: within a unit or two.)
+                std::uint16_t heading = kNoCorner;
+                for (int c = 0; c < w.cornerCount && heading == kNoCorner; ++c)
+                {
+                    bool same = true;
+                    for (int a = 0; a < 3 && same; ++a)
+                    {
+                        const fx d = w.corners[c].pos[a] - (here->origin[a] + mark.offset[a]);
+                        same = d < fxFromInt(2) && d > -fxFromInt(2);
+                    }
+                    if (same)
+                        heading = static_cast<std::uint16_t>(c);
+                }
+                if (heading != kNoCorner)
+                {
+                    state.bits = heading | detail::kTrainHeading;
+                    detail::trainNext(w, player, i);
+                }
+            }
             player.onGround = true;
             player.groundMover = static_cast<std::int16_t>(train.brush);
             break;

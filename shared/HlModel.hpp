@@ -122,6 +122,9 @@ namespace hldata
     };
 
     inline constexpr std::uint16_t kClipLoops = 1;
+    /// The clip has the game's "dead" event (1000): whoever plays it to its
+    /// end in a script is a body, held on its last frame where it lies.
+    inline constexpr std::uint16_t kClipDies = 2;
 
     struct ModelClip
     {
@@ -131,14 +134,21 @@ namespace hldata
         std::uint16_t flags;      ///< kClip*
         std::uint16_t firstEvent;
         std::uint16_t eventCount;
-        std::uint16_t pad;
+        /// Where the root is, up from the model's origin, on the clip's last
+        /// frame (whole units): with endOffset, where a scripted actor is
+        /// when its clip is done. (0 in models converted before it was kept:
+        /// read as before.)
+        std::int16_t endUp;
         std::uint32_t firstTrack; ///< boneCount tracks from here, a bone each
         /// How far one run of the clip carries the model along its own
         /// forward, left and up (Q12 units): a walk's stride. The animation
         /// itself stays where it is.
         fx travel[3];
-        /// Where the root ends up relative to where it began, forward and
-        /// left (Q12 units): what a scripted move leaves the actor at.
+        /// Where the root is on the clip's last frame, forward and left of
+        /// the model's own origin (Q12 units): where the game puts a scripted
+        /// actor when its clip is done (GoldSrc's CineCleanup). (Models
+        /// converted before held how far it went from the first frame: near
+        /// enough the same.)
         fx endOffset[2];
     };
 

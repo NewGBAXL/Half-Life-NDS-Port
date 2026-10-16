@@ -407,6 +407,86 @@ namespace
         check(doorMoved, "and then the door opens");
     }
 
+    /// The lift between c1a3d and c1a3a (a func_train known by the same
+    /// name in both): ridden up from one map into the next, it carries the
+    /// player on to the top of the next -- it does not start again at the
+    /// bottom of the shaft, from under their feet.
+    void testTheLift(const char *dir)
+    {
+        Globals globals;
+        auto game = std::make_unique<Game>();
+        std::string error;
+        if (!game->bsp.load(std::string(dir) + "/maps/c1a3d.bsp", error))
+            return;
+        finish(*game, &globals);
+        int lift = -1;
+        for (std::uint32_t i = 0; i < game->view.logicCount && lift < 0; ++i)
+        {
+            if (game->view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Train) &&
+                game->view.logic[i].extra[3] != 0)
+                lift = static_cast<int>(i);
+        }
+        check(game->ok && lift >= 0, "c1a3d's lift is known by a global name");
+        if (!game->ok || lift < 0)
+            return;
+        // Stood on it, in the middle, and it is set going.
+        {
+            const MoverHull &hull = game->movers[game->view.logic[lift].brush];
+            game->player.origin[0] = (hull.mins[0] + hull.maxs[0]) / 2;
+            game->player.origin[1] = (hull.mins[1] + hull.maxs[1]) / 2;
+            game->player.origin[2] = hull.maxs[2] + fxFromInt(37);
+        }
+        for (int f = 0; f < 30; ++f)
+            game->frame();
+        logicUse(game->logic, game->player, lift, -1, kUseToggle);
+        bool crossed = false;
+        for (int f = 0; f < 60 * 30 && !crossed; ++f)
+        {
+            game->frame();
+            if (game->logic.pendingChange < 0)
+                continue;
+            const int record = game->logic.pendingChange;
+            const Arrival arrival =
+                makeArrival(game->logic, game->view.landmarks, game->view.landmarkCount, game->player, record);
+            const std::string map = game->view.strings + game->view.logic[record].extra[0];
+            check(map == "c1a3a", "the lift's level change is to c1a3a");
+            auto next = std::make_unique<Game>();
+            if (!next->bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error))
+                return;
+            finish(*next, &globals);
+            applyArrival(next->logic, next->view.landmarks, next->view.landmarkCount, next->view.nameHashes,
+                         next->view.nameCount, next->player, arrival);
+            game = std::move(next);
+            crossed = true;
+        }
+        check(crossed, "ridden up, the lift takes the player into c1a3a");
+        if (!crossed)
+            return;
+        int up = -1;
+        for (std::uint32_t i = 0; i < game->view.logicCount && up < 0; ++i)
+        {
+            if (game->view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Train) &&
+                game->view.logic[i].extra[3] != 0)
+                up = static_cast<int>(i);
+        }
+        const fx arrivedAt = game->player.origin[2];
+        double worstBelow = 0;
+        bool backDown = false;
+        for (int f = 0; f < 20 * 30; ++f)
+        {
+            game->frame();
+            backDown = backDown || game->logic.pendingChange >= 0;
+            if (up >= 0)
+            {
+                const MoverHull &hull = game->movers[game->view.logic[up].brush];
+                worstBelow = std::max(worstBelow, toUnits(hull.maxs[2] - (game->player.origin[2] - fxFromInt(36))));
+            }
+        }
+        check(up >= 0 && worstBelow < 4, "in c1a3a the player stands on the lift all the way");
+        check(!backDown && game->player.health > 0, "... and is not sent back down to c1a3d");
+        check(game->player.origin[2] - arrivedAt > fxFromInt(250), "... which carries them on up to the top");
+    }
+
     void testTheRide()
     {
         const char *dir = std::getenv("HLDS_VALVE_DIR");
@@ -427,6 +507,7 @@ namespace
         }
         check(ride(dir, 2, Passenger::Idle, true), "... and with a save and a load on the way");
         testTheGuard(dir);
+        testTheLift(dir);
     }
 } // namespace
 

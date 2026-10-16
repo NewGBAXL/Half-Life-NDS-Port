@@ -68,7 +68,10 @@ namespace hldata
     };
 
     /// `top` is the model's height (its bounds' top), `radius` its radius.
-    inline DrawPoints actorViewPoints(const ActorState &actor, int top, int radius)
+    /// `clipDown` (whole units, at most 0): how far below where it stands
+    /// the clip it plays takes it -- a scientist's fall down a shaft, all of
+    /// it in the animation: in view while any of that is.
+    inline DrawPoints actorViewPoints(const ActorState &actor, int top, int radius, int clipDown = 0)
     {
         DrawPoints points;
         const std::int16_t x = static_cast<std::int16_t>(fxToInt(actor.pos[0]));
@@ -105,6 +108,20 @@ namespace hldata
         const int up = isTurret(actor.kind) && (actor.flags & kActorCeiling) ? -top : top;
         add(z + up / 2);
         add(z + up);
+        if (clipDown < -radius)
+        {
+            // (A ball every radius or so down to where the clip ends.)
+            const int left = DrawPoints::kMost - points.count;
+            int step = radius > 16 ? radius : 16;
+            if (-clipDown > step * left)
+                step = (-clipDown + left - 1) / left;
+            for (int down = step; points.count < DrawPoints::kMost; down += step)
+            {
+                add(z + (down < -clipDown ? -down : clipDown));
+                if (down >= -clipDown)
+                    break;
+            }
+        }
         return points;
     }
 
