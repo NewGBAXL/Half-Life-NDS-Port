@@ -67,6 +67,38 @@ namespace hldata
         virtual bool remove(const char *name) = 0;
         /// (To a name that is not there: FAT will not rename over a file.)
         virtual bool rename(const char *from, const char *to) = 0;
+
+        // A file a piece at a time (SaveWriter: a save written over many
+        // frames). As they are here, made of the calls above -- a card that
+        // can keep a file open between pieces does better.
+
+        /// `bytes` added to the end of a file; `first`: the file made anew
+        /// with them. False if not all of them were written.
+        virtual bool append(const char *name, const std::uint8_t *bytes, std::size_t size, bool first)
+        {
+            if (first)
+                return write(name, bytes, size);
+            std::vector<std::uint8_t> was;
+            if (!read(name, was, static_cast<std::size_t>(-1)))
+                return false;
+            was.insert(was.end(), bytes, bytes + size);
+            return write(name, was.data(), was.size());
+        }
+        /// Up to `size` bytes of a file from `offset` (fewer at its end).
+        virtual bool readAt(const char *name, std::size_t offset, std::size_t size, std::vector<std::uint8_t> &out)
+        {
+            if (!read(name, out, offset + size))
+                return false;
+            out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(offset < out.size() ? offset : out.size()));
+            return true;
+        }
+        /// Done with a file read or written a piece at a time. False if what
+        /// was written did not all reach the card.
+        virtual bool finish(const char *name)
+        {
+            (void)name;
+            return true;
+        }
     };
 
     struct SaveSlot
@@ -220,40 +252,159 @@ namespace hldata
         }
     }
 
+    /// What a save's card work is done in, a step at a time.
+    inline constexpr std::size_t kSaveStepBytes = 4096;
+
     /// A save written into a slot: beside the old one first, which goes
-    /// only when the new one is whole on the card. The heading is given its
-    /// kind and its number here. False if the card would not take it -- the
+    /// only when the new one is whole on the card (and read back to be the
+    /// same). The heading is given its kind and its number here. One step()
+    /// does one piece of the card's work -- a few kilobytes written or read,
+    /// a file removed or renamed -- so a game can write a save over a few
+    /// frames and go on being played. Cut off anywhere, it leaves what
+    /// saveRecover puts right; failed, the old save is still there.
+    class SaveWriter
+    {
+    public:
+        enum class Result
+        {
+            Busy,
+            Done,
+            Failed
+        };
+
+        /// False (and nothing begun) if the save cannot be made at all.
+        bool begin(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading)
+        {
+            stage_ = Stage::Idle;
+            if (slot < 0 || slot >= kSlotCount)
+                return false;
+            heading.kind = saveSlotKind(slot);
+            heading.serial = index.nextSerial;
+            bytes_ = writeSave(data, heading);
+            if (bytes_.size() > kSaveMaxBytes + kSaveHeadBytes)
+                return false;
+            card_ = &card;
+            index_ = &index;
+            slot_ = slot;
+            heading_ = heading;
+            fresh_ = detail::freshName(slot);
+            at_ = 0;
+            stage_ = Stage::Write;
+            return true;
+        }
+
+        bool busy() const { return stage_ != Stage::Idle; }
+        int slot() const { return slot_; }
+
+        Result step()
+        {
+            switch (stage_)
+            {
+            case Stage::Idle:
+                return Result::Failed;
+            case Stage::Write:
+            {
+                const std::size_t n = piece();
+                if (!card_->append(fresh_.c_str(), bytes_.data() + at_, n, at_ == 0))
+                    return fail();
+                at_ += n;
+                if (at_ == bytes_.size())
+                    stage_ = Stage::Close;
+                return Result::Busy;
+            }
+            case Stage::Close:
+                if (!card_->finish(fresh_.c_str()))
+                    return fail();
+                at_ = 0;
+                stage_ = Stage::Check;
+                return Result::Busy;
+            case Stage::Check:
+            {
+                // (Read back: what is on the card is what was meant to be --
+                // and no longer.)
+                const std::size_t n = piece();
+                std::vector<std::uint8_t> back;
+                if (!card_->readAt(fresh_.c_str(), at_, n + (at_ + n == bytes_.size() ? 1 : 0), back) ||
+                    back.size() != n || std::memcmp(back.data(), bytes_.data() + at_, n) != 0)
+                    return fail();
+                at_ += n;
+                if (at_ == bytes_.size())
+                {
+                    card_->finish(fresh_.c_str());
+                    stage_ = Stage::Swap;
+                }
+                return Result::Busy;
+            }
+            case Stage::Swap:
+                card_->remove(saveSlotFile(slot_));
+                stage_ = Stage::Rename;
+                return Result::Busy;
+            case Stage::Rename:
+                stage_ = Stage::Idle;
+                if (!card_->rename(fresh_.c_str(), saveSlotFile(slot_)))
+                    return Result::Failed; // (the new one is still there under its other name: saveRecover finds it)
+                index_->slots[slot_].status = kSaveGood;
+                index_->slots[slot_].heading = heading_;
+                ++index_->nextSerial;
+                saveIndexWrite(*card_, *index_); // (only a copy: a failure here costs a rebuild)
+                bytes_.clear();
+                bytes_.shrink_to_fit();
+                return Result::Done;
+            }
+            return Result::Failed;
+        }
+
+        /// Every step that is left, now.
+        bool finish()
+        {
+            Result r = Result::Busy;
+            while (busy() && (r = step()) == Result::Busy)
+            {
+            }
+            return r == Result::Done;
+        }
+
+    private:
+        enum class Stage
+        {
+            Idle,
+            Write,
+            Close,
+            Check,
+            Swap,
+            Rename
+        };
+
+        std::size_t piece() const
+        {
+            const std::size_t left = bytes_.size() - at_;
+            return left < kSaveStepBytes ? left : kSaveStepBytes;
+        }
+        Result fail()
+        {
+            card_->finish(fresh_.c_str());
+            card_->remove(fresh_.c_str());
+            stage_ = Stage::Idle;
+            bytes_.clear();
+            return Result::Failed;
+        }
+
+        Stage stage_ = Stage::Idle;
+        SaveCard *card_ = nullptr;
+        SaveIndex *index_ = nullptr;
+        int slot_ = -1;
+        SaveHeading heading_;
+        std::string fresh_;
+        std::vector<std::uint8_t> bytes_;
+        std::size_t at_ = 0;
+    };
+
+    /// The same, all at once. False if the card would not take it -- the
     /// old save is then still there.
     inline bool saveSlotWrite(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading)
     {
-        if (slot < 0 || slot >= kSlotCount)
-            return false;
-        heading.kind = saveSlotKind(slot);
-        heading.serial = index.nextSerial;
-        const std::vector<std::uint8_t> bytes = writeSave(data, heading);
-        if (bytes.size() > kSaveMaxBytes + kSaveHeadBytes)
-            return false;
-        const std::string fresh = detail::freshName(slot);
-        if (!card.write(fresh.c_str(), bytes.data(), bytes.size()))
-        {
-            card.remove(fresh.c_str());
-            return false;
-        }
-        // (Read back: what is on the card is what was meant to be.)
-        std::vector<std::uint8_t> back;
-        if (!card.read(fresh.c_str(), back, bytes.size() + 1) || back != bytes)
-        {
-            card.remove(fresh.c_str());
-            return false;
-        }
-        card.remove(saveSlotFile(slot));
-        if (!card.rename(fresh.c_str(), saveSlotFile(slot)))
-            return false; // (the new one is still there under its other name: saveRecover finds it)
-        index.slots[slot].status = kSaveGood;
-        index.slots[slot].heading = heading;
-        ++index.nextSerial;
-        saveIndexWrite(card, index); // (only a copy: a failure here costs a rebuild)
-        return true;
+        SaveWriter writer;
+        return writer.begin(card, index, slot, data, heading) && writer.finish();
     }
 
     inline bool saveSlotRead(SaveCard &card, int slot, SaveData &out, SaveHeading *heading = nullptr)

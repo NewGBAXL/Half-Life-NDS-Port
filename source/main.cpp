@@ -155,6 +155,9 @@ namespace
     {
         hldata::LevelHeader header{};
         LoadClock clock;
+        // (A save still being written is of the map being left: finished
+        // first, at once.)
+        hlrt::SaveGame::finish();
         if (!hlrt::Level::peekHeader(name, header))
         {
             error = "Map not on the card:";
@@ -260,7 +263,10 @@ namespace
     }
 
     /// The game as it is, into `slot` (a kSlot*). Said on the screen either
-    /// way: that it was saved, or that the card would not take it.
+    /// way: that it was saved, or that the card would not take it. The
+    /// game's own save (AUTOSAVE, not `quiet`) is only begun here, and goes
+    /// to the card a little every frame (stepSave) with a small sign in the
+    /// corner of the top screen: the game goes on meanwhile.
     bool saveNow(int slot, bool quiet = false)
     {
         if (!hlrt::level.loaded() || hlrt::player.noclip || hlrt::player.state.health <= 0)
@@ -277,6 +283,16 @@ namespace
             heading.hour = static_cast<std::uint8_t>(when->tm_hour);
             heading.minute = static_cast<std::uint8_t>(when->tm_min);
         }
+        if (slot == hldata::kSlotAuto && !quiet)
+        {
+            if (hlrt::SaveGame::begin(hlrt::game.snapshot(currentMap), slot, heading))
+            {
+                hlrt::topText.notice("saving...");
+                return true;
+            }
+            // (One is being written still: this one waits for nothing, it is
+            // written at once.)
+        }
         const bool saved = hlrt::SaveGame::write(hlrt::game.snapshot(currentMap), slot, heading);
         if (!saved)
             say("COULD NOT SAVE", "the card would not take it");
@@ -284,6 +300,26 @@ namespace
             say(slot == hldata::kSlotAuto ? "AUTOSAVED" : "SAVED");
         return saved;
     }
+    /// Once a frame: a step of the save being written, if one is.
+    void stepSave()
+    {
+        if (!hlrt::SaveGame::busy())
+            return;
+        switch (hlrt::SaveGame::step())
+        {
+        case hldata::SaveWriter::Result::Busy:
+            break;
+        case hldata::SaveWriter::Result::Done:
+            hlrt::topText.notice("saved");
+            hlrt::topText.endNotice(1000);
+            break;
+        case hldata::SaveWriter::Result::Failed:
+            hlrt::topText.endNotice(0);
+            say("COULD NOT SAVE", "the card would not take it");
+            break;
+        }
+    }
+
     /// What a death goes back to, and when the game last went back.
     hldata::DeathLoop deathLoop;
     std::uint32_t wentBack = 0;
@@ -562,6 +598,7 @@ int main(int argc, char *argv[])
         // it in the vertical blanks), and what is written is drawn.
         hlrt::textureStream.upload();
         hlrt::modelCache.apply();
+        stepSave();
         {
             const hlrt::DebugLog::Perf::Scope frame(hlrt::DebugLog::Section::Frame);
 
@@ -775,8 +812,10 @@ int main(int argc, char *argv[])
                         // Every new map is somewhere to come back to: the
                         // game's own save, and the one a run of deaths
                         // goes back to.
-                        saveNow(hldata::kSlotAuto);
+                        // (The one a death goes back to first, at once, while the
+                        // map comes up; the game's own a little at a time.)
                         saveNow(hldata::kSlotArrival, true);
+                        saveNow(hldata::kSlotAuto);
                         break;
                     case LoadResult::NotOnCard:
                         // Not converted: say so, and do not ask again every

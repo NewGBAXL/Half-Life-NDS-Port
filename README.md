@@ -54,6 +54,10 @@ different folders -- `build/convert-docker`, say: CMake remembers the paths
 it was configured with.) In VS Code the same things are tasks: *Terminal >
 Run Task*, the ones named "Docker: ...".
 
+`WITH_QT=1` adds Qt 6.8 to the image, for the task "Docker: build converter
+GUI": a check that the converter's window builds. The window itself is built
+where it runs (below).
+
 To convert the game, or to run the tests that play its maps, say where your
 Half-Life `valve` folder is; it is readable inside the container as `/valve`:
 
@@ -107,7 +111,11 @@ ctest --test-dir build/convert
 build/convert/hlds-convert cook-all <path to>/Half-Life/valve -o <SD card root>
 ```
 
-or run `build/convert/gui/hlds-convert-gui`. Everything goes to
+or run `build/convert/gui/hlds-convert-gui` (in VS Code: the task "Run
+converter GUI", which configures and builds it first). On Windows the same
+tasks use [MSYS2](https://www.msys2.org/)'s Qt, installed in `C:\msys64` with
+`pacman -S mingw-w64-ucrt-x86_64-{toolchain,cmake,ninja,qt6-base}` (MSYS2
+somewhere else: change the `PATH` in `.vscode/tasks.json`). Everything goes to
 `<card>/_nds/hl_nds/data/`; copy the ROM to the card as well. `cook-map`
 converts one map; the other commands and what the files are made of are in
 [docs/TECHNICAL.md](docs/TECHNICAL.md#what-the-converter-writes).

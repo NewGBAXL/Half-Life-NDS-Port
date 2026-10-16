@@ -9,12 +9,18 @@
 #       forks). That compiles clang: allow an hour and several GB of memory.
 #       Without it the ROM builds all the same, with no DSP audio -- which is
 #       an experiment, off by default in the game.
+#   docker compose build --build-arg WITH_QT=1
+#       ... with Qt 6.8 as well, to build the converter's window
+#       (hlds-convert-gui) in the container: a check that it builds. The
+#       program is linked to the container's Qt; to use it, build it where
+#       it is to run (see the README).
 #
 # The forks are taken at the head of their master branch; the image is built
 # again from that step on whenever one of them has moved.
 
 ARG BLOCKSDS_IMAGE=skylyrac/blocksds:slim-latest
 ARG WITH_TEAK=0
+ARG WITH_QT=0
 
 # ---------------------------------------------------------------- the tools
 FROM ${BLOCKSDS_IMAGE} AS base
@@ -93,3 +99,23 @@ ENV HLDS_VENV=/opt/hlds-venv \
 RUN git config --system --add safe.directory /work
 WORKDIR /work
 CMD ["bash"]
+
+# ------------------------------------- Qt for the converter's window, if asked
+# (aqtinstall: the Qt the window needs, 6.8, is newer than many systems'
+# own. Widgets and what they stand on only.)
+FROM dev AS qt-0
+
+FROM dev AS qt-1
+ARG QT_VERSION=6.8.3
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libfontconfig1-dev \
+        libfreetype6-dev libdbus-1-3 libglib2.0-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv /opt/aqt && \
+    /opt/aqt/bin/pip install --no-cache-dir aqtinstall && \
+    /opt/aqt/bin/aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 -O /opt/qt && \
+    rm -rf /opt/aqt
+ENV HLDS_QT_DIR=/opt/qt/${QT_VERSION}/gcc_64
+
+FROM qt-${WITH_QT} AS final

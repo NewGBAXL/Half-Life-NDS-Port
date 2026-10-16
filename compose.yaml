@@ -11,6 +11,7 @@ services:
       context: docker
       args:
         WITH_TEAK: ${WITH_TEAK:-0}
+        WITH_QT: ${WITH_QT:-0}
     image: half-life-nds-port-dev
     working_dir: /work
     user: "${HLDS_UID:-1000}:${HLDS_GID:-1000}"

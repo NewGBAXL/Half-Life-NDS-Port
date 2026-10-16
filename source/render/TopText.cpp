@@ -187,7 +187,14 @@ namespace hlrt
         }
         if (index < 0)
             index = slots_[0].order < slots_[1].order ? 0 : 1;
-        Slot &slot = slots_[index];
+        if (index == noticeSlot_)
+            noticeSlot_ = -1; // (what the map writes comes first)
+        layout(slots_[index], index, message, text);
+    }
+
+    void TopText::layout(Slot &slot, int index, const MessageRecord &message, const char *text)
+    {
+        const bool logo = (message.flags & kMessageLogo) != 0;
         slot = Slot();
         slot.busy = true;
         slot.message = message;
@@ -222,7 +229,7 @@ namespace hlrt
                     ++at;
                 if (line.count == 0)
                     continue; // (an empty line is no line here)
-                line.font = kFontTitle;
+                line.font = font_ >= 0 ? font_ : kFontTitle;
                 if (textWidth(touchCanvas.font(line.font), line.text, line.count) > 252)
                     line.font = kFontMedium;
                 if (textWidth(touchCanvas.font(line.font), line.text, line.count) > 252)
@@ -308,8 +315,57 @@ namespace hlrt
         }
     }
 
+    void TopText::notice(const char *text)
+    {
+        ensure();
+        int index = noticeSlot_ >= 0 && slots_[noticeSlot_].busy ? noticeSlot_ : -1;
+        const bool up = index >= 0;
+        for (int s = 0; s < kSlots && index < 0; ++s)
+        {
+            if (!slots_[s].busy)
+                index = s;
+        }
+        if (index < 0)
+            return;
+        // In the top left corner (the lamp's sign is in the right one), small
+        // and faint (added to the picture, as all of this is: a dim amber is
+        // a faint one).
+        MessageRecord m{};
+        m.x = 4;
+        m.y = 6;
+        m.effect = kMessageFade;
+        m.colour = m.colour2 = static_cast<std::uint16_t>(18 | 11 << 5 | 2 << 10);
+        m.fadeInMs = 200;
+        m.holdMs = 60000; // (until endNotice)
+        m.fadeOutMs = 500;
+        canvas_.fill(0, index * kLines * kBandHeight, 256, kLines * kBandHeight, 0);
+        font_ = kFontSmall;
+        layout(slots_[index], index, m, text);
+        font_ = -1;
+        if (!slots_[index].busy)
+            return;
+        noticeSlot_ = index;
+        if (up)
+        {
+            // (Already up: the word changes, and it does not fade in again.)
+            slots_[index].elapsed = m.fadeInMs;
+            tick(0);
+        }
+    }
+
+    void TopText::endNotice(int holdMs)
+    {
+        if (noticeSlot_ < 0 || !slots_[noticeSlot_].busy)
+            return;
+        Slot &slot = slots_[noticeSlot_];
+        const int shown = slot.elapsed - slot.message.fadeInMs;
+        slot.message.holdMs = static_cast<std::uint16_t>((shown > 0 ? shown : 0) + holdMs);
+        noticeSlot_ = -1;
+    }
+
     void TopText::clear()
     {
+        noticeSlot_ = -1;
         for (int s = 0; s < kSlots; ++s)
         {
             if (!slots_[s].busy)

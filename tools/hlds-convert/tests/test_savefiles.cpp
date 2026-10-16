@@ -258,6 +258,48 @@ int main()
         check(saveSlotRead(full, kSlotAuto, back) && back.map == "c1a0", "... and the save that was there is there still");
     }
 
+    // A save written a step at a time (as the game's autosave is, over
+    // frames): the same files and list as one written at once, in pieces.
+    {
+        SaveData big = game("c2a1", 61);
+        big.state.assign(20000, 7); // (several pieces)
+        MemoryCard once = card, stepped = card;
+        SaveIndex onceIndex = index, steppedIndex = index;
+        check(saveSlotWrite(once, onceIndex, kSlotAuto, big, heading("c2a1", "POWER UP", 7000)), "written at once");
+        SaveWriter writer;
+        check(writer.begin(stepped, steppedIndex, kSlotAuto, big, heading("c2a1", "POWER UP", 7000)) && writer.busy(),
+              "a stepped write begins");
+        int steps = 0;
+        SaveWriter::Result r = SaveWriter::Result::Busy;
+        while ((r = writer.step()) == SaveWriter::Result::Busy)
+            ++steps;
+        check(r == SaveWriter::Result::Done && !writer.busy(), "... and ends");
+        check(steps >= 2 * static_cast<int>(20000 / kSaveStepBytes), "... a piece at a time, written and read back");
+        check(once.files == stepped.files, "the card is the same as after a write made at once");
+        check(onceIndex.nextSerial == steppedIndex.nextSerial &&
+                  std::string(steppedIndex.slots[kSlotAuto].heading.map) == "c2a1",
+              "... and so is the list");
+
+        // Stopped between any two steps (the console switched off): the
+        // slot holds a whole save, the old or the new.
+        bool always = true;
+        for (int stop = 0; stop <= steps; ++stop)
+        {
+            MemoryCard cut = card;
+            SaveIndex during = index;
+            SaveWriter w;
+            w.begin(cut, during, kSlotAuto, big, heading("c2a1", "POWER UP", 7000));
+            for (int k = 0; k < stop && w.busy(); ++k)
+                w.step();
+            SaveIndex after;
+            saveIndexLoad(cut, after);
+            SaveData back;
+            always = always && saveSlotRead(cut, kSlotAuto, back) && (back.map == "c1a0" || back.map == "c2a1") &&
+                     cut.files.count("auto.sav.new") == 0;
+        }
+        check(always, "stopped between any two steps, the slot holds a whole save");
+    }
+
     if (g_failures == 0)
         std::printf("test_savefiles: ok\n");
     return g_failures == 0 ? 0 : 1;

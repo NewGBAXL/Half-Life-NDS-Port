@@ -31,6 +31,26 @@
             "group": "build"
         },
         {
+            // A check that the converter's window builds (the image with Qt
+            // in it: WITH_QT=1, built the first time). What it makes runs in
+            // the container only: to use the window, build it locally below.
+            "label": "Docker: build converter GUI",
+            "type": "shell",
+            "command": "WITH_QT=1 ./docker.sh bash -c 'cmake -S tools/hlds-convert -B build/convert-docker-gui -DHLDS_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=$HLDS_QT_DIR && cmake --build build/convert-docker-gui --target hlds-convert-gui -j4'",
+            "windows": {
+                "command": "$env:WITH_QT='1'; docker compose build dev; docker compose run --rm dev bash -c 'cmake -S tools/hlds-convert -B build/convert-docker-gui -DHLDS_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=$HLDS_QT_DIR && cmake --build build/convert-docker-gui --target hlds-convert-gui -j4'"
+            },
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["autoDetect", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(?:/work/)?(.*?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            },
+            "group": "build"
+        },
+        {
             "label": "Docker: clean ROM",
             "type": "shell",
             "command": "./docker.sh ./clean.sh",
@@ -64,6 +84,44 @@
             "command": "cmake --build build/convert -j4 && ctest --test-dir build/convert --output-on-failure",
             "problemMatcher": ["$gcc"],
             "group": "build"
+        },
+        // The converter's window (Qt 6.8+ installed here). On Windows, with
+        // MSYS2's UCRT64 Qt: pacman -S mingw-w64-ucrt-x86_64-toolchain
+        // mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+        // mingw-w64-ucrt-x86_64-qt6-base (MSYS2 in C:\msys64; elsewhere,
+        // change the PATH below).
+        {
+            "label": "Configure converter GUI",
+            "type": "shell",
+            "command": "cmake -S tools/hlds-convert -B build/convert -DHLDS_BUILD_GUI=ON",
+            "windows": {
+                "command": "cmake -S tools/hlds-convert -B build/convert-msys2 -G Ninja -DHLDS_BUILD_GUI=ON",
+                "options": { "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" } }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build converter GUI",
+            "type": "shell",
+            "command": "cmake --build build/convert --target hlds-convert-gui -j4",
+            "windows": {
+                "command": "cmake --build build/convert-msys2 --target hlds-convert-gui -j4",
+                "options": { "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" } }
+            },
+            "dependsOn": "Configure converter GUI",
+            "problemMatcher": ["$gcc"],
+            "group": "build"
+        },
+        {
+            "label": "Run converter GUI",
+            "type": "shell",
+            "command": "build/convert/gui/hlds-convert-gui",
+            "windows": {
+                "command": "build/convert-msys2/gui/hlds-convert-gui.exe",
+                "options": { "env": { "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}" } }
+            },
+            "dependsOn": "Build converter GUI",
+            "problemMatcher": []
         },
         {
             "label": "Build ROM",

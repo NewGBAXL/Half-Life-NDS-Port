@@ -27,6 +27,14 @@ namespace hlrt
         /// Show `message`, whose text is `text` (which must stay where it
         /// is: the level's Strings).
         void show(const hldata::MessageRecord &message, const char *text);
+        /// A small word in the top left corner, faint (the game saving):
+        /// only where nothing the map writes is, and never in its place --
+        /// with both slots taken it is not shown at all. Held until
+        /// endNotice(); a second notice() while it is up only changes the word.
+        /// `text` must stay where it is.
+        void notice(const char *text);
+        /// The notice goes, `holdMs` from now, fading.
+        void endNotice(int holdMs);
         /// `ms` more milliseconds.
         void tick(int ms);
         /// Nothing written: the map is going.
@@ -55,6 +63,9 @@ namespace hlrt
             std::uint32_t order = 0;
         };
         Slot slots_[kSlots];
+        int noticeSlot_ = -1; ///< the slot the notice is in, if it is up
+        int font_ = -1;       ///< for the next layout: this face, not the largest that fits
+        void layout(Slot &slot, int index, const hldata::MessageRecord &message, const char *text);
         std::uint32_t orders_ = 0;
         bool ready_ = false;
         hldata::Canvas canvas_;
