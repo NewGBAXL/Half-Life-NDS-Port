@@ -323,6 +323,9 @@ namespace hldata
             if (modelRefs[i].name[sizeof(modelRefs[i].name) - 1] != '\0')
                 return LevelError::BadIndex;
         }
+        // (The sky's six pictures, from the one the header names.)
+        if (header->skyTexture != 0 && static_cast<std::uint32_t>(header->skyTexture) - 1 + 6 > textureCount)
+            return LevelError::BadIndex;
         if (header->viewModel > modelRefCount)
             return LevelError::BadIndex;
         for (std::uint32_t i = 0; i < actorCount; ++i)

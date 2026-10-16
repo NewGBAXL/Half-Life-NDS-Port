@@ -425,6 +425,10 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
+    // A crash says where: the address, and the registers (libnds's own
+    // screen, in place of the bare "Data abort" it otherwise shows). A
+    // photograph of it, and the .elf, say which line.
+    defaultExceptionHandler();
     global.Init();
     // (Before the first load, which is timed too.)
     hlrt::DebugLog::Perf::begin();
@@ -554,7 +558,8 @@ int main(int argc, char *argv[])
     while (true)
     {
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
-        // Upload/update texture stream while 3D engine is not reading it.
+        // What is to be written to video memory is queued (VramWriter writes
+        // it in the vertical blanks), and what is written is drawn.
         hlrt::textureStream.upload();
         hlrt::modelCache.apply();
         {

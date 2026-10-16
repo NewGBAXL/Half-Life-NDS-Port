@@ -150,8 +150,12 @@ namespace hlrt
             // how much memory the plan counts in use compared to the total.
             const StreamStats st = textureStream.stats();
             if (textureStream.active())
-                std::snprintf(line, sizeof(line), "t%d/%d +%d-%d f%d %d/%dK r%d", st.resident, st.streamed, st.loads,
-                              st.evictions, st.flatNow, st.texelKb, st.capacityKb, st.copies);
+                // (... then: refusals, blanks that ran out of time, the
+                // line the last one ended on, and -- if the two counts of
+                // what is in video memory differ -- a leak, shown as "!".)
+                std::snprintf(line, sizeof(line), "t%d/%d f%d %d/%dK x%d l%d@%d%s", st.resident, st.streamed,
+                              st.flatNow, st.texelKb, st.capacityKb, st.refused, st.late, st.lastLine,
+                              st.attached != st.resident ? "!" : "");
             else
                 line[0] = '\0';
             break;

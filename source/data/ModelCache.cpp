@@ -1,4 +1,5 @@
 #include "data/ModelCache.hpp"
+#include "data/TextureStream.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +9,7 @@
 #include "Global.hpp"
 #include "data/LevelFile.hpp"
 #include "data/TextureCache.hpp"
+#include "data/VramWriter.hpp"
 
 namespace hlrt
 {
@@ -37,7 +39,8 @@ namespace hlrt
         std::free(palettes_);
         std::free(kept_);
         kept_ = nullptr;
-        wanted_ = resident_ = -1;
+        wanted_ = resident_ = residentSlot_ = writing_ = writingSlot_ = -1;
+        slotCount_ = 0;
         views_ = nullptr;
         blocks_ = nullptr;
         materials_ = nullptr;
@@ -56,52 +59,135 @@ namespace hlrt
             materials_[i] = nullptr;
             palettes_[i] = nullptr;
         }
-        resident_ = -1; // (gone with the old engine; wanted_ stays, and is put back by apply)
+        // (Gone with the old engine, and the slots with it; wanted_ stays, and
+        // is put back once there are slots again.)
+        resident_ = residentSlot_ = writing_ = writingSlot_ = -1;
+        slotCount_ = 0;
+    }
+
+    std::uint32_t ModelCache::largestSkin() const
+    {
+        std::uint32_t most = 0;
+        for (int i = 0; kept_ != nullptr && i < count_; ++i)
+        {
+            if (kept_[i] == 0 || materials_[i] == nullptr)
+                continue;
+            const NEA_Material *m = materials_[i];
+            const std::uint32_t bytes = static_cast<std::uint32_t>(m->ram_sizex * m->ram_sizey / 4);
+            most = bytes > most ? bytes : most;
+        }
+        return (most + 31u) & ~31u;
+    }
+
+    void ModelCache::dropSlots()
+    {
+        if (resident_ >= 0 && materials_ != nullptr && materials_[resident_] != nullptr)
+            NEA_MaterialTexVramUnload(materials_[resident_]);
+        resident_ = residentSlot_ = writing_ = writingSlot_ = -1;
+        slotCount_ = 0;
+    }
+
+    void ModelCache::setSlots(void *const *texels, int count)
+    {
+        // (Whatever was in the old ones is gone with them.)
+        dropSlots();
+        slotCount_ = count < 0 ? 0 : (count > 2 ? 2 : count);
+        for (int k = 0; k < 2; ++k)
+            slots_[k] = Slot{k < slotCount_ ? texels[k] : nullptr, 0, false};
+        if (slotCount_ == 0)
+        {
+            // No room for any: drawn bare, as a skin that did not fit always was.
+            for (int i = 0; kept_ != nullptr && i < count_; ++i)
+            {
+                if (kept_[i] != 0)
+                    ++bare_;
+                kept_[i] = 0;
+            }
+        }
+    }
+
+    void ModelCache::putAway(std::uint32_t now)
+    {
+        if (resident_ < 0)
+            return;
+        if (materials_[resident_] != nullptr)
+            NEA_MaterialTexVramUnload(materials_[resident_]);
+        // (Written over no sooner than two frames on: the pictures until
+        // then were drawn with it.)
+        slots_[residentSlot_].used = false;
+        slots_[residentSlot_].freeSince = now;
+        resident_ = residentSlot_ = -1;
     }
 
     void ModelCache::apply()
     {
-        if (resident_ == wanted_ || kept_ == nullptr)
+        if (kept_ == nullptr || slotCount_ == 0)
             return;
-        if (resident_ >= 0 && materials_[resident_] != nullptr)
-            NEA_MaterialTexVramUnload(materials_[resident_]);
-        resident_ = -1;
-        if (wanted_ < 0)
-            return;
-        if (wanted_ >= count_ || kept_[wanted_] == 0 || materials_[wanted_] == nullptr)
+        const std::uint32_t now = textureStream.blanks();
+        // A skin written: it is the one in hand now.
+        if (writing_ >= 0 && vramWriter.done(ticket_))
         {
+            const NEA_Material *m = materials_[writing_];
+            putAway(now);
+            if (NEA_MaterialTexBindFixed(materials_[writing_], NEA_TEX4X4, m->ram_sizex, m->ram_sizey, m->ram_flags,
+                                         slots_[writingSlot_].texels) == 1)
+            {
+                resident_ = writing_;
+                residentSlot_ = writingSlot_;
+            }
+            else
+            {
+                slots_[writingSlot_].used = false;
+                slots_[writingSlot_].freeSince = now;
+            }
+            writing_ = writingSlot_ = -1;
+        }
+        if (writing_ >= 0 || resident_ == wanted_)
+            return;
+        if (wanted_ < 0)
+        {
+            putAway(now);
+            return;
+        }
+        NEA_Material *m = wanted_ < count_ && kept_[wanted_] != 0 ? materials_[wanted_] : nullptr;
+        const std::uint32_t texels = m != nullptr ? static_cast<std::uint32_t>(m->ram_sizex * m->ram_sizey / 4) : 0;
+        if (m == nullptr || m->ram_data == nullptr || m->ram_format != NEA_TEX4X4 ||
+            m->ram_size < texels + texels / 2 || texels > largestSkin())
+        {
+            if (m != nullptr && kept_[wanted_] != 0)
+            {
+                kept_[wanted_] = 0; // (not one this can write: drawn bare)
+                ++bare_;
+            }
             wanted_ = -1; // not one that is kept in main memory: it is drawn as it is
             return;
         }
-        if (NEA_MaterialTexVramLoad(materials_[wanted_]) == 1)
+        // A slot that nothing on the screen draws from; with one slot only,
+        // the weapon in hand is put away first.
+        int slot = -1;
+        for (int k = 0; k < slotCount_ && slot < 0; ++k)
         {
-            resident_ = wanted_;
+            if (!slots_[k].used && now - slots_[k].freeSince >= 2)
+                slot = k;
         }
-        else
+        if (slot < 0)
         {
-            // No room in video memory: drawn bare, as a skin that did not fit always was.
-            kept_[wanted_] = 0;
-            wanted_ = -1;
-            ++bare_;
+            if (slotCount_ == 1)
+                putAway(now);
+            return; // (a frame or two on)
         }
-    }
-
-    int ModelCache::reservedBytes() const
-    {
-        if (kept_ == nullptr)
-            return 0;
-        int most = 0, now = 0;
-        for (int i = 0; i < count_; ++i)
-        {
-            if (kept_[i] == 0 || views_[i].header == nullptr)
-                continue;
-            // 4x4: the texels (a quarter of a byte each) and the index (an eighth).
-            const int bytes = views_[i].header->atlasWidth * views_[i].header->atlasHeight * 3 / 8;
-            most = bytes > most ? bytes : most;
-            if (i == resident_)
-                now = bytes;
-        }
-        return most > now ? most - now : 0;
+        // [texels][index], as NEA keeps it.
+        const auto *data = static_cast<const std::uint8_t *>(m->ram_data);
+        void *at = slots_[slot].texels;
+        const std::uint32_t first = vramWriter.write(at, data, texels);
+        const std::uint32_t second =
+            first != 0 ? vramWriter.write(NEA_Texture4x4IndexAddress(at), data + texels, texels / 2) : 0;
+        if (second == 0)
+            return; // (the queue is full: next frame)
+        slots_[slot].used = true;
+        writing_ = wanted_;
+        writingSlot_ = slot;
+        ticket_ = second;
     }
 
     void ModelCache::loadSkins()

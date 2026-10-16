@@ -16,11 +16,16 @@
 // the rest by how widely they are wanted. Maps whose textures all fit have all
 // of them resident and never stream at all.
 //
-// NEA places each texture itself. If it cannot (memory is not all one piece,
-// or part of it cannot take a 4x4 texture), the plan is told how much the
-// memory really holds and goes on within that.
+// The textures go into a fixed region of video memory taken from NEA when the
+// map is loaded (NEA_TextureRegionReserve4x4 and NEA_PaletteRegionReserve):
+// the plan's places are the places in it, so what the plan says fits does fit.
+// What is read is written by VramWriter, a piece at a time in the vertical
+// blanks, and drawn once it is all there. The top of the region is the
+// weapons' skin slots (ModelCache).
 
 #include <cstdint>
+
+#include <NEAMain.h>
 
 namespace hlrt
 {
@@ -43,12 +48,16 @@ namespace hlrt
         int pinned = 0;
         int loads = 0;
         int evictions = 0;
-        int refused = 0;    ///< times NEA refused textures due to out-of-memory
+        int refused = 0;    ///< textures that could not be loaded (a file not as planned)
         int flatNow = 0;    ///< textures drawn in last few frames as flat color
         int copies = 0;     ///< textures kept in main memory (cycles' pictures, tiled variants)
         int copiesKb = 0;
         int texelKb = 0;    ///< texels currently in use
         int capacityKb = 0; ///< total estimated capacity
+        int late = 0;       ///< vertical blanks that ended with writes still waiting (VramWriter)
+        int lastLine = 0;   ///< the latest scanline a write ended on
+        int dropped = 0;    ///< plans that stopped making way, their list full
+        int attached = 0;   ///< streamed textures really in video memory (= resident, or something leaks)
     };
 
     class TextureStream
@@ -59,19 +68,31 @@ namespace hlrt
         void end();
         bool active() const { return active_; }
 
-        /// Upload right after the vertical blank.
+        /// Once a frame, after the vertical blank: what was read two frames
+        /// ago is queued to be written, and what is written is drawn.
         void upload();
+        /// The frames counted by upload().
+        std::uint32_t blanks() const { return blank_; }
+        /// A texture let go: freed two blanks from now, when no picture
+        /// still on the screen can be drawing it.
+        void retire(NEA_Material *material, NEA_Palette *palette);
         /// At the end of each frame, calculate what is wanted next,
         /// and how many `budgetBytes` of the card read for it.
         void update(int budgetBytes);
 
         StreamStats stats() const;
-
+        /// A build that measures (HLDS_PROFILE): what the streaming and the
+        /// texture memory are like, and which textures in view are flat and
+        /// why, as lines in perf.txt. `why` says what prompted it. (Nothing,
+        /// in any other build.)
+        void report(const char *why);
     private:
-        bool loadNow(int id);
+        bool loadNow(int id, std::uint32_t texelOffset, std::uint32_t paletteOffset);
         void demand();
+        void freeRetired(bool all);
 
         bool active_ = false;
+        std::uint32_t blank_ = 0;
     };
 
     extern TextureStream textureStream;

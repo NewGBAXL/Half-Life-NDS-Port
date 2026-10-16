@@ -1,4 +1,5 @@
 #include "data/TextureCache.hpp"
+#include "data/TextureStream.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -77,7 +78,15 @@ namespace hlrt
             // (The planner numbers a map's textures up to a limit; the rest
             // are loaded like any other.)
             if ((ref.flags & hldata::kTextureStreamed) != 0 && i < hldata::kStreamMaxTextures &&
-                makeFlat(static_cast<unsigned>(i), ref.average))
+                makeFlat(static_cast<unsigned>(i),
+#ifdef HLDS_PROFILE
+                         // (A build that measures shows what is not in video
+                         // memory in magenta: there is no mistaking it.)
+                         static_cast<std::uint16_t>(31 | 31 << 10)
+#else
+                         ref.average
+#endif
+                         ))
             {
                 streamed_[i] = 1;
                 ++streamedCount_;
@@ -148,6 +157,8 @@ namespace hlrt
 
     void TextureCache::attachStreamed(unsigned index, NEA_Material *material, NEA_Palette *palette)
     {
+        if (materials_[index] != nullptr || palettes_[index] != nullptr)
+            detachStreamed(index);
         materials_[index] = material;
         palettes_[index] = palette;
         binds_[index * 2] = NEA_MaterialGetTexParam(material);
@@ -160,10 +171,9 @@ namespace hlrt
         // next must not name memory that is about to be somebody else's.
         binds_[index * 2] = NEA_MaterialGetTexParam(flatTexture_);
         binds_[index * 2 + 1] = NEA_PaletteGetBase(flatPalettes_[index]);
-        if (materials_[index] != nullptr)
-            NEA_MaterialDelete(materials_[index]);
-        if (palettes_[index] != nullptr)
-            NEA_PaletteDelete(palettes_[index]);
+        // (Not freed here: the picture on the screen was drawn with it, and
+        // is drawn again until the next one is shown.)
+        textureStream.retire(materials_[index], palettes_[index]);
         materials_[index] = nullptr;
         palettes_[index] = nullptr;
     }

@@ -1,6 +1,7 @@
 #include "Global.hpp"
 
 #include "HlManifest.hpp"
+#include "data/VramWriter.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
 
@@ -14,6 +15,8 @@ namespace
     void onVblank()
     {
         vblankCount = vblankCount + 1;
+        // First: what is written to video memory has only until line 206.
+        hlrt::vramWriter.onVblank();
         hlrt::GpuStats::onVblank();
         NEA_VBLFunc();
     }

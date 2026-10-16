@@ -590,6 +590,11 @@ namespace hlrt
 
         GFX_TEX_FORMAT = 0;
         NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), kCull, polygonMode());
+        // The texture matrix back to what the rest of the frame is drawn
+        // with: the beam's projection left in it would put the textures of
+        // whatever is drawn after (see-through brushes, liquids, effects)
+        // anywhere.
+        sway();
     }
 
     bool WorldDraw::ballVisible(const std::int16_t *centre, int radius) const

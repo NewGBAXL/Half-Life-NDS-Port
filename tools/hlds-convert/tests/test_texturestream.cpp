@@ -364,6 +364,134 @@ namespace
         const int swap = s.plan(1u << 20, 1u << 20, again, 4, evicted, 8, n);
         check(swap == 1 && n == 1 && s.texelCapacity() == 5 * 1024, "a much more wanted one takes a place, the area's size kept");
     }
+
+    /// What makes way is always told: never more than the caller's list.
+    void testEvictionsAllTold()
+    {
+        // Forty small residents; then one big texture wanted that needs
+        // thirty of them gone.
+        std::vector<StreamInfo> infos;
+        for (int i = 0; i < 40; ++i)
+            infos.push_back(info(1024, 32));
+        infos.push_back(info(30 * 1024, 32));
+        TextureStreamer s;
+        s.init(infos.data(), static_cast<int>(infos.size()), 40 * 1024, 64 * 1024);
+        s.clearScores();
+        for (int i = 0; i < 40; ++i)
+            s.addScore(i, 10);
+        s.rebuild();
+        while (step(s) > 0)
+        {
+        }
+        check(s.residentCount() == 40, "forty little ones fill the area");
+        s.clearScores();
+        s.addScore(40, 1000000);
+        s.rebuild();
+        StreamLoad loads[4];
+        int evicted[16], n = 0;
+        const int made = s.plan(1u << 20, 1u << 20, loads, 4, evicted, 16, n);
+        // Whatever the planner let go is exactly what it said it let go.
+        int stillResident = 0;
+        for (int i = 0; i < 40; ++i)
+            stillResident += s.resident(i) ? 1 : 0;
+        check(n <= 16 && stillResident + n == 40, "every texture that made way is in the list it was given, and no more");
+        check(made == 0 && s.dropped() >= 1, "... and with the list full it stopped, without loading what could not yet fit");
+        check(sound(s.texelArena()), "the area is as the plan says");
+    }
+
+    /// What is on the screen does not make way, however much another is
+    /// wanted.
+    void testRecentStay()
+    {
+        std::vector<StreamInfo> infos = {info(1024), info(1024), info(1024)};
+        TextureStreamer s;
+        s.init(infos.data(), 3, 2 * 1024, 64 * 1024);
+        s.clearScores();
+        s.addScore(0, 5);
+        s.addScore(1, 5);
+        s.rebuild();
+        step(s);
+        check(s.resident(0) && s.resident(1), "two fill the area");
+        s.clearScores();
+        s.addScore(0, 5);
+        s.addScore(1, 5);
+        s.setRecent(0);
+        s.setRecent(1);
+        s.addScore(2, 1000000);
+        s.rebuild();
+        StreamLoad loads[4];
+        int evicted[8], n = 0;
+        check(s.plan(1u << 20, 1u << 20, loads, 4, evicted, 8, n) == 0 && n == 0 && s.resident(0) && s.resident(1),
+              "a texture on the screen is not let go for one wanted more");
+        s.clearScores();
+        s.addScore(0, 5);
+        s.addScore(1, 5);
+        s.setRecent(0);
+        s.addScore(2, 1000000);
+        s.retryFailed();
+        s.rebuild();
+        check(s.plan(1u << 20, 1u << 20, loads, 4, evicted, 8, n) == 1 && n == 1 && evicted[0] == 1,
+              "... the one that is not on the screen is");
+    }
+
+    /// The room taken away by a refusal comes back.
+    void testCapacityBack()
+    {
+        std::vector<StreamInfo> infos = {info(1024), info(1024), info(1024)};
+        TextureStreamer s;
+        s.init(infos.data(), 3, 8 * 1024, 64 * 1024);
+        s.clearScores();
+        s.addScore(0, 5);
+        s.rebuild();
+        step(s);
+        s.shrinkCapacity();
+        check(s.texelCapacity() == 1024, "a refusal: the area is taken to hold what is in it");
+        s.setCapacity(6 * 1024, 64 * 1024);
+        check(s.texelCapacity() == 6 * 1024, "the memory asked again: the room is back");
+        s.setCapacity(0, 0);
+        check(s.texelCapacity() == 1024 && s.paletteCapacity() == s.paletteBytesUsed(),
+              "never less than what is in it");
+    }
+
+    /// Two pieces of memory as one area with a barrier between: no texture
+    /// lies across it, and it never makes way.
+    void testBarrier()
+    {
+        // Pieces of 3 KB and 2 KB: [0, 3072) barrier [3104, 5152).
+        std::vector<StreamInfo> infos = {info(2048), info(2048), info(2048), info(1024)};
+        TextureStreamer s;
+        s.init(infos.data(), 4, 3072 + TextureStreamer::kBarrierBytes + 2048, 64 * 1024);
+        check(s.addBarrier(3072), "the barrier goes where it is put");
+        auto across = [&]()
+        {
+            const auto &a = s.texelArena();
+            for (int i = 0; i < a.n; ++i)
+            {
+                if (a.b[i].owner < 0)
+                    continue;
+                if (a.b[i].off < 3072 + TextureStreamer::kBarrierBytes && a.b[i].off + a.b[i].size > 3072)
+                    return true;
+            }
+            return false;
+        };
+        for (int round = 0; round < 50; ++round)
+        {
+            s.clearScores();
+            for (int id = 0; id < 4; ++id)
+                s.addScore(id, static_cast<std::uint32_t>(1 + (id * 7 + round * 13) % 97) * 1000);
+            s.rebuild();
+            step(s);
+            check(!across(), "nothing lies across the barrier");
+            check(sound(s.texelArena()), "the area stays sound");
+            const auto &a = s.texelArena();
+            bool there = false;
+            for (int i = 0; i < a.n; ++i)
+                there = there || (a.b[i].owner < 0 && a.b[i].off == 3072);
+            check(there, "the barrier never makes way");
+        }
+        // Two of 2 KB fit (one in each piece); a third never does.
+        check(s.residentCount() <= 3, "at most what the pieces hold");
+    }
 } // namespace
 
 int main()
@@ -377,6 +505,10 @@ int main()
     testBudgets();
     testStress();
     testRefusal();
+    testEvictionsAllTold();
+    testRecentStay();
+    testCapacityBack();
+    testBarrier();
     if (g_failures == 0)
         std::printf("test_texturestream: ok\n");
     return g_failures == 0 ? 0 : 1;

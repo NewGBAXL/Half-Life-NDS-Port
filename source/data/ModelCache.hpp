@@ -37,7 +37,9 @@ namespace hlrt
 
         /// `index`: weapon in hand; -1: none.
         void wield(int index) { wanted_ = index; }
-        /// Do what wield() asked: straight after the vertical blank.
+        /// Do what wield() asked, once a frame: the skin is written into a
+        /// slot of video memory by VramWriter, and the weapon is drawn with
+        /// it once it is all there.
         void apply();
         /// Whether the model can be drawn: not a weapon whose skin is not
         /// in video memory yet.
@@ -46,9 +48,17 @@ namespace hlrt
             return kept_ == nullptr || index >= static_cast<unsigned>(count_) || kept_[index] == 0 ||
                    resident_ == static_cast<int>(index);
         }
-        /// How much video memory the weapons will want that is not taken yet,
-        /// for whoever else shares the memory to leave.
-        int reservedBytes() const;
+        /// The texel bytes of the largest weapon skin (a 4x4 texture: its
+        /// index is half as many again), for the slots it is written to.
+        std::uint32_t largestSkin() const;
+        /// The places a weapon's skin is written to (TextureStream's region;
+        /// `count` of them, 0 to 2, of largestSkin() texel bytes each): one
+        /// for the weapon in hand, one for the next. No slots: weapons are
+        /// drawn bare.
+        void setSlots(void *const *texels, int count);
+        /// The slots are going (the map is left): nothing more is written to
+        /// them, and nothing is drawn from them.
+        void dropSlots();
         /// Models whose skin did not load (not on the card, or no room).
         int bare() const { return bare_; }
 
@@ -58,6 +68,7 @@ namespace hlrt
 
     private:
         void release(bool engineGone);
+        void putAway(std::uint32_t now);
 
         hldata::ModelView *views_ = nullptr;
         std::uint8_t **blocks_ = nullptr;
@@ -65,7 +76,19 @@ namespace hlrt
         NEA_Palette **palettes_ = nullptr;
         std::uint8_t *kept_ = nullptr;
         int wanted_ = -1;
-        int resident_ = -1;
+        int resident_ = -1;     ///< the skin in hand: written, and drawn
+        int residentSlot_ = -1;
+        int writing_ = -1;      ///< the skin being written ...
+        int writingSlot_ = -1;
+        std::uint32_t ticket_ = 0; ///< ... done with this VramWriter ticket
+        struct Slot
+        {
+            void *texels = nullptr;
+            std::uint32_t freeSince = 0; ///< the frame it was let go (TextureStream::blanks)
+            bool used = false;
+        };
+        Slot slots_[2];
+        int slotCount_ = 0;
         int count_ = 0;
         int missing_ = 0;
         int bare_ = 0;

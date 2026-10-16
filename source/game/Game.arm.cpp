@@ -1,3 +1,4 @@
+#include "data/TextureStream.hpp"
 #include "net/NetGame.hpp"
 #include "game/Game.hpp"
 
@@ -634,7 +635,13 @@ namespace hlrt
         {
             const bool suit = (player.state.inv.have & kHaveSuit) != 0;
             if (input.lampPressed && player.state.health > 0 && lampToggle(lamp, suit))
+            {
                 sound.ui(kUiSoundLamp);
+                // (A build that measures says how the textures stood at each
+                // switch of the lamp: the lamp has been seen to leave places
+                // flat on a console.)
+                textureStream.report(lamp.on ? "lamp on" : "lamp off");
+            }
             if (lampTick(lamp, ms))
                 sound.ui(kUiSoundLamp);
             lampLit = false;

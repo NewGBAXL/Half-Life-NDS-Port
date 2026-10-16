@@ -52,7 +52,11 @@ namespace hlrt
         bool use(unsigned index) const;
         /// TextureStream's: the texture has been read into video memory,
         /// or has been let go (back to its flat colour).
+        /// (Attaching over a texture still attached lets that one go first.)
         void attachStreamed(unsigned index, NEA_Material *material, NEA_Palette *palette);
+        /// Back to the flat colour at once; what it had is handed to
+        /// TextureStream::retire, which frees it once no picture on the
+        /// screen can still be drawing it.
         void detachStreamed(unsigned index);
         int streamedCount() const { return streamedCount_; }
         /// The same choice as two command parameters, for a display list

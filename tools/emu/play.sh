@@ -36,6 +36,11 @@ SCRIPT="${2:-sleep 5}"
 # instance), started on the same ROM from its recent list. The first is at
 # the left (its touch screen from 0,222), the second at x 320 (from 320,222);
 # "focus 0" or "focus 1" says which one the keys go to.
+# (One console: its window is put where the coordinates in README.md are
+# measured from -- Qt does not always open it there.)
+if [ "${EMU_INSTANCES:-1}" != 2 ]; then
+    SCRIPT="sleep 1.5; place 0 0 25; $SCRIPT"
+fi
 if [ "${EMU_INSTANCES:-1}" = 2 ]; then
     EMU_SCREEN="${EMU_SCREEN:-640x480}"
     SCRIPT="sleep 6; place 0 0 0; sleep 0.5; tap 75 15; sleep 0.8; tap 120 387; sleep 0.8; tap 300 387; sleep 3; place 1 320 0; sleep 1; tap 340 15; sleep 1; tap 420 47; sleep 1; tap 200 47; sleep 12; $SCRIPT"

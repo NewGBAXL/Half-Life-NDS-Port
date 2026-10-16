@@ -69,6 +69,24 @@ namespace hldata
             return cap - prevEnd >= size ? static_cast<long>(prevEnd) : -1;
         }
 
+        /// A block at `off` exactly (the caller knows it is free): for what
+        /// is never to be placed over. The index, or -1.
+        int reserveAt(std::uint32_t off, std::uint32_t size, int owner)
+        {
+            size = round(size);
+            if (n >= MaxBlocks || size == 0 || off > cap || cap - off < size)
+                return -1;
+            int at = 0;
+            while (at < n && b[at].off < off)
+                ++at;
+            for (int j = n; j > at; --j)
+                b[j] = b[j - 1];
+            b[at] = {off, size, owner};
+            ++n;
+            used += size;
+            return at;
+        }
+
         /// The index of the new block, or -1.
         int alloc(std::uint32_t size, int owner)
         {
@@ -172,6 +190,8 @@ namespace hldata
             std::memset(state_, 0, sizeof(state_));
             std::memset(pinned_, 0, sizeof(pinned_));
             std::memset(score_, 0, sizeof(score_));
+            std::memset(recent_, 0, sizeof(recent_));
+            dropped_ = 0;
             for (int i = 0; i < count_; ++i)
                 info_[i] = info[i];
             texels_.init(texelBytes);
@@ -179,6 +199,13 @@ namespace hldata
             queueSize_ = queuePos_ = 0;
             resident_ = loads_ = evictions_ = 0;
         }
+
+        /// The texel area is in pieces of memory one after another: a block
+        /// of kBarrierBytes at `offset`, owned by no texture, which nothing is
+        /// placed over or makes way for, keeps a texture from lying across
+        /// two. (Call after init, before anything is placed.)
+        static constexpr std::uint32_t kBarrierBytes = 32;
+        bool addBarrier(std::uint32_t offset) { return texels_.reserveAt(offset, kBarrierBytes, kBarrierOwner) >= 0; }
 
         int count() const { return count_; }
         StreamState state(int id) const { return state_[id]; }
@@ -225,7 +252,15 @@ namespace hldata
             return true;
         }
 
-        void clearScores() { std::memset(score_, 0, sizeof(score_[0]) * static_cast<std::size_t>(count_)); }
+        void clearScores()
+        {
+            std::memset(score_, 0, sizeof(score_[0]) * static_cast<std::size_t>(count_));
+            std::memset(recent_, 0, sizeof(recent_[0]) * static_cast<std::size_t>(count_));
+        }
+        /// `id` is in the picture that is on the screen, or the one before:
+        /// whatever else is wanted, it does not make way. (Its memory would
+        /// be written while a picture that shows it is still being drawn.)
+        void setRecent(int id) { recent_[id] = true; }
         void addScore(int id, std::uint32_t amount)
         {
             const std::uint32_t sum = score_[id] + amount;
@@ -336,6 +371,20 @@ namespace hldata
                 palettes_.cap = palettes_.used;
         }
 
+        /// What the areas really hold now, learned again: never less than
+        /// what is in them. (After a refusal the plan takes the areas to be
+        /// full; once loads go in again it asks the memory itself what it
+        /// has, and the room comes back.)
+        void setCapacity(std::uint32_t texelBytes, std::uint32_t paletteBytes)
+        {
+            texels_.cap = texelBytes > texels_.used ? texelBytes : texels_.used;
+            palettes_.cap = paletteBytes > palettes_.used ? paletteBytes : palettes_.used;
+        }
+
+        /// How often a plan stopped making way because its list of what
+        /// made way was full (the rest waits for the next plan).
+        int dropped() const { return dropped_; }
+
         /// Failed textures are tried again (at the next demand pass).
         void retryFailed()
         {
@@ -389,10 +438,12 @@ namespace hldata
                 --resident_;
         }
 
+        static constexpr int kBarrierOwner = -1;
+
         bool evictable(int owner, std::uint32_t wanted) const
         {
-            return owner >= 0 && owner < count_ && !pinned_[owner] && state_[owner] == StreamState::Resident &&
-                   static_cast<std::uint64_t>(score_[owner]) * 2 < wanted;
+            return owner >= 0 && owner < count_ && !pinned_[owner] && !recent_[owner] &&
+                   state_[owner] == StreamState::Resident && static_cast<std::uint64_t>(score_[owner]) * 2 < wanted;
         }
 
         /// Evict what may be, lowest score first, until `id` would fit: or
@@ -428,11 +479,19 @@ namespace hldata
                 }
                 if (victim < 0)
                     return false;
+                // (Every texture that makes way is told to the caller, which
+                // lets its memory go: one it could not be told of would stay
+                // there, the plan counting its room as free. So when the list
+                // is full, nothing more is evicted in this plan.)
+                if (evictedCount >= maxEvicted)
+                {
+                    ++dropped_;
+                    return false;
+                }
                 release(victim);
                 state_[victim] = StreamState::Absent;
                 ++evictions_;
-                if (evictedCount < maxEvicted)
-                    evicted[evictedCount++] = victim;
+                evicted[evictedCount++] = victim;
             }
             return false;
         }
@@ -445,6 +504,8 @@ namespace hldata
         StreamState state_[kStreamMaxTextures];
         bool pinned_[kStreamMaxTextures];
         std::uint32_t score_[kStreamMaxTextures];
+        bool recent_[kStreamMaxTextures];
+        int dropped_ = 0;
         ByteArena<kStreamMaxBlocks> texels_, palettes_;
         // (Members, not locals: the console's stack is small.)
         bool evictTexel_[kStreamMaxBlocks];
