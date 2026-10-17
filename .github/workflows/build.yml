@@ -43,7 +43,6 @@ jobs:
               + '    } // namespace\n\n    '
               + raw[idx_end:]
           )
-          new_code = new_code.replace('std::system(command.c_str())', 'std::system(("\"" + command + "\"").c_str())')
           open(p_tex, "w", encoding="utf-8").write(new_code)
 
           p_at = "tools/hlds-convert/core/src/AtomicWrite.cpp"
@@ -52,7 +51,7 @@ jobs:
           assert target in raw_at, "rename target not found"
           new_at = raw_at.replace(
               target,
-              'std::filesystem::remove(path, ec); ec.clear(); std::filesystem::rename(temp, path, ec); if (ec && std::filesystem::exists(path)) { std::filesystem::remove(temp, ec); return true; }'
+              'std::filesystem::remove(path, ec); ec.clear(); std::filesystem::rename(temp, path, ec); if (ec && std::filesystem::exists(path, ec)) { std::filesystem::remove(temp, ec); return true; }'
           )
           open(p_at, "w", encoding="utf-8").write(new_at)
           print("Patched successfully!")
