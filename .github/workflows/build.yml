@@ -1,32 +1,48 @@
-name: Build Half-Life NDS
+name: Build Windows Converter
 
 on:
   workflow_dispatch:
   push:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-windows:
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Make scripts executable
-        run: chmod +x *.sh
+      - name: Set up MSYS2 MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            git
 
-      - name: Fix Dockerfile for GitHub Actions (remove API rate limit trigger)
-        run: sed -i '/api\.github\.com/d' docker/Dockerfile
-
-      - name: Build ROM and Converter
+      - name: Build ptexconv
+        shell: msys2 {0}
         run: |
-          ./docker.sh ./make.sh
-          ./docker.sh cmake -S tools/hlds-convert -B build/convert -DHLDS_BUILD_GUI=OFF
-          ./docker.sh cmake --build build/convert -j4
+          git clone https://github.com/blocksds/ptexconv.git
+          gcc -O2 -static ptexconv/src/*.c -lm -o ptexconv.exe
 
-      - name: Upload Artifacts
+      - name: Build hlds-convert
+        shell: msys2 {0}
+        run: |
+          cmake -S tools/hlds-convert -B build-win -G Ninja -DHLDS_BUILD_TESTS=OFF -DHLDS_BUILD_GUI=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static"
+          cmake --build build-win
+
+      - name: Package Windows Tools
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build-win/hlds-convert.exe dist/
+          cp ptexconv.exe dist/
+
+      - name: Upload Windows Tools
         uses: actions/upload-artifact@v4
         with:
-          name: half-life-nds-build
-          path: |
-            half-life-nds-port.nds
-            build/convert/hlds-convert
+          name: hlds-convert-windows
+          path: dist/*
