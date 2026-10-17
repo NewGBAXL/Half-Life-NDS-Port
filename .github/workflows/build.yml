@@ -1,0 +1,19 @@
+ name: Build Half-Life NDS
+    on: [push, workflow_dispatch]
+
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - name: Build ROM & Converter
+            run: |
+              ./docker.sh ./make.sh
+              ./docker.sh cmake -S tools/hlds-convert -B build/convert -DHLDS_BUILD_GUI=OFF
+              ./docker.sh cmake --build build/convert -j4
+          - uses: actions/upload-artifact@v4
+            with:
+              name: half-life-nds-build
+              path: |
+                half-life-nds-port.nds
+                build/convert/hlds-convert
