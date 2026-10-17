@@ -1,32 +1,32 @@
 name: Build Half-Life NDS
 
 on:
-      workflow_dispatch:
-      push:
+  workflow_dispatch:
+  push:
 
-    jobs:
-      build:
-        runs-on: ubuntu-latest
-        steps:
-          - name: Checkout repository
-            uses: actions/checkout@v4
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-          - name: Make scripts executable
-            run: chmod +x *.sh
+      - name: Make scripts executable
+        run: chmod +x *.sh
 
-          - name: Fix Dockerfile for GitHub Actions (remove API rate limit trigger)
-            run: sed -i '/api\.github\.com/d' docker/Dockerfile
+      - name: Fix Dockerfile for GitHub Actions (remove API rate limit trigger)
+        run: sed -i '/api\.github\.com/d' docker/Dockerfile
 
-          - name: Build ROM and Converter
-            run: |
-              ./docker.sh ./make.sh
-              ./docker.sh cmake -S tools/hlds-convert -B build/convert -DHLDS_BUILD_GUI=OFF
-              ./docker.sh cmake --build build/convert -j4
+      - name: Build ROM and Converter
+        run: |
+          ./docker.sh ./make.sh
+          ./docker.sh cmake -S tools/hlds-convert -B build/convert -DHLDS_BUILD_GUI=OFF
+          ./docker.sh cmake --build build/convert -j4
 
-          - name: Upload Artifacts
-            uses: actions/upload-artifact@v4
-            with:
-              name: half-life-nds-build
-              path: |
-                half-life-nds-port.nds
-                build/convert/hlds-convert
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: half-life-nds-build
+          path: |
+            half-life-nds-port.nds
+            build/convert/hlds-convert
