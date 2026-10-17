@@ -20,7 +20,38 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
             git
+
+      - name: Patch Windows issues in hlds-convert
+        shell: msys2 {0}
+        run: |
+          cat << 'EOF' > patch_windows.py
+          import re
+
+          p_tex = "tools/hlds-convert/core/src/TextureEncoder.cpp"
+          c_tex = open(p_tex, "r", encoding="utf-8").read()
+          c_tex = re.sub(
+              r"std::string quoted\(const std::filesystem::path &path\)\s*\{[^}]*\}",
+              'std::string quoted(const std::filesystem::path &path) { return "\\"" + path.generic_string() + "\\""; }',
+              c_tex
+          )
+          c_tex = c_tex.replace(
+              'std::system(command.c_str())',
+              'std::system(("\"" + command + "\"").c_str())'
+          )
+          open(p_tex, "w", encoding="utf-8").write(c_tex)
+
+          p_at = "tools/hlds-convert/core/src/AtomicWrite.cpp"
+          c_at = open(p_at, "r", encoding="utf-8").read()
+          c_at = c_at.replace(
+              'std::filesystem::rename(temp, path, ec);',
+              'std::filesystem::remove(path, ec); ec.clear(); std::filesystem::rename(temp, path, ec); if (ec && std::filesystem::exists(path)) { std::filesystem::remove(temp, ec); return true; }'
+          )
+          open(p_at, "w", encoding="utf-8").write(c_at)
+          print("Patched successfully!")
+          EOF
+          python3 patch_windows.py
 
       - name: Build ptexconv
         shell: msys2 {0}
