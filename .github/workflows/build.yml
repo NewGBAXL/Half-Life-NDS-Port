@@ -43,6 +43,10 @@ jobs:
               + '    } // namespace\n\n    '
               + raw[idx_end:]
           )
+          new_code = new_code.replace(
+              'std::system(command.c_str())',
+              r'std::system(("\"" + command + "\"").c_str())'
+          )
           open(p_tex, "w", encoding="utf-8").write(new_code)
 
           p_at = "tools/hlds-convert/core/src/AtomicWrite.cpp"
