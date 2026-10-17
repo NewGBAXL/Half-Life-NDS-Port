@@ -411,7 +411,25 @@ namespace
     /// name in both): ridden up from one map into the next, it carries the
     /// player on to the top of the next -- it does not start again at the
     /// bottom of the shaft, from under their feet.
-    void testTheLift(const char *dir)
+    /// The lift, by its own name; and with `asOld`, every train's global
+    /// name forgotten, as in a map converted before it was kept.
+    int liftOf(Game &g, bool asOld)
+    {
+        int lift = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            auto &record = const_cast<LogicRecord &>(g.view.logic[i]);
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::Train))
+                continue;
+            if (asOld)
+                record.extra[3] = 0;
+            if (record.name != 0 && g.view.nameHashes[record.name] == nameHash("c1a3_lift01"))
+                lift = static_cast<int>(i);
+        }
+        return lift;
+    }
+
+    void testTheLift(const char *dir, bool asOld)
     {
         Globals globals;
         auto game = std::make_unique<Game>();
@@ -419,15 +437,10 @@ namespace
         if (!game->bsp.load(std::string(dir) + "/maps/c1a3d.bsp", error))
             return;
         finish(*game, &globals);
-        int lift = -1;
-        for (std::uint32_t i = 0; i < game->view.logicCount && lift < 0; ++i)
-        {
-            if (game->view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Train) &&
-                game->view.logic[i].extra[3] != 0)
-                lift = static_cast<int>(i);
-        }
-        check(game->ok && lift >= 0, "c1a3d's lift is known by a global name");
-        if (!game->ok || lift < 0)
+        const int lift = game->ok ? liftOf(*game, asOld) : -1;
+        check(lift >= 0 && (asOld || game->view.logic[lift].extra[3] != 0),
+              "c1a3d's lift is there (known by a global name, in a map converted now)");
+        if (lift < 0)
             return;
         // Stood on it, in the middle, and it is set going.
         {
@@ -454,6 +467,7 @@ namespace
             if (!next->bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error))
                 return;
             finish(*next, &globals);
+            liftOf(*next, asOld);
             applyArrival(next->logic, next->view.landmarks, next->view.landmarkCount, next->view.nameHashes,
                          next->view.nameCount, next->player, arrival);
             game = std::move(next);
@@ -462,13 +476,11 @@ namespace
         check(crossed, "ridden up, the lift takes the player into c1a3a");
         if (!crossed)
             return;
-        int up = -1;
-        for (std::uint32_t i = 0; i < game->view.logicCount && up < 0; ++i)
-        {
-            if (game->view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Train) &&
-                game->view.logic[i].extra[3] != 0)
-                up = static_cast<int>(i);
-        }
+        const int up = liftOf(*game, asOld);
+        check(up >= 0 && (asOld || (game->view.brushes[game->view.logic[up].brush].flags & kBrushRoams)),
+              "c1a3a's lift is there, and (converted now) seen wherever it goes");
+        // (The lift that came is that one: on its way up.)
+        check(up >= 0 && game->states[up].move == MoveState::GoingUp, "the lift that came up is c1a3a's lift");
         const fx arrivedAt = game->player.origin[2];
         double worstBelow = 0;
         bool backDown = false;
@@ -507,7 +519,8 @@ namespace
         }
         check(ride(dir, 2, Passenger::Idle, true), "... and with a save and a load on the way");
         testTheGuard(dir);
-        testTheLift(dir);
+        testTheLift(dir, false);
+        testTheLift(dir, true); // (maps from a converter before the lift's global name was kept)
     }
 } // namespace
 

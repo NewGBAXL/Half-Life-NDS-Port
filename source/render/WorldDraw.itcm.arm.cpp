@@ -54,8 +54,9 @@ namespace hlrt
         stats_.cutDistance = 0;
         // The models have been costed already (ModelDraw::plan): the world
         // has what they leave.
-        const int polygonBudget = this->polygonBudget() - modelPolygons_;
-        const int vertexBudget = this->vertexBudget() - modelVertices_;
+        // (... and the brushes, whose share is set aside too: planBrushes.)
+        const int polygonBudget = this->polygonBudget() - modelPolygons_ - brushPolygons_;
+        const int vertexBudget = this->vertexBudget() - modelVertices_ - brushVertices_;
 
         int sp = 0;
         walkStack[sp++] = static_cast<std::int16_t>(view.models[0].headNode);
@@ -337,6 +338,7 @@ namespace hlrt
             // (... and the marks and small things there are: nothing, with
             // none.)
             effectDraw.reserve(modelPolygons_, modelVertices_);
+            planBrushes();
             walk();
             // ... and the models' share is counted with the world's from here
             // on, so that the brushes are held to what is really left.

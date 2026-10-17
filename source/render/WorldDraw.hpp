@@ -172,8 +172,22 @@ namespace hlrt
         void emit();
         void emitList();
         void finishList();
+        /// The brush entities this pass draws, chosen before the world is
+        /// walked and their cost set aside (up to a quarter of the pass): a
+        /// crate in front of the eye is not what the far end of a heavy view
+        /// leaves no room for.
+        void planBrushes();
+        /// ... and drawn, each whole or not at all.
         void drawBrushes();
         void drawBrush(std::uint32_t index, int polygonId);
+        /// The eye in brush `index`'s own space (and its turn, if it is
+        /// turned: true).
+        bool brushEye(std::uint32_t index, hldata::fx *eye, std::int32_t *axes) const;
+        /// What brush `index` costs to draw from where the eye is: the
+        /// surfaces that face it.
+        void brushCost(std::uint32_t index, int &polygons, int &vertices) const;
+        int brushPolygons_ = 0; ///< what the world leaves for the brushes this pass
+        int brushVertices_ = 0;
         /// The texture matrix as liquids want it (it is also what slides a
         /// conveyor's belt, which puts this back when it has done).
         void sway();

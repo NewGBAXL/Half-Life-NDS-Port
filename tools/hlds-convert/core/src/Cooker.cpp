@@ -805,6 +805,12 @@ namespace hlds
                 if (rec.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) &&
                     rec.brush != kNoBrush)
                     level.brushes[rec.brush].flags |= kBrushRoams | kBrushHasPivot;
+                // A lift known by name in the next map goes on along that
+                // map's route, which need not be its own (c1a3a's goes nowhere
+                // past halfway): it is seen wherever it is.
+                if (rec.kind == static_cast<std::uint8_t>(LogicKind::Train) && rec.extra[3] != 0 &&
+                    rec.brush != kNoBrush)
+                    level.brushes[rec.brush].flags |= kBrushRoams;
                 // A box goes wherever it is pushed.
                 if (rec.kind == static_cast<std::uint8_t>(LogicKind::Pushable) &&
                     rec.brush != kNoBrush)

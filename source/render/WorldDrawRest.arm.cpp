@@ -143,23 +143,17 @@ namespace hlrt
         }
     }
 
-    void WorldDraw::drawBrush(std::uint32_t index, int polygonId)
+    bool WorldDraw::brushEye(std::uint32_t index, fx *eye, std::int32_t *axes) const
     {
-        const std::uint8_t look =
-            brushState_ != nullptr && brushState_[index].look < kBrushUnseen ? brushState_[index].look : 0;
-        const LevelView &view = level.view;
-        const Brush &brush = view.brushes[index];
-        const Model &model = view.models[brush.model];
+        const Brush &brush = level.view.brushes[index];
         const fx *pos = brushState_ != nullptr ? brushState_[index].pos : brush.origin;
-
         // The eye in the brush's own space: its surfaces and their planes
         // never move, the brush does.
         static const std::uint16_t kNotTurned[3] = {0, 0, 0};
-        const std::uint16_t *angles =
-            brushState_ != nullptr ? brushState_[index].angles : kNotTurned;
+        const std::uint16_t *angles = brushState_ != nullptr ? brushState_[index].angles : kNotTurned;
         const bool turned = angles[0] != 0 || angles[1] != 0 || angles[2] != 0;
-        fx eye[3] = {camera.pos[0] - pos[0], camera.pos[1] - pos[1], camera.pos[2] - pos[2]};
-        std::int32_t axes[9]; // Q30
+        for (int a = 0; a < 3; ++a)
+            eye[a] = camera.pos[a] - pos[a];
         if (turned)
         {
             // ... and turned back the way the brush is turned: by the
@@ -174,6 +168,40 @@ namespace hlrt
                                          kNormalShift);
             }
         }
+        return turned;
+    }
+
+    void WorldDraw::brushCost(std::uint32_t index, int &polygons, int &vertices) const
+    {
+        const LevelView &view = level.view;
+        const Model &model = view.models[view.brushes[index].model];
+        fx eye[3];
+        std::int32_t axes[9];
+        brushEye(index, eye, axes);
+        polygons = vertices = 0;
+        const Surface *surface = view.surfaces + model.firstSurface;
+        for (int n = model.surfaceCount; n > 0; --n, ++surface)
+        {
+            const std::uint32_t planeIndex = surface->planeRef & kSurfacePlaneMask;
+            const fx side = planeDistance(view.planes[planeIndex], view.planeTypes[planeIndex], eye);
+            if ((surface->planeRef & kSurfacePlaneBack) ? side >= 0 : side <= 0)
+                continue;
+            polygons += surface->polygons;
+            vertices += surface->vertices;
+        }
+    }
+
+    void WorldDraw::drawBrush(std::uint32_t index, int polygonId)
+    {
+        const std::uint8_t look =
+            brushState_ != nullptr && brushState_[index].look < kBrushUnseen ? brushState_[index].look : 0;
+        const LevelView &view = level.view;
+        const Brush &brush = view.brushes[index];
+        const Model &model = view.models[brush.model];
+        const fx *pos = brushState_ != nullptr ? brushState_[index].pos : brush.origin;
+        fx eye[3];
+        std::int32_t axes[9]; // Q30
+        const bool turned = brushEye(index, eye, axes);
 
         switch (static_cast<RenderClass>(brush.renderClass))
         {
@@ -285,19 +313,30 @@ namespace hlrt
             glPopMatrix(1);
     }
 
-    void WorldDraw::drawBrushes()
+    namespace
+    {
+        // This pass's brushes, as planBrushes chose them: the solid ones in
+        // the map's order, and the see-through ones far to near (a room with
+        // more of them in view at once than this drops the nearest ones);
+        // each with what it costs (polygons, vertices).
+        constexpr int kMaxSolid = 128;
+        std::uint16_t solidIndex[kMaxSolid];
+        std::int16_t solidCost[kMaxSolid][2];
+        int solidCount = 0;
+        constexpr int kMaxLater = 64;
+        std::uint16_t laterIndex[kMaxLater];
+        std::int32_t laterDistance[kMaxLater];
+        std::int16_t laterCost[kMaxLater][2];
+        int laterCount = 0;
+    } // namespace
+
+    void WorldDraw::planBrushes()
     {
         const LevelView &view = level.view;
         const std::uint16_t frame = visFrame_;
-
-        // See-through brushes wait here to be sent far to near. A room with
-        // more of them in view at once than this drops the nearest ones.
-        constexpr int kMaxLater = 64;
-        static std::uint16_t laterIndex[kMaxLater];
-        static std::int32_t laterDistance[kMaxLater];
-        int later = 0;
-        int drawn = 0;
-        lampBrushCount_ = 0;
+        solidCount = 0;
+        laterCount = 0;
+        int polygons = 0, vertices = 0;
 
         for (std::uint32_t i = 0; i < view.brushCount; ++i)
         {
@@ -380,31 +419,75 @@ namespace hlrt
             const std::uint8_t look = brushState_ != nullptr ? brushState_[i].look : 0;
             if (look == kBrushUnseen)
                 continue;
+            int costPolygons = 0, costVertices = 0;
+            brushCost(i, costPolygons, costVertices);
+            if (costPolygons == 0)
+                continue; // (nothing of it faces the eye)
             if (brush.renderClass == static_cast<std::uint8_t>(RenderClass::Opaque) && look == 0)
             {
-                drawBrush(i, 0);
-                if (lampBrushCount_ < kMaxLampBrushes)
-                    lampBrushes_[lampBrushCount_++] = static_cast<std::uint16_t>(i);
-                ++drawn;
+                if (solidCount == kMaxSolid)
+                    continue;
+                solidIndex[solidCount] = static_cast<std::uint16_t>(i);
+                solidCost[solidCount][0] = static_cast<std::int16_t>(costPolygons);
+                solidCost[solidCount][1] = static_cast<std::int16_t>(costVertices);
+                ++solidCount;
+                polygons += costPolygons;
+                vertices += costVertices;
                 continue;
             }
-            if (later == kMaxLater)
+            if (laterCount == kMaxLater)
                 continue;
+            polygons += costPolygons;
+            vertices += costVertices;
             // Insert by distance, farthest first. Halved coordinates keep the
             // squares inside 32 bits across the whole map.
             const std::int32_t distance = (centre[0] >> 1) * (centre[0] >> 1) +
                                           (centre[1] >> 1) * (centre[1] >> 1) +
                                           (centre[2] >> 1) * (centre[2] >> 1);
-            int at = later++;
+            int at = laterCount++;
             while (at > 0 && laterDistance[at - 1] < distance)
             {
                 laterIndex[at] = laterIndex[at - 1];
                 laterDistance[at] = laterDistance[at - 1];
+                laterCost[at][0] = laterCost[at - 1][0];
+                laterCost[at][1] = laterCost[at - 1][1];
                 --at;
             }
             laterIndex[at] = static_cast<std::uint16_t>(i);
             laterDistance[at] = distance;
+            laterCost[at][0] = static_cast<std::int16_t>(costPolygons);
+            laterCost[at][1] = static_cast<std::int16_t>(costVertices);
         }
+
+        // Set aside for them, out of what the world would have: at most a
+        // quarter of the pass (a room of nothing but brushes is still a
+        // room).
+        brushPolygons_ = polygons < polygonBudget() / 4 ? polygons : polygonBudget() / 4;
+        brushVertices_ = vertices < vertexBudget() / 4 ? vertices : vertexBudget() / 4;
+    }
+
+    void WorldDraw::drawBrushes()
+    {
+        int drawn = 0;
+        lampBrushCount_ = 0;
+        // Whole, or (when even their share has run out) not at all.
+        auto fits = [&](const std::int16_t *cost)
+        {
+            if (stats_.polygons + cost[0] <= polygonBudget() && stats_.vertices + cost[1] <= vertexBudget())
+                return true;
+            stats_.budgetHit = true;
+            return false;
+        };
+        for (int n = 0; n < solidCount; ++n)
+        {
+            if (!fits(solidCost[n]))
+                continue;
+            drawBrush(solidIndex[n], 0);
+            if (lampBrushCount_ < kMaxLampBrushes)
+                lampBrushes_[lampBrushCount_++] = solidIndex[n];
+            ++drawn;
+        }
+        const int later = laterCount;
 
         // The see-through ones and the effects (EffectDraw) together, far
         // to near: both lists are in that order already. Each thing gets a
@@ -428,8 +511,12 @@ namespace hlrt
             id = id % 55 + 1;
             if (e >= effects || (k < later && laterDistance[k] >= effectDraw.distance(e)))
             {
-                drawBrush(laterIndex[k++], id);
-                ++drawn;
+                if (fits(laterCost[k]))
+                {
+                    drawBrush(laterIndex[k], id);
+                    ++drawn;
+                }
+                ++k;
             }
             else
             {

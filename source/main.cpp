@@ -143,6 +143,15 @@ namespace
         Failed,    ///< the old map is gone and the new one is not there
     };
 
+    /// Until what was last said on the touch screen gives way to the pad
+    /// again (a blank count; 0: nothing is waiting to).
+    std::uint32_t saidUntil = 0;
+    void say(const char *line, const char *under = "")
+    {
+        hlrt::bottomScreen.showMessage(line, under);
+        saidUntil = Global::vblanks() + 90;
+    }
+
     /// Load `name`, in place of whatever is loaded. With an `arrival` the
     /// player is put where it says; without, at the map's own start.
     ///
@@ -245,21 +254,21 @@ namespace
             hlrt::player.debugTrack = -1;
         }
         hlrt::bottomScreen.showPad();
+        // Maps converted by an older converter still load, but without what
+        // was fixed since in how a map is converted: said, once.
+        static bool toldOld = false;
+        if (header.version < hldata::kLevelVersion && !toldOld)
+        {
+            toldOld = true;
+            say("OLD MAP DATA", "convert the game again for the latest fixes");
+            saidUntil = Global::vblanks() + 300;
+        }
         // Down again while the picture gives way to the map's first.
         hlrt::screenFade.curtainDown();
         hlrt::hudDraw.hideLoading();
         hlrt::frameFreeze.thaw();
         hlrt::screenFade.curtainUp(curtainFrames());
         return LoadResult::Ok;
-    }
-
-    /// Until what was last said on the touch screen gives way to the pad
-    /// again (a blank count; 0: nothing is waiting to).
-    std::uint32_t saidUntil = 0;
-    void say(const char *line, const char *under = "")
-    {
-        hlrt::bottomScreen.showMessage(line, under);
-        saidUntil = Global::vblanks() + 90;
     }
 
     /// The game as it is, into `slot` (a kSlot*). Said on the screen either

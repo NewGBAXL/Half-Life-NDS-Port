@@ -72,6 +72,16 @@ namespace hldata
     /// Arrival keeps its form.)
     inline constexpr std::uint32_t kTrainHeadingVisitor = nameHash("#train heading");
 
+    /// What a func_train is known by across maps: its global name; or, in a
+    /// map converted before that was kept (extra[3] 0), its own name -- the
+    /// lift is called the same on both sides.
+    inline std::uint32_t trainCrossName(const LogicWorld &w, const LogicRecord &train)
+    {
+        if (train.extra[3] != 0)
+            return train.extra[3];
+        return w.nameHashes != nullptr && train.name != 0 ? w.nameHashes[train.name] : 0;
+    }
+
     /// How near the landmark an actor has to be to come along.
     inline constexpr fx kVisitorRange = fxFromInt(2048);
 
@@ -201,7 +211,7 @@ namespace hldata
         for (int i = 0; i < w.recordCount && here != nullptr && arrival.train == 0; ++i)
         {
             const LogicRecord &train = w.records[i];
-            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || train.extra[3] == 0 ||
+            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || trainCrossName(w, train) == 0 ||
                 train.brush == kNoBrush)
                 continue;
             // On it: what they stand on, or (in the middle of a jump) just
@@ -216,7 +226,7 @@ namespace hldata
                 continue;
             const LogicState &state = w.states[i];
             const BrushState &car = w.brushStates[train.brush];
-            arrival.train = train.extra[3];
+            arrival.train = trainCrossName(w, train);
             for (int a = 0; a < 3; ++a)
                 arrival.trainOffset[a] =
                     car.pos[a] + train.move[a] - w.brushes[train.brush].origin[a] - here->origin[a];
@@ -243,7 +253,7 @@ namespace hldata
                 Arrival::Visitor &mark = arrival.visitors[slot];
                 mark = Arrival::Visitor();
                 mark.model = kTrainHeadingVisitor;
-                mark.name = train.extra[3];
+                mark.name = arrival.train;
                 for (int a = 0; a < 3; ++a)
                     mark.offset[a] = w.corners[heading].pos[a] - here->origin[a];
             }
@@ -375,8 +385,12 @@ namespace hldata
         for (int i = 0; i < w.recordCount && arrival.train != 0; ++i)
         {
             const LogicRecord &train = w.records[i];
-            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || train.extra[3] != arrival.train ||
-                train.brush == kNoBrush)
+            // (By its global name; or, either side converted before that was
+            // kept, by its own.)
+            if (train.kind != static_cast<std::uint8_t>(LogicKind::Train) || train.brush == kNoBrush ||
+                (train.extra[3] != arrival.train &&
+                 !(nameHashes != nullptr && train.name != 0 && train.name < nameCount &&
+                   nameHashes[train.name] == arrival.train)))
                 continue;
             fx pos[3];
             for (int a = 0; a < 3; ++a)
