@@ -1,8 +1,10 @@
 name: Build Half-Life NDS
+
 on:
       workflow_dispatch:
       push:
-jobs:
+
+    jobs:
       build:
         runs-on: ubuntu-latest
         steps:
@@ -11,6 +13,9 @@ jobs:
 
           - name: Make scripts executable
             run: chmod +x *.sh
+
+          - name: Fix Dockerfile for GitHub Actions (remove API rate limit trigger)
+            run: sed -i '/api\.github\.com/d' docker/Dockerfile
 
           - name: Build ROM and Converter
             run: |
