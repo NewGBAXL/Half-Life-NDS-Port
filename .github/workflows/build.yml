@@ -20,38 +20,43 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-python
             git
 
       - name: Patch Windows issues in hlds-convert
-        shell: msys2 {0}
+        shell: bash
         run: |
-          cat << 'EOF' > patch_windows.py
-          import re
-
+          python - << 'EOF'
           p_tex = "tools/hlds-convert/core/src/TextureEncoder.cpp"
-          c_tex = open(p_tex, "r", encoding="utf-8").read()
-          c_tex = re.sub(
-              r"std::string quoted\(const std::filesystem::path &path\)\s*\{[^}]*\}",
-              'std::string quoted(const std::filesystem::path &path) { return "\\"" + path.generic_string() + "\\""; }',
-              c_tex
+          raw = open(p_tex, "r", encoding="utf-8").read()
+          start_marker = "std::string quoted(const std::filesystem::path &path)"
+          end_marker = "PtexconvEncoder::PtexconvEncoder"
+          idx_start = raw.find(start_marker)
+          idx_end = raw.find(end_marker)
+          assert idx_start != -1 and idx_end != -1, "markers not found"
+
+          new_code = (
+              raw[:idx_start]
+              + 'std::string quoted(const std::filesystem::path &path)\n'
+              + '        {\n'
+              + '            return "\\"" + path.generic_string() + "\\"";\n'
+              + '        }\n'
+              + '    } // namespace\n\n    '
+              + raw[idx_end:]
           )
-          c_tex = c_tex.replace(
-              'std::system(command.c_str())',
-              'std::system(("\"" + command + "\"").c_str())'
-          )
-          open(p_tex, "w", encoding="utf-8").write(c_tex)
+          new_code = new_code.replace('std::system(command.c_str())', 'std::system(("\"" + command + "\"").c_str())')
+          open(p_tex, "w", encoding="utf-8").write(new_code)
 
           p_at = "tools/hlds-convert/core/src/AtomicWrite.cpp"
-          c_at = open(p_at, "r", encoding="utf-8").read()
-          c_at = c_at.replace(
-              'std::filesystem::rename(temp, path, ec);',
+          raw_at = open(p_at, "r", encoding="utf-8").read()
+          target = 'std::filesystem::rename(temp, path, ec);'
+          assert target in raw_at, "rename target not found"
+          new_at = raw_at.replace(
+              target,
               'std::filesystem::remove(path, ec); ec.clear(); std::filesystem::rename(temp, path, ec); if (ec && std::filesystem::exists(path)) { std::filesystem::remove(temp, ec); return true; }'
           )
-          open(p_at, "w", encoding="utf-8").write(c_at)
+          open(p_at, "w", encoding="utf-8").write(new_at)
           print("Patched successfully!")
           EOF
-          python3 patch_windows.py
 
       - name: Build ptexconv
         shell: msys2 {0}
