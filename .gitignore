@@ -79,6 +79,8 @@ __pycache__/
 helpSrc/
 # The CodeGraph index, rebuilt from the source.
 .codegraph/
+
+.claude/
 # architectds emits its ninja files at the repo root
 build.ninja
 .ninja_deps
