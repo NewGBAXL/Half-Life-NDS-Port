@@ -1,0 +1,87 @@
+name: Build Windows Converter
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            git
+
+      - name: Patch Windows issues in hlds-convert
+        shell: bash
+        run: |
+          python - << 'EOF'
+          p_tex = "tools/hlds-convert/core/src/TextureEncoder.cpp"
+          raw = open(p_tex, "r", encoding="utf-8").read()
+          start_marker = "std::string quoted(const std::filesystem::path &path)"
+          end_marker = "PtexconvEncoder::PtexconvEncoder"
+          idx_start = raw.find(start_marker)
+          idx_end = raw.find(end_marker)
+          assert idx_start != -1 and idx_end != -1, "markers not found"
+
+          new_code = (
+              raw[:idx_start]
+              + 'std::string quoted(const std::filesystem::path &path)\n'
+              + '        {\n'
+              + '            return "\\"" + path.generic_string() + "\\"";\n'
+              + '        }\n'
+              + '    } // namespace\n\n    '
+              + raw[idx_end:]
+          )
+          new_code = new_code.replace(
+              'std::system(command.c_str())',
+              r'std::system(("\"" + command + "\"").c_str())'
+          )
+          open(p_tex, "w", encoding="utf-8").write(new_code)
+
+          p_at = "tools/hlds-convert/core/src/AtomicWrite.cpp"
+          raw_at = open(p_at, "r", encoding="utf-8").read()
+          target = 'std::filesystem::rename(temp, path, ec);'
+          assert target in raw_at, "rename target not found"
+          new_at = raw_at.replace(
+              target,
+              'std::filesystem::remove(path, ec); ec.clear(); std::filesystem::rename(temp, path, ec); if (ec && std::filesystem::exists(path, ec)) { std::filesystem::remove(temp, ec); return true; }'
+          )
+          open(p_at, "w", encoding="utf-8").write(new_at)
+          print("Patched successfully!")
+          EOF
+
+      - name: Build ptexconv
+        shell: msys2 {0}
+        run: |
+          git clone https://github.com/blocksds/ptexconv.git
+          gcc -O2 -static ptexconv/src/*.c -lm -o ptexconv.exe
+
+      - name: Build hlds-convert
+        shell: msys2 {0}
+        run: |
+          cmake -S tools/hlds-convert -B build-win -G Ninja -DHLDS_BUILD_TESTS=OFF -DHLDS_BUILD_GUI=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static"
+          cmake --build build-win
+
+      - name: Package Windows Tools
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build-win/hlds-convert.exe dist/
+          cp ptexconv.exe dist/
+
+      - name: Upload Windows Tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: hlds-convert-windows
+          path: dist/*
