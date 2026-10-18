@@ -23,6 +23,10 @@ namespace hlrt
     {
     public:
         hldata::PlayerState state;
+        /// What they carry of the weapons that came later (state.arsenal
+        /// points here): spawn() empties it, as it empties the rest; a level
+        /// change keeps it (main.cpp's loadLevel), a save has it.
+        hldata::Arsenal arsenal;
         /// What moves the view besides the stylus, and what being hurt
         /// shows (shared/HlView.hpp).
         hldata::ViewState view;

@@ -26,6 +26,7 @@
 #include <yas/std_types.hpp>
 
 #include "HlLevel.hpp"
+#include "HlPlayerMove.hpp"
 
 namespace hldata
 {
@@ -89,6 +90,12 @@ namespace hldata
         /// then begun again, with only what is above put right.
         std::vector<std::uint8_t> state;
 
+        /// What they carry of the weapons that came later: after all the rest,
+        /// written by writeSave and read by readSave only when it is there (a
+        /// save of version 7 or before has none: then nothing of these). Not
+        /// part of serialize(), which is the rest, as it always was.
+        Arsenal arsenal;
+
         template <class Ar>
         void serialize(Ar &ar)
         {
@@ -100,15 +107,18 @@ namespace hldata
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 7;
+    inline constexpr std::uint16_t kSaveVersion = 8;
     /// The oldest save format this build can read: 6.
     /// Note some fields in save format 6 are unreadable.
     /// kSaveMinReader is the oldest build that can read what this one writes;
     /// it is stored in each save as minReader. Raise both when a change would
     /// make an older reader misread a save; leave them alone when an older
     /// reader would still read it correctly.
+    /// 7 -> 8: the Arsenal after the rest (a version 7 save has none, and is
+    /// read as before); a build before 8 would not know the weapons it
+    /// names, so it is the oldest that reads one.
     inline constexpr std::uint16_t kSaveMinVersion = 6;
-    inline constexpr std::uint16_t kSaveMinReader = 7;
+    inline constexpr std::uint16_t kSaveMinReader = 8;
     /// Whether this build can read a save with these header values: its
     /// version is one we still read, its minReader is not newer than this
     /// build, and the maps it was made against are still compatible
@@ -216,6 +226,8 @@ namespace hldata
         yas::mem_ostream os;
         yas::binary_oarchive<yas::mem_ostream, flags> oa(os);
         oa &data;
+        Arsenal arsenal = data.arsenal;
+        oa &arsenal;
         const auto buf = os.get_intrusive_buffer();
 
         SaveHeader header{};
@@ -283,6 +295,9 @@ namespace hldata
         yas::mem_istream is(bytes + kSaveHeadBytes, payload);
         yas::binary_iarchive<yas::mem_istream, flags> ia(is);
         ia &read;
+        // (The Arsenal, if the save is of a version that has one.)
+        if (!is.empty())
+            ia &read.arsenal;
 
         // What the archive says is still only what a file says: the map's
         // name becomes a path, and the lists are walked.

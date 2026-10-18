@@ -284,15 +284,65 @@ namespace hlds
                      map != "c1a4i",
                  {"idle1", "idle2", "idle3", "fidget1", "fire1", "reload", "draw"}},
             };
-            for (const Held &one : kHeld)
+            // The weapons that came later, from the map each is first found
+            // in on: the game's maps are named in the order they are played
+            // (c2a2b2 the satchel and the tripmine, c2a3 the crossbow, c2a4e
+            // the snark).
+            const bool campaign = map.size() >= 4 && map[0] == 'c' && map[2] == 'a';
+            auto from = [&](const char *first) { return campaign && map >= first; };
+            const Held kLater[] = {
+                {"v_crossbow", from("c2a3"),
+                 {"idle1", "idle2", "fidget1", "fidget2", "fire1", "fire3", "reload", "draw1"}},
+                {"v_satchel", from("c2a2b2"), {"idle1", "fidget1", "draw"}},
+                {"v_satchel_radio", from("c2a2b2"), {"idle1", "fidget1", "draw", "fire"}},
+                {"v_tripmine", from("c2a2b2"), {"idle1", "fidget", "draw", "ground"}},
+                {"v_squeak", from("c2a4e"), {"idle1", "fidgetfit", "fidgetnip", "up", "throw"}},
+            };
+            auto hold = [&](const Held &one)
             {
                 if (!one.wanted)
-                    continue;
+                    return;
+                // (Already wanted for something else -- a tripmine on a wall
+                // is the held model's mine alone -- its clips are added to.)
+                for (ModelNeed &need : needs)
+                {
+                    if (need.name != one.name)
+                        continue;
+                    for (const std::string &clip : one.clips)
+                    {
+                        if (std::find(need.clips.begin(), need.clips.end(), clip) == need.clips.end())
+                            need.clips.push_back(clip);
+                    }
+                    return;
+                }
                 ModelNeed held;
                 held.name = one.name;
                 held.file = std::string("models/") + one.name + ".mdl";
                 held.clips = one.clips;
                 needs.push_back(held);
+            };
+            for (const Held &one : kHeld)
+                hold(one);
+            for (const Held &one : kLater)
+                hold(one);
+            // ... and what they leave about: a satchel thrown, a snark let
+            // go, a bolt in a wall. (A tripmine on one is v_tripmine's mine,
+            // above.)
+            const Held kThrown[] = {
+                {"w_satchel", from("c2a2b2"), {}},
+                {"w_squeak", from("c2a4e"), {"run"}},
+                {"crossbow_bolt", from("c2a3"), {}},
+            };
+            for (const Held &one : kThrown)
+            {
+                if (!one.wanted)
+                    continue;
+                hold(one);
+                for (ModelNeed &need : needs)
+                {
+                    if (need.name == one.name)
+                        need.firstSequence = need.firstSequence || one.clips.empty();
+                }
             }
         }
         // A multiplayer map: the others in the game are seen. One model for

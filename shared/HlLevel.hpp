@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 29;
+    inline constexpr std::uint16_t kLevelVersion = 30;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes.
@@ -60,7 +60,9 @@ namespace hldata
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
-    /// none), none that a save points at.
+    /// none), 29 -> 30 the later weapons' items (cooked after every other
+    /// actor) and sounds (after the others: kCommonSoundsBefore30), none
+    /// that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
@@ -807,8 +809,18 @@ namespace hldata
         AmmoBox,    ///< 200 of 9 mm
         ArGrenades, ///< two for the MP5's launcher
         Ammo357,    ///< six
+        // The weapons that came after the first six (and their ammunition):
+        Crossbow,   ///< comes with five bolts in it
+        Bolts,      ///< five for the crossbow
+        Satchel,    ///< one charge
+        Tripmine,   ///< one mine
+        Snark,      ///< a nest of five
         Count
     };
+    /// The first of those: an actor of one of these is cooked after every
+    /// other actor (so that a save made before they were points at the same
+    /// actors it did).
+    inline constexpr ItemKind kItemFirstMore = ItemKind::Crossbow;
 
     /// A sound the map plays: the file it is in under snd/ on the card,
     /// without the extension ("ambience_labdrone2.11k"). Empty: the map has

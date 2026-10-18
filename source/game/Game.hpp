@@ -48,6 +48,14 @@ namespace hlrt
         /// frame (`lampLit`: it has one).
         hldata::LampState lamp;
         hldata::LampBeam lampBeam;
+        /// The models of what the player's later weapons leave about, by the
+        /// projectile's kind (kShotBolt..kShotSnark), found by name when the
+        /// map is set up: -1 where the map has not got one (its mark is drawn
+        /// instead).
+        int thrownModel(int kind) const
+        {
+            return kind >= hldata::kShotBolt && kind <= hldata::kShotSnark ? thrown_[kind - hldata::kShotBolt] : -1;
+        }
         bool lampLit = false;
         int lampDistance = 0; ///< how far off the lamp's light is, in units
         /// The switches that outlive a map. Not reset by create() or
@@ -124,6 +132,18 @@ namespace hlrt
         void takeInHand();
         hldata::WeaponState weapon_;
         int inHand_ = -1; ///< the weapon `held` is the model of
+        bool radio_ = false; ///< ... and it is the satchels' radio
+        std::int16_t thrown_[4] = {-1, -1, -1, -1}; ///< thrownModel
+        /// Whether any satchel charge is out (and so the radio in hand).
+        bool satchelsOut() const
+        {
+            for (const hldata::Projectile &shot : actors.shots)
+            {
+                if (shot.active && shot.kind == hldata::kShotSatchel)
+                    return true;
+            }
+            return false;
+        }
         int lastHealth_ = 100;
         /// How strong each of the map's changing lights was when the
         /// vertices they reach were last worked out (HlLightStyle.hpp).

@@ -42,6 +42,8 @@ namespace hlrt
     {
         const LevelView &view = level.view;
         state = PlayerState();
+        arsenal = Arsenal();
+        state.arsenal = &arsenal;
         camera.yaw = 0;
         camera.pitch = 0;
         for (std::uint32_t i = 0; i < view.entityCount; ++i)
@@ -59,8 +61,8 @@ namespace hlrt
         // and degrees, starts there instead (tools/emu/play.sh writes it).
         if (std::FILE *file = std::fopen(global.dataPath("debug_start.txt").c_str(), "r"))
         {
-            int x, y, z, yaw, track = -1, die = 0;
-            if (std::fscanf(file, "%d %d %d %d %d %d", &x, &y, &z, &yaw, &track, &die) >= 4)
+            int x, y, z, yaw, track = -1, die = 0, models = 0, weapon = 0;
+            if (std::fscanf(file, "%d %d %d %d %d %d %d %d", &x, &y, &z, &yaw, &track, &die, &models, &weapon) >= 4)
             {
                 // (A fifth number is a track of music to start with; a
                 // sixth, the seconds until the player dies -- once: not
@@ -91,6 +93,17 @@ namespace hlrt
                 state.inv.ammoBuck = 32;
                 state.inv.ammo357 = 12;
                 state.inv.ammoAr = 3;
+                // ... and those that came later. (An eighth number: the one
+                // to have in hand.)
+                for (int w = kWeaponFirstMore; w < kWeaponCount; ++w)
+                    giveWeapon(state, w);
+                arsenal.boltsClip = 5;
+                arsenal.bolts = 25;
+                arsenal.satchels = 5;
+                arsenal.tripmines = 5;
+                arsenal.snarks = 15;
+                if (weapon > kWeaponNone && weapon < kWeaponCount)
+                    state.inv.current = static_cast<std::uint8_t>(weapon);
             }
             std::fclose(file);
         }

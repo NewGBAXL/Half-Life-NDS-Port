@@ -205,23 +205,39 @@ namespace hlrt
 
     HL_ARM void BottomScreen::drawSlots()
     {
-        // (What a slot says with no picture to show.)
-        static const char *const kNames[kTouchSlots] = {"BAR", "9MM", "SHOT", "GREN", "MP5", ".357"};
+        // (What a slot says with no picture to show: by weapon.)
+        static const char *const kNames[kWeaponCount] = {"",     "BAR",  "9MM",   "SHOT", "GREN", "MP5",
+                                                         ".357", "XBOW", "SATCH", "MINE", "SNARK"};
         Canvas &canvas = touchCanvas.canvas();
         const TouchLayout at = touchLayout(mirrored_);
         const FontView &font = touchCanvas.font(kFontSmall);
         loadIcons();
         for (int n = 0; n < kTouchSlots; ++n)
         {
+            // The game's slot n + 1, a kind of weapon: shown as the one of
+            // them in hand, or else the first of them carried.
             const TouchRect &r = at.slot[n];
-            const int weapon = n + 1;
-            const bool carried = (have_ & (1u << weapon)) != 0, inHand = carried && weapon == weapon_;
+            int count = 0;
+            const std::uint8_t *list = weaponsOfCategory(n + 1, count);
+            int weapon = kWeaponNone;
+            for (int k = 0; k < count && weapon == kWeaponNone; ++k)
+            {
+                if (list[k] == weapon_ && (have_ & (1u << list[k])))
+                    weapon = list[k];
+            }
+            for (int k = 0; k < count && weapon == kWeaponNone; ++k)
+            {
+                if (have_ & (1u << list[k]))
+                    weapon = list[k];
+            }
+            const bool carried = weapon != kWeaponNone, inHand = carried && weapon == weapon_;
             plate(r, inHand, !carried);
             if (!carried)
                 continue;
             const int cx = r.x + r.w / 2;
             const int top = r.y + (inHand && weapon != kWeaponCrowbar ? 3 : (r.h - icons.height()) / 2);
-            if (n < icons.count())
+            const int icon = weapon - 1;
+            if (icon < icons.count())
             {
                 // The game's picture: dim while it waits, bright in hand.
                 const int inks[4] = {0, inHand ? kUiOrange + 1 : kUiOrange, inHand ? kUiOrange + 2 : kUiOrange + 1,
@@ -231,7 +247,7 @@ namespace hlrt
                 {
                     for (int x = 0; x < icons.width(); ++x)
                     {
-                        if (const int level = icons.level(n, x, y))
+                        if (const int level = icons.level(icon, x, y))
                             canvas.pixel(left + x, top + y, inks[level]);
                     }
                 }
@@ -239,16 +255,18 @@ namespace hlrt
             else
             {
                 drawTextCentred(canvas, font, cx, r.y + (inHand && weapon != kWeaponCrowbar ? 3 : (r.h - font.height()) / 2),
-                                kNames[n], inkFor(font, inHand ? kUiWhite : kUiOrange));
+                                kNames[weapon], inkFor(font, inHand ? kUiWhite : kUiOrange));
             }
             if (!inHand || weapon == kWeaponCrowbar)
                 continue;
             // Under it, what is in it and what is carried for it -- or as
-            // much of that as the slot is wide. (Grenades are a count of
-            // themselves.)
+            // much of that as the slot is wide. (What is thrown or put down
+            // is a count of itself.)
             char text[16];
             std::snprintf(text, sizeof(text), "%d/%d", clip_, spare_);
-            if (weapon == kWeaponGrenade || textWidth(font, text) > r.w - 6)
+            const bool counted = weapon == kWeaponGrenade || weapon == kWeaponSatchel || weapon == kWeaponTripmine ||
+                                 weapon == kWeaponSnark;
+            if (counted || textWidth(font, text) > r.w - 6)
                 std::snprintf(text, sizeof(text), "%d", clip_);
             drawTextCentred(canvas, font, cx, r.y + r.h - font.height() - 1, text, inkFor(font, kUiWhite));
         }

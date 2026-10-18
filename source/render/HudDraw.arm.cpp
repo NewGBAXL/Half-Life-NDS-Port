@@ -62,7 +62,7 @@ namespace hlrt
 
         // ------------------------------------------------- the display in 2D
 
-        /// The display's pictures (ui/hud.128x64.htx), as the card has them:
+        /// The display's pictures (ui/hud.128x128.htx), as the card has them:
         /// A3I5 texels, whose top three bits are how bright (the game's
         /// display is added to the picture, its brightness its alpha here).
         std::uint8_t atlas[kHudAtlasWidth * kHudAtlasHeight];
@@ -343,7 +343,10 @@ namespace hlrt
             return;
 
         const bool gun = weapon_ == kWeaponGlock || weapon_ == kWeaponShotgun || weapon_ == kWeaponMp5 ||
-                         weapon_ == kWeaponPython;
+                         weapon_ == kWeaponPython || weapon_ == kWeaponCrossbow;
+        // (What is thrown or put down: a count of itself.)
+        const bool counted = weapon_ == kWeaponGrenade || weapon_ == kWeaponSatchel || weapon_ == kWeaponTripmine ||
+                             weapon_ == kWeaponSnark;
         // The bottom row, drawn again when what it says has changed.
         const int healthShown = health_ < 25 ? -1000 - health_ : health_;
         if (healthShown != shownHealth || armor_ != shownArmor || weapon_ != shownWeapon || clip_ != shownClip ||
@@ -363,12 +366,16 @@ namespace hlrt
             digits(62, 170 - 160, health_, red);
             blit(70, 168 - 160, armor_ > 0 ? kHudSuitFull : kHudSuitEmpty);
             digits(128, 170 - 160, armor_, 0);
-            if (gun || weapon_ == kWeaponGrenade)
+            if (gun || counted)
             {
-                const UiRect icon = weapon_ == kWeaponShotgun  ? kHudAmmoBuck
-                                    : weapon_ == kWeaponPython ? kHudAmmo357
-                                    : weapon_ == kWeaponGrenade ? kHudAmmoGrenade
-                                                                : kHudAmmo9mm;
+                const UiRect icon = weapon_ == kWeaponShotgun    ? kHudAmmoBuck
+                                    : weapon_ == kWeaponPython   ? kHudAmmo357
+                                    : weapon_ == kWeaponGrenade  ? kHudAmmoGrenade
+                                    : weapon_ == kWeaponCrossbow ? kHudAmmoBolt
+                                    : weapon_ == kWeaponSatchel  ? kHudAmmoSatchel
+                                    : weapon_ == kWeaponTripmine ? kHudAmmoTripmine
+                                    : weapon_ == kWeaponSnark    ? kHudAmmoSnark
+                                                                 : kHudAmmo9mm;
                 blit(236, 169 - 160, icon);
                 if (gun)
                 {
@@ -389,7 +396,7 @@ namespace hlrt
         }
         for (int k = 0; k < 4; ++k)
             sprite(k, k * 64, 160, 1, 3, k * 64, 0, kBankHud);
-        if ((gun || weapon_ == kWeaponGrenade) && extra_ >= 0)
+        if ((gun || counted) && extra_ >= 0)
             sprite(4, 192, 144, 1, 3, 192, 32, kBankHud);
 
         // The lamp, at the top right as the game has it: its outline, as

@@ -40,6 +40,8 @@ namespace hlrt
         /// it where there is nobody about.
         static constexpr int kMaxPolygons = 1200;
         static constexpr int kMaxVertices = 3400;
+        /// ... and over it, for what the player has thrown or put down.
+        static constexpr int kThrownPolygons = 128;
         /// A model whose finest level is of more polygons than this has the
         /// game's own mesh for it (a DSi's file): for the nearest model in
         /// a frame with room, and nobody else.
@@ -93,6 +95,11 @@ namespace hlrt
         /// ActorWorld::gibs): after the actors, in what room they left.
         std::uint8_t gibOrder_[hldata::kMaxGibs] = {};
         int gibFound_ = 0;
+        /// ... and what the player's later weapons leave about (into
+        /// ActorWorld::shots), drawn with their own models where the map
+        /// has them: after the pieces.
+        std::uint8_t shotOrder_[hldata::kMaxProjectiles] = {};
+        int shotFound_ = 0;
         int cut_ = 0;
         /// ... by what they were (HlDrawPlan.hpp's kDraw*); how far the
         /// models went over their share for an enemy's sake; and whether

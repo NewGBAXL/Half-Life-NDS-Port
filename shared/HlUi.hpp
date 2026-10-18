@@ -106,8 +106,8 @@ namespace hldata
         std::uint8_t x, y, w, h;
     };
     inline constexpr int kHudAtlasWidth = 128;
-    inline constexpr int kHudAtlasHeight = 64;
-    inline constexpr const char *kHudAtlasFile = "ui/hud.128x64.htx";
+    inline constexpr int kHudAtlasHeight = 128;
+    inline constexpr const char *kHudAtlasFile = "ui/hud.128x128.htx";
     inline constexpr int kHudDigitWidth = 12;
     inline constexpr int kHudDigitHeight = 16;
     inline constexpr UiRect hudDigit(int n)
@@ -126,6 +126,11 @@ namespace hldata
     inline constexpr UiRect kHudLampEmpty = {70, 38, 18, 16};
     inline constexpr UiRect kHudLampFull = {88, 38, 18, 16};
     inline constexpr UiRect kHudLampBeam = {106, 38, 6, 16};
+    // (The later weapons' ammunition: a row of its own.)
+    inline constexpr UiRect kHudAmmoBolt = {0, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoSatchel = {18, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoTripmine = {36, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoSnark = {54, 64, 18, 18};
 
     // ------------------------------------------------------------- marks
     //
@@ -194,7 +199,7 @@ namespace hldata
     inline constexpr char kIconsMagic[4] = {'H', 'L', 'I', 'C'};
     inline constexpr std::uint16_t kIconsVersion = 1;
     inline constexpr const char *kWeaponIconsFile = "ui/weapons.hic";
-    inline constexpr int kWeaponIcons = 6;
+    inline constexpr int kWeaponIcons = 10;
     inline constexpr int kWeaponIconWidth = 38;
     inline constexpr int kWeaponIconHeight = 16;
     inline constexpr int kIconMaxWidth = 80;

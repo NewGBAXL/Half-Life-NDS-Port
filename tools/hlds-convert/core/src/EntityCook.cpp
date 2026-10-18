@@ -61,7 +61,8 @@ namespace hlds
                 "weapon_handgrenade", "env_bubbles", "weapon_9mmAR", "weapon_mp5", "weapon_357",
                 "weapon_python", "ammo_9mmAR", "ammo_mp5clip", "ammo_9mmbox", "ammo_ARgrenades",
                 "ammo_mp5grenades", "ammo_357", "monster_human_grunt", "monster_hgrunt_dead",
-                "monster_tripmine"};
+                "monster_tripmine", "weapon_crossbow", "ammo_crossbow", "weapon_satchel", "weapon_tripmine",
+                "weapon_snark"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -126,6 +127,11 @@ namespace hlds
             {"ammo_argrenades", ItemKind::ArGrenades, "models/w_argrenade.mdl"},
             {"ammo_mp5grenades", ItemKind::ArGrenades, "models/w_argrenade.mdl"},
             {"ammo_357", ItemKind::Ammo357, "models/w_357ammobox.mdl"},
+            {"weapon_crossbow", ItemKind::Crossbow, "models/w_crossbow.mdl"},
+            {"ammo_crossbow", ItemKind::Bolts, "models/w_crossbow_clip.mdl"},
+            {"weapon_satchel", ItemKind::Satchel, "models/w_satchel.mdl"},
+            {"weapon_tripmine", ItemKind::Tripmine, "models/v_tripmine.mdl"},
+            {"weapon_snark", ItemKind::Snark, "models/w_sqknest.mdl"},
         };
 
         ActorInfo actorOf(const Entity &entity)
@@ -159,6 +165,13 @@ namespace hlds
                 if (lowered(cls) != item.cls)
                     continue;
                 info = {true, ActorKind::Item, item.file, {"idle"}, "idle"};
+                // (A tripmine lying about is the held model's mine alone, as
+                // it lies on the ground: below.)
+                if (item.kind == ItemKind::Tripmine)
+                {
+                    info.clips = {"ground"};
+                    info.startClip = "ground";
+                }
                 info.solid = false;
                 info.item = item.kind;
                 return info;
@@ -2202,11 +2215,19 @@ namespace hlds
             std::strncpy(ref.name, model.c_str(), sizeof(ref.name) - 1);
             out.modelRefs.push_back(ref);
         }
+        // (In two rounds: the items of the weapons that came later after all
+        // the rest, so that every other actor is where a save made before
+        // they were says it is.)
+        for (int round = 0; round < 2; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
             const ActorInfo info = actorOf(entity);
             if (!info.is)
+                continue;
+            const bool later = info.item != ItemKind::None &&
+                               static_cast<int>(info.item) >= static_cast<int>(kItemFirstMore);
+            if (later != (round == 1))
                 continue;
             const auto found = std::find(models.begin(), models.end(), modelNameOf(info.file));
             if (found == models.end())
@@ -2256,6 +2277,8 @@ namespace hlds
             if (body < 0)
                 body = static_cast<int>(e % 4);
             actor.body = static_cast<std::uint8_t>(std::clamp(body, 0, 255));
+            if (info.item == ItemKind::Tripmine)
+                actor.body = 3; // (the mine alone)
             actor.kind = static_cast<std::uint8_t>(info.kind);
             actor.clip = info.startClip.empty() ? 0 : nameHash(info.startClip.c_str());
             actor.flags = info.solid ? kActorSolid : 0;
@@ -2435,6 +2458,31 @@ namespace hlds
             use(CommonSound::ShotgunDouble, CommonSound::ShotgunReload3);
         if (std::find(models.begin(), models.end(), "v_grenade") != models.end())
             use(CommonSound::GrenadeBounce2, CommonSound::GrenadeBounce3);
+        // (... and those that came later: where the map has them to be held,
+        // or lying about to be picked up.)
+        auto holds = [&](const char *viewModel, ItemKind item, ItemKind other = ItemKind::None)
+        {
+            if (std::find(models.begin(), models.end(), viewModel) != models.end())
+                return true;
+            for (const ActorRecord &actor : out.actors)
+            {
+                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item) &&
+                    (actor.item == static_cast<std::uint32_t>(item) || actor.item == static_cast<std::uint32_t>(other)))
+                    return true;
+            }
+            return false;
+        };
+        if (holds("v_crossbow", ItemKind::Crossbow, ItemKind::Bolts))
+            use(CommonSound::XbowFire, CommonSound::XbowReload);
+        if (holds("v_tripmine", ItemKind::Tripmine))
+        {
+            use(CommonSound::MineDeploy, CommonSound::MineCharge);
+            use(CommonSound::MineActivate, CommonSound::MineActivate);
+        }
+        if (holds("v_satchel", ItemKind::Satchel))
+            use(CommonSound::SatchelBounce, CommonSound::SatchelBounce);
+        if (holds("v_squeak", ItemKind::Snark))
+            use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
         // (What comes apart is heard to: where the map has the pieces.)
         if (std::find(models.begin(), models.end(), "agibs") != models.end() ||
             std::find(models.begin(), models.end(), "hgibs") != models.end())

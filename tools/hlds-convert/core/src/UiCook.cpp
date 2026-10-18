@@ -199,6 +199,10 @@ namespace hlds
         copy(sheet, 34, 72, hldata::kHudLampEmpty);
         copy(sheet, 16, 72, hldata::kHudLampFull);
         copy(sheet, 52, 72, hldata::kHudLampBeam);
+        copy(sheet, 72, 16, hldata::kHudAmmoBolt);
+        copy(sheet, 54, 34, hldata::kHudAmmoSatchel);
+        copy(sheet, 72, 34, hldata::kHudAmmoTripmine);
+        copy(sheet, 90, 34, hldata::kHudAmmoSnark);
         return atlas;
     }
 
@@ -206,8 +210,10 @@ namespace hlds
     {
         // Where each weapon's picture is in the sheet, 80 by 20 (the game's
         // sprites/weapon_*.txt say so), in the order of kWeapon*: the
-        // crowbar, the pistol, the shotgun, the grenade, the MP5, the .357.
-        constexpr int kFrom[hldata::kWeaponIcons][2] = {{0, 0}, {0, 40}, {0, 160}, {160, 0}, {0, 120}, {0, 80}};
+        // crowbar, the pistol, the shotgun, the grenade, the MP5, the .357;
+        // the crossbow, the satchel, the tripmine, the snark.
+        constexpr int kFrom[hldata::kWeaponIcons][2] = {{0, 0},   {0, 40},   {0, 160},   {160, 0},  {0, 120},
+                                                        {0, 80},  {80, 0},   {160, 40},  {160, 80}, {160, 120}};
         constexpr int kWide = 80, kHigh = 20;
         const RgbaImage sheet = hud.frames.empty() ? RgbaImage() : spriteFrameImage(hud, 0, false);
         const int words = hldata::iconRowWords(width);

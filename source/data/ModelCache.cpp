@@ -1,3 +1,4 @@
+#include <cstring>
 #include "data/ModelCache.hpp"
 #include "data/TextureStream.hpp"
 
@@ -203,8 +204,11 @@ namespace hlrt
                 hldata::modelSkinFile(level.view.modelRefs[i].name, views_[i].header->atlasWidth,
                                       views_[i].header->atlasHeight);
             // The weapons' are kept in main memory until one is taken up:
-            // of the six, one is in hand.
-            const bool weapon = level.view.modelRefs[i].name[0] == 'v' && level.view.modelRefs[i].name[1] == '_';
+            // of the six, one is in hand. (Not the tripmine's: it is also
+            // the mine on the wall, the map's own and the player's -- and
+            // small.)
+            const char *name = level.view.modelRefs[i].name;
+            const bool weapon = name[0] == 'v' && name[1] == '_' && std::strcmp(name, "v_tripmine") != 0;
             if (kept_ != nullptr)
                 kept_[i] = weapon ? 1 : 0;
             if (!TextureCache::loadFile(skin.c_str(), false, views_[i].header->atlasWidth,

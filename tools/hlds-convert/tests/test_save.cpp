@@ -37,6 +37,48 @@ int main()
     visited.broken = {0x05, 0x00, 0x80};
     save.maps.push_back(visited);
 
+    // The weapons that came later go after all the rest, and come back.
+    {
+        SaveData withLater = save;
+        withLater.arsenal.have = 0x5;
+        withLater.arsenal.boltsClip = 4;
+        withLater.arsenal.bolts = 31;
+        withLater.arsenal.snarks = 7;
+        withLater.weapon = kWeaponCrossbow;
+        const std::vector<std::uint8_t> later = writeSave(withLater);
+        SaveData read;
+        check(readSave(later.data(), later.size(), read) && read.arsenal.have == 0x5 && read.arsenal.boltsClip == 4 &&
+                  read.arsenal.bolts == 31 && read.arsenal.snarks == 7 && read.weapon == kWeaponCrossbow,
+              "the later weapons are saved, after the rest, and read back");
+    }
+    // A save of version 7 -- before there was anything after the rest --
+    // is read as it was written, with none of the later weapons.
+    {
+        constexpr std::size_t flags = yas::mem | yas::binary | yas::no_header;
+        yas::mem_ostream os;
+        yas::binary_oarchive<yas::mem_ostream, flags> oa(os);
+        SaveData old = save;
+        oa &old;
+        const auto buf = os.get_intrusive_buffer();
+        SaveHeader header{};
+        std::memcpy(header.magic, kSaveMagic, sizeof(header.magic));
+        header.version = 7;
+        header.levelVersion = 29;
+        header.minReader = 7;
+        header.payloadBytes = static_cast<std::uint32_t>(buf.size);
+        header.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf.data), static_cast<std::uint32_t>(buf.size));
+        const SaveHeading heading;
+        header.headingCrc = crc32(reinterpret_cast<const std::uint8_t *>(&heading), sizeof(heading));
+        std::vector<std::uint8_t> v7(kSaveHeadBytes + buf.size);
+        std::memcpy(v7.data(), &header, sizeof(header));
+        std::memcpy(v7.data() + sizeof(header), &heading, sizeof(heading));
+        std::memcpy(v7.data() + kSaveHeadBytes, buf.data, buf.size);
+        SaveData read;
+        check(readSave(v7.data(), v7.size(), read) && read.map == "c1a0" && read.health == 63 &&
+                  read.ammo357 == 12 && read.arsenal.have == 0 && read.arsenal.bolts == 0,
+              "a version 7 save still reads, with none of the later weapons");
+    }
+
     const std::vector<std::uint8_t> bytes = writeSave(save);
     SaveData back;
     check(readSave(bytes.data(), bytes.size(), back), "a save reads back");

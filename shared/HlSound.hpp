@@ -277,8 +277,25 @@ namespace hldata
         PushBox1, ///< a box pushed along a floor (where a map has one to push)
         PushBox2,
         PushBox3,
+        // The weapons that came after the first six (where a map has them):
+        // a map converted before these were has none of them (and its
+        // sounds after PushBox3 are its own: kCommonSoundsBefore30).
+        XbowFire,     ///< the crossbow, its bolt into a wall and into flesh, its reload
+        XbowHit,
+        XbowHitBody,
+        XbowReload,
+        MineDeploy,   ///< a tripmine put on a wall, and charging
+        MineCharge,
+        SatchelBounce, ///< a satchel charge knocking along the floor
+        SnarkDeploy,  ///< a snark let go, hunting, and bursting
+        SnarkHunt1,
+        SnarkHunt2,
+        SnarkHunt3,
+        SnarkBlast,
         Count
     };
+    /// How many of these a map of level version 29 or before has.
+    inline constexpr std::uint16_t kCommonSoundsBefore30 = static_cast<std::uint16_t>(CommonSound::XbowFire);
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
 
     /// Where each of them is in the game's sound folder.
@@ -329,7 +346,11 @@ namespace hldata
             "debris/glass3.wav",      "weapons/dbarrel1.wav",    "weapons/scock1.wav",
             "weapons/reload3.wav",    "weapons/hks1.wav",        "weapons/glauncher2.wav",
             "weapons/357_shot2.wav",  "weapons/grenade_hit2.wav", "weapons/grenade_hit3.wav",
-            "debris/pushbox1.wav",    "debris/pushbox2.wav",     "debris/pushbox3.wav"};
+            "debris/pushbox1.wav",    "debris/pushbox2.wav",     "debris/pushbox3.wav",
+            "weapons/xbow_fire1.wav", "weapons/xbow_hit1.wav",   "weapons/xbow_hitbod1.wav",
+            "weapons/xbow_reload1.wav", "weapons/mine_deploy.wav", "weapons/mine_charge.wav",
+            "weapons/g_bounce1.wav",  "squeek/sqk_deploy1.wav",  "squeek/sqk_hunt1.wav",
+            "squeek/sqk_hunt2.wav",   "squeek/sqk_hunt3.wav",    "squeek/sqk_blast1.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }
@@ -429,6 +450,9 @@ namespace hldata
     {
         SoundEvent events[kMaxSoundEvents];
         int count = 0;
+        /// How many of the CommonSounds the map has (an older map has fewer:
+        /// kCommonSoundsBefore30); one it has not is not heard.
+        std::uint16_t commons = static_cast<std::uint16_t>(CommonSound::Count);
 
         void add(std::uint16_t sound, const fx *pos, int volume, int radius, std::uint8_t flags = 0,
                  int pitch = 100, std::uint16_t tag = 0)
@@ -450,9 +474,11 @@ namespace hldata
             event.layer = (flags & kSoundSentence) ? SoundLayer::Voice
                                                    : (pos == nullptr ? SoundLayer::Player : SoundLayer::World);
         }
-        void add(CommonSound sound, const fx *pos, int volume = 127, int radius = kRadiusLarge)
+        void add(CommonSound sound, const fx *pos, int volume = 127, int radius = kRadiusLarge, int pitch = 100)
         {
-            add(static_cast<std::uint16_t>(sound), pos, volume, radius);
+            if (static_cast<std::uint16_t>(sound) >= commons)
+                return;
+            add(static_cast<std::uint16_t>(sound), pos, volume, radius, 0, pitch);
         }
         bool heard(std::uint16_t sound) const
         {

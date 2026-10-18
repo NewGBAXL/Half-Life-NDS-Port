@@ -88,7 +88,15 @@ namespace hldata
     inline constexpr std::uint8_t kWeaponGrenade = 4;
     inline constexpr std::uint8_t kWeaponMp5 = 5;    ///< with its grenade launcher
     inline constexpr std::uint8_t kWeaponPython = 6; ///< the .357
-    inline constexpr std::uint8_t kWeaponCount = 7;
+    // ... and those that came after the first six (Arsenal):
+    inline constexpr std::uint8_t kWeaponCrossbow = 7;
+    inline constexpr std::uint8_t kWeaponSatchel = 8;
+    inline constexpr std::uint8_t kWeaponTripmine = 9;
+    inline constexpr std::uint8_t kWeaponSnark = 10;
+    inline constexpr std::uint8_t kWeaponCount = 11;
+    /// The first weapon Inventory::have has no bit for: from it on, they are
+    /// the Arsenal's.
+    inline constexpr std::uint8_t kWeaponFirstMore = 7;
 
     struct Inventory
     {
@@ -106,6 +114,31 @@ namespace hldata
         std::int16_t clipPython = 0;  ///< ... in the .357
         std::int16_t ammo357 = 0;     ///< carried besides, 0..36
         std::int16_t ammoAr = 0;      ///< grenades for the MP5's launcher, 0..10
+    };
+
+    /// What the player carries of the weapons that came after the first
+    /// six (kWeaponFirstMore on): kept apart from Inventory, which is in
+    /// every save and every level change as it is, so that a save made
+    /// before these were is read as it was written. (It goes in a save after
+    /// all the rest: HlSave.hpp.) Inventory::current may be any weapon.
+    struct Arsenal
+    {
+        std::uint16_t have = 0;       ///< a bit per weapon: 1 << (kWeapon* - kWeaponFirstMore)
+        std::int16_t boltsClip = 0;   ///< in the crossbow
+        std::int16_t bolts = 0;       ///< carried besides, 0..50
+        std::int16_t satchels = 0;    ///< 0..5
+        std::int16_t tripmines = 0;   ///< 0..5
+        std::int16_t snarks = 0;      ///< 0..15
+        std::int16_t rockets = 0;     ///< (the weapons still to come)
+        std::int16_t uranium = 0;
+        std::int16_t hornets = 0;
+        std::uint8_t zoomed = 0;      ///< the crossbow's sight is up
+
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            ar &have &boltsClip &bolts &satchels &tripmines &snarks &rockets &uranium &hornets &zoomed;
+        }
     };
 
     struct PlayerState
@@ -146,6 +179,9 @@ namespace hldata
         fx touchVelocity[2] = {0, 0};
         std::int32_t health = 100;
         Inventory inv;
+        /// The rest of what they carry (owned by the game, not saved with
+        /// this: a pointer is no part of the state). Null: none of it.
+        Arsenal *arsenal = nullptr;
         /// How far there is still to walk before the next footstep is heard
         /// (playerFootsteps).
         fx stepLeft = 0;
@@ -159,6 +195,92 @@ namespace hldata
         int hurtMs = 0;        ///< until the liquid (or the lack of air) next hurts
         int drownStep = 2;     ///< what the next breath not taken costs
     };
+
+    /// Whether the player has weapon `which`.
+    inline bool hasWeapon(const PlayerState &player, int which)
+    {
+        if (which <= kWeaponNone || which >= kWeaponCount)
+            return false;
+        if (which < kWeaponFirstMore)
+            return (player.inv.have & (1u << which)) != 0;
+        return player.arsenal != nullptr && (player.arsenal->have & (1u << (which - kWeaponFirstMore))) != 0;
+    }
+    /// The game's five kinds of weapon, as its slots 1 to 5 have them: the
+    /// crowbar; the pistols; the rifles; the heavy ones (still to come); what
+    /// is thrown or put down. Each kind's weapons in the game's order; `count`
+    /// is how many.
+    inline constexpr int kWeaponCategories = 5;
+    inline const std::uint8_t *weaponsOfCategory(int category, int &count)
+    {
+        static const std::uint8_t kLists[kWeaponCategories][4] = {
+            {kWeaponCrowbar},
+            {kWeaponGlock, kWeaponPython},
+            {kWeaponMp5, kWeaponShotgun, kWeaponCrossbow},
+            {},
+            {kWeaponGrenade, kWeaponSatchel, kWeaponTripmine, kWeaponSnark}};
+        static const int kCounts[kWeaponCategories] = {1, 2, 3, 0, 4};
+        if (category < 1 || category > kWeaponCategories)
+        {
+            count = 0;
+            return nullptr;
+        }
+        count = kCounts[category - 1];
+        return kLists[category - 1];
+    }
+    /// Which of them weapon `which` is (1..5), or 0.
+    inline int weaponCategory(int which)
+    {
+        for (int c = 1; c <= kWeaponCategories; ++c)
+        {
+            int count = 0;
+            const std::uint8_t *list = weaponsOfCategory(c, count);
+            for (int k = 0; k < count; ++k)
+            {
+                if (list[k] == which)
+                    return c;
+            }
+        }
+        return 0;
+    }
+
+    /// ... given it, or taken from them.
+    inline void giveWeapon(PlayerState &player, int which)
+    {
+        if (which > kWeaponNone && which < kWeaponFirstMore)
+            player.inv.have = static_cast<std::uint8_t>(player.inv.have | (1u << which));
+        else if (which >= kWeaponFirstMore && which < kWeaponCount && player.arsenal != nullptr)
+            player.arsenal->have = static_cast<std::uint16_t>(player.arsenal->have | (1u << (which - kWeaponFirstMore)));
+    }
+    inline void takeWeapon(PlayerState &player, int which)
+    {
+        if (which > kWeaponNone && which < kWeaponFirstMore)
+            player.inv.have = static_cast<std::uint8_t>(player.inv.have & ~(1u << which));
+        else if (which >= kWeaponFirstMore && which < kWeaponCount && player.arsenal != nullptr)
+            player.arsenal->have = static_cast<std::uint16_t>(player.arsenal->have & ~(1u << (which - kWeaponFirstMore)));
+    }
+
+    /// What a touch of category `category`'s slot asks for: with one of its
+    /// weapons in hand, the next of them the player has (round again); else
+    /// the first they have. The one in hand if it is the only one (the
+    /// caller makes that a reload); kWeaponNone if they have none of them.
+    inline std::uint8_t weaponOfCategory(const PlayerState &player, int category)
+    {
+        int count = 0;
+        const std::uint8_t *list = weaponsOfCategory(category, count);
+        int at = -1;
+        for (int k = 0; k < count; ++k)
+        {
+            if (list[k] == player.inv.current)
+                at = k;
+        }
+        for (int n = 1; n <= count; ++n)
+        {
+            const std::uint8_t which = list[(at + n + count) % count];
+            if (hasWeapon(player, which))
+                return which;
+        }
+        return kWeaponNone;
+    }
 
     namespace detail
     {

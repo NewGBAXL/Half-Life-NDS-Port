@@ -881,6 +881,9 @@ namespace hlrt
         (void)kNorth;
         if (!shot.active)
             return;
+        // (Drawn as its model, where the map has one: ModelDraw. A tripmine's
+        // beam is drawn here all the same.)
+        const bool modelled = game.thrownModel(shot.kind) >= 0;
         if (shot.kind == kShotSpit)
         {
             if (const SpriteRef *ref = sprite(CommonSprite::Spit, 31))
@@ -899,12 +902,53 @@ namespace hlrt
                 picture(*ref, static_cast<int>(Global::vblanks() / 4 % ref->frames), shot.pos, camera.right,
                         camera.up, ref->worldWidth / 4 + 1, ref->worldHeight / 4 + 1);
         }
+        else if (shot.kind == kShotBolt)
+        {
+            if (modelled)
+                return;
+            // A crossbow's bolt: a short dark line along the way it goes.
+            const fx speed = fxLength(shot.velocity);
+            if (speed > 0)
+            {
+                fx tail[3];
+                for (int i = 0; i < 3; ++i)
+                    tail[i] = shot.pos[i] - static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * 16) / (speed >> kFxShift > 0 ? speed >> kFxShift : 1));
+                if (const SpriteRef *ref = sprite(CommonSprite::Beam, 31, RGB15(12, 8, 4)))
+                    beam(*ref, 0, tail, shot.pos, 2);
+            }
+        }
+        else if (shot.kind == kShotMine)
+        {
+            // A tripmine the player put on a wall, and its beam once it is on.
+            if (!modelled)
+            {
+                GFX_TEX_FORMAT = 0;
+                look(31, 0, RGB15(8, 10, 9));
+                square(shot.pos, camera.right, camera.up, 3);
+            }
+            if (shot.sprite == 1)
+            {
+                fx end[3];
+                for (int i = 0; i < 3; ++i)
+                    end[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * kMineRange *
+                                                            shot.leftMs) >> kFractionShift);
+                if (const SpriteRef *ref = sprite(CommonSprite::Beam, 14, RGB15(0, 26, 24)))
+                    beam(*ref, 0, shot.pos, end, 12);
+            }
+        }
         else
         {
-            // A grenade; or something thrown out, a dark scrap of it.
+            // A grenade, a satchel charge, a snark; or something thrown out,
+            // a dark scrap of it.
+            if (modelled)
+                return;
             GFX_TEX_FORMAT = 0;
-            look(31, 0, shot.kind == kShotGib ? RGB15(7, 6, 5) : RGB15(6, 9, 5));
-            square(shot.pos, camera.right, camera.up, 3);
+            const std::uint16_t colour = shot.kind == kShotGib       ? RGB15(7, 6, 5)
+                                         : shot.kind == kShotSatchel ? RGB15(9, 7, 4)
+                                         : shot.kind == kShotSnark   ? RGB15(16, 6, 4)
+                                                                     : RGB15(6, 9, 5);
+            look(31, 0, colour);
+            square(shot.pos, camera.right, camera.up, shot.kind == kShotSatchel || shot.kind == kShotSnark ? 4 : 3);
         }
     
     }

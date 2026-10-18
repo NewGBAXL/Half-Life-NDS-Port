@@ -449,7 +449,15 @@ namespace hldata
                 best = s;
             }
         }
-        player = PlayerState();
+        {
+            // (A new life carries nothing of the last: the later weapons
+            // neither -- but they are still the game's to keep.)
+            Arsenal *keep = player.arsenal;
+            player = PlayerState();
+            player.arsenal = keep;
+            if (keep != nullptr)
+                *keep = Arsenal();
+        }
         if (best >= 0)
         {
             for (int i = 0; i < 3; ++i)

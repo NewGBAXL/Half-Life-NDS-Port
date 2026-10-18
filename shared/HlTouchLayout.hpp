@@ -38,7 +38,7 @@ namespace hldata
         constexpr bool has(int px, int py) const { return px >= x && py >= y && px < x + w && py < y + h; }
     };
 
-    inline constexpr int kTouchSlots = 6; ///< slot n is weapon n + 1 (kWeapon*)
+    inline constexpr int kTouchSlots = 5; ///< slot n is the game's slot n + 1: a kind of weapon (weaponsOfCategory)
 
     // What a touch is on.
     inline constexpr int kTouchAim = 0;
@@ -48,7 +48,7 @@ namespace hldata
     inline constexpr int kTouchDuck = 4;
     inline constexpr int kTouchReload = 5;
     inline constexpr int kTouchLamp = 6;
-    inline constexpr int kTouchSlot = 7; ///< ... and the five after it
+    inline constexpr int kTouchSlot = 7; ///< ... and the four after it
 
     struct TouchLayout
     {
@@ -76,7 +76,7 @@ namespace hldata
                 r->x = static_cast<std::int16_t>(kTouchWidth - r->x - r->w);
         }
         for (int n = 0; n < kTouchSlots; ++n)
-            at.slot[n] = {static_cast<std::int16_t>(2 + 42 * n), kTouchSlotTop, 42, 34};
+            at.slot[n] = {static_cast<std::int16_t>(3 + 50 * n), kTouchSlotTop, 50, 34};
         return at;
     }
 

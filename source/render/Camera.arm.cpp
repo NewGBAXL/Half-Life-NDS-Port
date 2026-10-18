@@ -17,6 +17,11 @@ namespace hlrt
         constexpr std::int32_t kCosH = 2793;
         constexpr std::int32_t kSinV = 2578; // sin 39
         constexpr std::int32_t kCosV = 3183;
+        // ... and through the crossbow's sight (10 and 7.5 drawn): 12, 9.5.
+        constexpr std::int32_t kZoomSinH = 852;
+        constexpr std::int32_t kZoomCosH = 4006;
+        constexpr std::int32_t kZoomSinV = 676;
+        constexpr std::int32_t kZoomCosV = 4040;
 
         // Pitch stops at 89 degrees.
         constexpr std::int16_t kMaxPitch = 16202;
@@ -98,12 +103,14 @@ namespace hlrt
     void Camera::buildPlanes()
     {
         // Side planes: forward tilted towards the middle by the half-angle.
+        const std::int32_t sinH = zoomed ? kZoomSinH : kSinH, cosH = zoomed ? kZoomCosH : kCosH;
+        const std::int32_t sinV = zoomed ? kZoomSinV : kSinV, cosV = zoomed ? kZoomCosV : kCosV;
         for (int i = 0; i < 3; ++i)
         {
-            const std::int32_t fh = mulQ12(forward[i], kSinH);
-            const std::int32_t rh = mulQ12(right[i], kCosH);
-            const std::int32_t fv = mulQ12(forward[i], kSinV);
-            const std::int32_t uv = mulQ12(up[i], kCosV);
+            const std::int32_t fh = mulQ12(forward[i], sinH);
+            const std::int32_t rh = mulQ12(right[i], cosH);
+            const std::int32_t fv = mulQ12(forward[i], sinV);
+            const std::int32_t uv = mulQ12(up[i], cosV);
             planes[0].normal[i] = fh + rh; // left edge: inside is to its right
             planes[1].normal[i] = fh - rh;
             planes[2].normal[i] = fv + uv; // bottom

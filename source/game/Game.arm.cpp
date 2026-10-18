@@ -156,6 +156,20 @@ namespace hlrt
         actors.models = modelCache.views();
         actors.modelCount = modelCache.count();
         gibModelsFind(actors, view.modelRefs, static_cast<int>(view.modelRefCount));
+        {
+            // (In the order of the kinds: the bolt, the satchel, the player's
+            // tripmine -- the held model's mine -- and the snark.)
+            static const char *const kThrown[4] = {"crossbow_bolt", "w_satchel", "v_tripmine", "w_squeak"};
+            for (int k = 0; k < 4; ++k)
+            {
+                thrown_[k] = -1;
+                for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+                {
+                    if (std::strcmp(view.modelRefs[i].name, kThrown[k]) == 0)
+                        thrown_[k] = static_cast<std::int16_t>(i);
+                }
+            }
+        }
         // (A DSi has the memory for twice as much lying about.)
         // (A DSi has the memory for twice as much going on at once.)
         actors.gibLimit = isDSiMode() ? kMaxGibs : kMaxGibs / 2;
@@ -183,6 +197,7 @@ namespace hlrt
         logic.modelSounds = view.modelSoundCount != 0 ? view.modelSounds : nullptr;
         logic.modelSoundCount = static_cast<int>(view.modelSoundCount);
         heard.count = 0;
+        heard.commons = view.header->version < 30 ? kCommonSoundsBefore30 : static_cast<std::uint16_t>(CommonSound::Count);
         logic.cornerState = cornerState_;
         logic.cornerCount = static_cast<int>(view.cornerCount);
         // Places every brush where the map starts it, for the renderer and
@@ -207,12 +222,21 @@ namespace hlrt
 
     void Game::takeInHand()
     {
-        static const char *const kModels[] = {nullptr,     "v_crowbar", "v_9mmhandgun", "v_shotgun",
-                                              "v_grenade", "v_9mmar",   "v_357"};
-        static const char *const kIdle[] = {nullptr, "idle1", "idle1", "sm_idle", "idle", "longidle", "idle1"};
+        static const char *const kModels[] = {nullptr,      "v_crowbar", "v_9mmhandgun", "v_shotgun",
+                                              "v_grenade",  "v_9mmar",   "v_357",        "v_crossbow",
+                                              "v_satchel",  "v_tripmine", "v_squeak"};
+        static const char *const kIdle[] = {nullptr, "idle1", "idle1", "sm_idle", "idle", "longidle", "idle1",
+                                            "idle1", "idle1", "idle1", "idle1"};
+        // (How each comes out: most say "draw"; the crossbow "draw1", the
+        // MP5 "deploy", a snark "up".)
+        static const char *const kDraw[] = {nullptr, "draw", "draw", "draw", "draw", "deploy", "draw",
+                                            "draw1", "draw", "draw", "up"};
+        static_assert(sizeof(kModels) / sizeof(kModels[0]) == kWeaponCount);
         const LevelView &view = level.view;
         const int weapon = player.state.inv.current;
         inHand_ = weapon;
+        // (The satchel's hand is the radio while there are charges out.)
+        radio_ = weapon == kWeaponSatchel && satchelsOut();
         held = ActorState();
         modelCache.wield(-1);
         if (weapon <= kWeaponNone || weapon >= kWeaponCount)
@@ -220,7 +244,7 @@ namespace hlrt
         // By name: a map has the models of what can be held in it.
         for (std::uint32_t m = 0; m < view.modelRefCount; ++m)
         {
-            if (std::strcmp(view.modelRefs[m].name, kModels[weapon]) != 0)
+            if (std::strcmp(view.modelRefs[m].name, radio_ ? "v_satchel_radio" : kModels[weapon]) != 0)
                 continue;
             held.active = true;
             held.model = static_cast<std::uint16_t>(m);
@@ -239,9 +263,8 @@ namespace hlrt
                 held.restClip = static_cast<std::int16_t>(idle < 0 ? 0 : idle);
             }
             actorRest(held);
-            // (The MP5's is called "deploy".)
-            if (!actorPlay(actors, held, nameHash("draw"), true))
-                actorPlay(actors, held, nameHash("deploy"), true);
+            if (!actorPlay(actors, held, nameHash(kDraw[weapon]), true))
+                actorPlay(actors, held, nameHash("draw"), true);
             return;
         }
     }
@@ -373,6 +396,7 @@ namespace hlrt
         save.clipPython = inv.clipPython;
         save.ammo357 = inv.ammo357;
         save.ammoAr = inv.ammoAr;
+        save.arsenal = player.arsenal;
         save.lampOn = lamp.on ? 1 : 0;
         save.lampCharge = lamp.charge;
         for (int i = 0; i < globals.count; ++i)
@@ -510,8 +534,17 @@ namespace hlrt
         auto within = [](int value, int most)
         { return static_cast<std::int16_t>(value < 0 ? 0 : (value > most ? most : value)); };
         Inventory &inv = player.state.inv;
-        inv.have = save.weapons & ((1u << kWeaponCount) - 1u); // (bit 0 is the suit)
+        inv.have = save.weapons & ((1u << kWeaponFirstMore) - 1u); // (bit 0 is the suit)
         inv.current = save.weapon < kWeaponCount ? save.weapon : kWeaponNone;
+        // The later weapons (none, from a save made before they were).
+        player.arsenal = save.arsenal;
+        player.arsenal.have &= static_cast<std::uint16_t>((1u << (kWeaponCount - kWeaponFirstMore)) - 1u);
+        player.arsenal.boltsClip = within(save.arsenal.boltsClip, 5);
+        player.arsenal.bolts = within(save.arsenal.bolts, 50);
+        player.arsenal.satchels = within(save.arsenal.satchels, 5);
+        player.arsenal.tripmines = within(save.arsenal.tripmines, 5);
+        player.arsenal.snarks = within(save.arsenal.snarks, 15);
+        player.state.arsenal = &player.arsenal;
         inv.clipGlock = within(save.clipGlock, 17);
         inv.clipShotgun = within(save.clipShotgun, 8);
         inv.ammo9mm = within(save.ammo9mm, 250);
@@ -688,9 +721,19 @@ namespace hlrt
             const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                player.state.origin[2] + player.state.viewHeight};
             const bool alive = player.state.health > 0;
-            // (A slot touched, or a step to the weapon before or after.)
-            const int pick = input.weaponPick != 0 ? input.weaponPick
-                                                   : weaponStepped(player.state.inv, input.weaponStep);
+            // The crossbow's sight: the picture narrows while it is up.
+            {
+                const bool zoom = player.arsenal.zoomed != 0 && player.state.inv.current == kWeaponCrossbow;
+                if (zoom != camera.zoomed)
+                {
+                    camera.zoomed = zoom;
+                    NEA_SetFov(zoom ? Camera::kZoomFovDegrees : Camera::kFovDegrees);
+                }
+            }
+            // (A slot touched -- the next of its kind of weapon -- or a step
+            // to the weapon before or after.)
+            const int pick = input.weaponPick != 0 ? weaponOfCategory(player.state, input.weaponPick)
+                                                   : weaponStepped(player.state, input.weaponStep);
             const std::uint32_t did = netDid = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
                                                   camera.right, camera.up, alive && input.attack,
                                                   false, ms, alive && input.second, alive ? pick : 0,
@@ -757,7 +800,8 @@ namespace hlrt
             }
             if (did & kWeaponDrawn)
                 sound.ui(kUiSoundWeapon);
-            if (player.state.inv.current != inHand_)
+            if (player.state.inv.current != inHand_ ||
+                (inHand_ == kWeaponSatchel && radio_ != satchelsOut()))
                 takeInHand();
             if (held.active)
             {
@@ -850,15 +894,18 @@ namespace hlrt
         }
         {
             Inventory &inv = player.state.inv;
-            const bool grenade = inv.current == kWeaponGrenade;
-            const std::int16_t *clip = gunClip(inv), *spare = gunSpare(inv);
-            bottomScreen.setStatus(inv.current, grenade ? inv.grenades : (clip != nullptr ? *clip : 0),
-                                   grenade ? 0 : (spare != nullptr ? *spare : 0), inv.have,
+            // (What is thrown or put down is a count of itself; a gun, what
+            // is in it and what is carried for it.)
+            const std::int16_t *stock = weaponStock(player.state);
+            const std::int16_t *clip = gunClip(player.state), *spare = gunSpare(player.state);
+            const int first = stock != nullptr ? *stock : (clip != nullptr ? *clip : 0);
+            const int second = stock != nullptr ? 0 : (spare != nullptr ? *spare : 0);
+            // (Every weapon's bit: the first six's, then the Arsenal's.)
+            const unsigned have = inv.have | (static_cast<unsigned>(player.arsenal.have) << kWeaponFirstMore);
+            bottomScreen.setStatus(inv.current, first, second, have,
                                    clip != nullptr && spare != nullptr && *clip < gunKind(inv.current).holds &&
                                        *spare > 0);
-            hudDraw.setStatus((inv.have & kHaveSuit) != 0, player.state.health, inv.armor, inv.current,
-                              grenade ? inv.grenades : (clip != nullptr ? *clip : 0),
-                              grenade ? 0 : (spare != nullptr ? *spare : 0),
+            hudDraw.setStatus((inv.have & kHaveSuit) != 0, player.state.health, inv.armor, inv.current, first, second,
                               inv.current == kWeaponMp5 ? inv.ammoAr : -1);
         }
         // With the eyes under, the picture dims: what there is of "under

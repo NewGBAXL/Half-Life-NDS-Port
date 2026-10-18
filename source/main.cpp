@@ -242,9 +242,16 @@ namespace
         currentMap = name;
         hlrt::debugOverlay.setMapName(currentMap.c_str());
 
+        // (What they carry of the later weapons comes along as the rest does:
+        // it is not in the Arrival, which is as it always was.)
+        const hldata::Arsenal carried = hlrt::player.arsenal;
         hlrt::player.spawn();
         if (arrival != nullptr)
+        {
+            // (Even with no landmark to put them by: what they carry is theirs.)
             hlrt::game.applyArrival(*arrival);
+            hlrt::player.arsenal = carried;
+        }
         clock.mark("game");
         hlrt::sound.load();
         clock.mark("snd");
@@ -410,7 +417,7 @@ namespace
         if (verb == "give")
         {
             hldata::Inventory &inv = hlrt::player.state.inv;
-            inv.have = static_cast<std::uint8_t>((1u << hldata::kWeaponCount) - 1u);
+            inv.have = static_cast<std::uint8_t>((1u << hldata::kWeaponFirstMore) - 1u);
             if (inv.current == hldata::kWeaponNone)
                 inv.current = hldata::kWeaponCrowbar;
             inv.clipGlock = 17;
@@ -423,6 +430,15 @@ namespace
             inv.ammo357 = 36;
             inv.ammoAr = 10;
             inv.armor = 100;
+            // ... and the later weapons, with all they hold.
+            for (int w = hldata::kWeaponFirstMore; w < hldata::kWeaponCount; ++w)
+                hldata::giveWeapon(hlrt::player.state, w);
+            hldata::Arsenal &more = hlrt::player.arsenal;
+            more.boltsClip = 5;
+            more.bolts = 50;
+            more.satchels = 5;
+            more.tripmines = 5;
+            more.snarks = 15;
             return "given";
         }
         if (verb == "heal")

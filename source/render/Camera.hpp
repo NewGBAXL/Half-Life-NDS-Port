@@ -54,6 +54,11 @@ namespace hlrt
         /// Vertical field of view handed to NEA, in degrees. 74 vertical is 90
         /// horizontal on a 4:3 screen, which is what Half-Life uses.
         static constexpr int kFovDegrees = 74;
+        /// ... and through the crossbow's sight: the game's 20 across, 15 high.
+        static constexpr int kZoomFovDegrees = 15;
+        /// The crossbow's sight is up: the picture and the cull planes are
+        /// the narrow ones (the caller hands NEA kZoomFovDegrees).
+        bool zoomed = false;
         /// Clip planes in view units (128 Half-Life units each), 20.12.
         ///
         /// What is drawn ends at kFarUnits: that is the cull plane the walk

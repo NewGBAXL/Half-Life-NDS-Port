@@ -7,6 +7,7 @@
 #include <NEAMain.h>
 
 #include "DebugLog.hpp"
+#include "Global.hpp"
 #include "HlFog.hpp"
 #include "HlLamp.hpp"
 #include "Settings.hpp"
@@ -526,6 +527,39 @@ namespace hlrt
                 gibOrder_[gibFound_++] = static_cast<std::uint8_t>(i);
             }
         }
+        // What the player has thrown or put down: few, small, and wanted
+        // (a tripmine is a thing to see) -- in what room there is.
+        shotFound_ = 0;
+        for (int i = 0; i < kMaxProjectiles; ++i)
+        {
+            const Projectile &shot = actors.shots[i];
+            const int m = shot.active ? game.thrownModel(shot.kind) : -1;
+            if (m < 0 || m >= actors.modelCount || actors.models[m].header == nullptr)
+                continue;
+            const ModelView &model = actors.models[m];
+            const std::int16_t centre[3] = {static_cast<std::int16_t>(fxToInt(shot.pos[0])),
+                                            static_cast<std::int16_t>(fxToInt(shot.pos[1])),
+                                            static_cast<std::int16_t>(fxToInt(shot.pos[2]))};
+            if (!worldDraw.ballVisible(centre, 24))
+                continue;
+            const int body = shot.kind == kShotMine ? 3 : 0;
+            int p = 0, v = 0;
+            for (int b = 0; b < model.header->batchCount; ++b)
+            {
+                if (!model.batchInBody(model.batches[b], body, 0, model.levelCount() - 1))
+                    continue;
+                p += model.batches[b].polygons;
+                v += model.batches[b].vertices;
+            }
+            // (A room of their own over the share, taken from the world's:
+            // they are few and small, and a big monster in view must not
+            // hide the satchel on the floor in front of it.)
+            if (polygons + p > kMaxPolygons + kThrownPolygons || vertices + v > kMaxVertices + kThrownPolygons * 3)
+                continue;
+            polygons += p;
+            vertices += v;
+            shotOrder_[shotFound_++] = static_cast<std::uint8_t>(i);
+        }
     }
 
     void ModelDraw::prepare()
@@ -548,7 +582,7 @@ namespace hlrt
     {
         const ActorWorld &actors = game.actors;
         cut += cut_;
-        if (found_ == 0 && gibFound_ == 0)
+        if (found_ == 0 && gibFound_ == 0 && shotFound_ == 0)
             return;
         const int found = found_;
         const int *order = order_;
@@ -594,6 +628,63 @@ namespace hlrt
             const fx turn[9] = {fxMul(cy, cp), -sy, fxMul(cy, sp), fxMul(sy, cp), cy, fxMul(sy, sp), -sp, 0, cp};
             drawActor(piece, actors.models[gib.model], gib.model, turn, -3 - static_cast<int>(gib.model),
                       actors.models[gib.model].levelCount() - 1);
+        }
+        // The later weapons' things, each turned the way it faces: a bolt
+        // along its flight, a tripmine out of its wall, a satchel and a
+        // snark the way they go (on the floor: they move as a crouched
+        // hull's middle, 18 units up).
+        for (int n = 0; n < shotFound_; ++n)
+        {
+            const Projectile &shot = actors.shots[shotOrder_[n]];
+            const int m = shot.active ? game.thrownModel(shot.kind) : -1;
+            if (m < 0 || m >= actors.modelCount || actors.models[m].header == nullptr)
+                continue;
+            const ModelView &model = actors.models[m];
+            ActorState thing;
+            thing.active = true;
+            thing.kind = static_cast<std::uint8_t>(ActorKind::Generic);
+            thing.model = static_cast<std::uint16_t>(m);
+            thing.body = shot.kind == kShotMine ? 3 : 0;
+            thing.light = 22;
+            thing.clip = model.header->clipCount != 0 ? 0 : -1;
+            if (shot.kind == kShotSnark && thing.clip == 0 && model.clips[0].frameCount > 1)
+            {
+                // (Its legs going, at the clip's own rate.)
+                const std::uint32_t whole = static_cast<std::uint32_t>(model.clips[0].frameCount - 1) << 8;
+                thing.frame = static_cast<std::uint32_t>(Global::vblanks() * model.clips[0].fps / 60) % whole;
+            }
+            fx dir[3] = {shot.velocity[0], shot.velocity[1], shot.velocity[2]};
+            for (int k = 0; k < 3; ++k)
+                thing.pos[k] = shot.pos[k];
+            if (shot.kind == kShotSatchel || shot.kind == kShotSnark)
+            {
+                dir[2] = 0;
+                thing.pos[2] -= kCrouchedFeet;
+            }
+            else if (shot.kind == kShotMine)
+            {
+                for (int k = 0; k < 3; ++k)
+                    thing.pos[k] -= dir[k] * 4; // (back onto the wall)
+            }
+            // Its forward along `dir`: yaw and pitch as the pieces have them.
+            fx forward[3] = {kFxOne, 0, 0};
+            const fx length = fxLength(dir);
+            if (length > fxFromInt(1) / 16)
+            {
+                for (int k = 0; k < 3; ++k)
+                    forward[k] = static_cast<fx>((static_cast<std::int64_t>(dir[k]) << kFxShift) / length);
+            }
+            const fx level[3] = {forward[0], forward[1], 0};
+            const fx cp = fxLength(level);
+            fx cy = kFxOne, sy = 0;
+            if (cp > kFxOne / 64)
+            {
+                cy = static_cast<fx>((static_cast<std::int64_t>(forward[0]) << kFxShift) / cp);
+                sy = static_cast<fx>((static_cast<std::int64_t>(forward[1]) << kFxShift) / cp);
+            }
+            const fx sp = -forward[2];
+            const fx turn[9] = {fxMul(cy, cp), -sy, fxMul(cy, sp), fxMul(sy, cp), cy, fxMul(sy, sp), -sp, 0, cp};
+            drawActor(thing, model, static_cast<unsigned>(m), turn, -3 - m, model.levelCount() - 1);
         }
         lightOff();
     }

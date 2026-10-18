@@ -102,7 +102,7 @@ namespace hldata
         bool usePressed = false;
         bool attack = false;
         bool second = false;
-        int weaponPick = 0; ///< a slot was touched: that weapon (a kWeapon*), or 0
+        int weaponPick = 0; ///< a slot was touched: its kind of weapon (1..5: weaponOfCategory), or 0
         int weaponStep = 0; ///< the weapon before (-1) or after (1) the one in hand
         bool menuPressed = false;
         bool reloadPressed = false;

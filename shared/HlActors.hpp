@@ -152,6 +152,21 @@ namespace hldata
     inline constexpr std::uint8_t kShotGrenade = 2;
     inline constexpr std::uint8_t kShotGib = 3; ///< something thrown out (HlEffects.hpp): falls, bounces, goes
     inline constexpr std::uint8_t kShotContact = 4; ///< a launcher's grenade: goes off at what it touches
+    /// A crossbow's bolt: straight on, fast; into what it meets, or into the
+    /// wall, where it stays a while (`sprite` 1: it is in the wall).
+    inline constexpr std::uint8_t kShotBolt = 5;
+    /// A satchel charge: thrown, it lies where it stops until it is set off
+    /// (`sprite` 1).
+    inline constexpr std::uint8_t kShotSatchel = 6;
+    /// A tripmine the player put on a wall: `velocity` is the way its beam
+    /// goes (unit, Q12). `sprite` 0 while it charges (`leftMs` to go), 1 armed
+    /// (`leftMs` then the length its beam was, Q30 of kMineRange), 2 set off
+    /// (`leftMs` until it goes).
+    inline constexpr std::uint8_t kShotMine = 7;
+    /// A snark: hops at whatever it can find to bite, and bursts when its
+    /// time is up. `sprite`: how many bites (low byte), and until its next
+    /// bite (high byte, in twentieths of a second).
+    inline constexpr std::uint8_t kShotSnark = 8;
     /// How many may be in flight at once: all of these on a DSi, half on a
     /// DS (ActorWorld::shotLimit).
     inline constexpr int kMaxProjectiles = 16;

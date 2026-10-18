@@ -1257,6 +1257,276 @@ namespace
         check(actor.ai >= kAiDying && rounds <= needs && rounds >= (needs + 2) / 3, text);
     }
 
+    // ------------------------------------------- the weapons that came later
+
+    /// The crossbow, the snark, the tripmine and the satchel, on a zombie in
+    /// c1a1a, by the game's numbers.
+    void testLaterWeapons(const char *dir)
+    {
+        auto game = load(dir, "c1a1a");
+        if (!game)
+            return;
+        Game &g = *game;
+        int zombie = -1;
+        for (int nth = 0; nth < 4 && zombie < 0; ++nth)
+        {
+            const int candidate = findKind(g, ActorKind::Zombie, nth);
+            if (candidate >= 0 && standNear(g, candidate, 200))
+                zombie = candidate;
+        }
+        check(zombie >= 0, "a zombie for the later weapons");
+        if (zombie < 0)
+            return;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            if (i != zombie && isMonster(g.actors.states[i].kind))
+                g.actors.states[i].active = false;
+        }
+        ActorState &actor = g.actors.states[zombie];
+        const fx home[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+        Arsenal ars;
+        g.player.arsenal = &ars;
+        std::uint32_t got = 0;
+        check(!hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Bolts), got) || ars.bolts == 5,
+              "bolts with no crossbow are only bolts");
+        ars = Arsenal();
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Crossbow), got) &&
+                  hasWeapon(g.player, kWeaponCrossbow) && g.player.inv.current == kWeaponCrossbow &&
+                  ars.boltsClip == 5 && ars.bolts == 0,
+              "the crossbow comes loaded with five");
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Crossbow), got) && ars.bolts == 5,
+              "... another is five more bolts");
+        tick(g, 2);
+        WeaponState weapon;
+        auto aimAt = [&](const fx *at, fx *eye, fx *forward, fx *right)
+        {
+            eye[0] = g.player.origin[0];
+            eye[1] = g.player.origin[1];
+            eye[2] = g.player.origin[2] + g.player.viewHeight;
+            fx to[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+            const fx length = fxLength(to);
+            for (int k = 0; k < 3; ++k)
+                forward[k] = static_cast<fx>((static_cast<std::int64_t>(to[k]) << kFxShift) / length);
+            const fx level[3] = {forward[0], forward[1], 0};
+            const fx flat = fxLength(level);
+            right[0] = static_cast<fx>((static_cast<std::int64_t>(forward[1]) << kFxShift) / flat);
+            right[1] = static_cast<fx>((static_cast<std::int64_t>(-forward[0]) << kFxShift) / flat);
+            right[2] = 0;
+        };
+        const fx up[3] = {0, 0, kFxOne};
+        auto hold = [&]()
+        {
+            for (int k = 0; k < 3; ++k)
+                actor.pos[k] = home[k];
+            g.player.health = 100;
+        };
+        fx eye[3], forward[3], right[3];
+
+        // The crossbow: a bolt that flies (it is not a hitscan) and hurts
+        // fifty, once, in flesh.
+        actor.health = 200;
+        {
+            const fx chest[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36)};
+            aimAt(chest, eye, forward, right);
+        }
+        std::uint32_t did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        int bolts = 0;
+        for (const Projectile &p : g.actors.shots)
+            bolts += p.active && p.kind == kShotBolt;
+        check((did & kWeaponFired) && ars.boltsClip == 4 && bolts == 1 && actor.health == 200,
+              "the crossbow looses a bolt, which has not yet arrived");
+        int frames = 0;
+        for (; frames < 30 && actor.health == 200; ++frames)
+        {
+            hold();
+            tick(g, 2);
+        }
+        bolts = 0;
+        for (const Projectile &p : g.actors.shots)
+            bolts += p.active && p.kind == kShotBolt;
+        std::printf("test_monsters: a bolt reaches the zombie 200 units off in %d frames\n", frames);
+        check(actor.health == 150 && bolts == 0 && frames >= 2 && frames <= 6 && g.times(CommonSound::XbowHitBody) == 1,
+              "... a few frames on: fifty, and it is gone into the zombie");
+        // Its sight, its refire, its reload.
+        weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, false, false, 33, true);
+        check(ars.zoomed == 1, "the other trigger looks down its sight");
+        weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, false, false, 33, true);
+        check(ars.zoomed == 1, "... held, it stays there");
+        int fired = 0;
+        for (int t = 0; t < 3000; t += 33)
+            fired += weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33) & kWeaponFired
+                         ? 1
+                         : 0;
+        check(fired == 4 && ars.boltsClip == 0, "a bolt each three quarters of a second, five in the crossbow");
+        for (Projectile &p : g.actors.shots)
+            p.active = false;
+        std::uint32_t reloaded = 0;
+        for (int t = 0; t < 1000; t += 33)
+            reloaded |= weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        check((reloaded & kWeaponReload) && ars.zoomed == 0, "empty, the trigger reloads it, which takes the eye off the sight");
+        for (int t = 0; t < 5000; t += 33)
+            weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, false, false, 33);
+        check(ars.boltsClip == 5 && ars.bolts == 0, "... four and a half seconds, five bolts from what is carried");
+        // Into the floor: it stays there, and is heard.
+        {
+            const fx floor[3] = {g.player.origin[0] + fxFromInt(40), g.player.origin[1],
+                                 g.player.origin[2] - fxFromInt(100)};
+            aimAt(floor, eye, forward, right);
+        }
+        weapon = WeaponState();
+        weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        for (int frame = 0; frame < 10; ++frame)
+        {
+            hold();
+            tick(g, 2);
+        }
+        bool stuck = false, solid = false;
+        for (const Projectile &p : g.actors.shots)
+        {
+            stuck = stuck || (p.active && p.kind == kShotBolt && p.sprite == 1);
+            solid = solid || (p.active && pointContents(g.move, p.pos) == kContentsSolid);
+        }
+        check(stuck && !solid && g.times(CommonSound::XbowHit) == 1, "a bolt in the floor stays, out of the floor");
+        for (Projectile &p : g.actors.shots)
+            p.active = false;
+
+        // The snark: let go, it finds the zombie and bites, ten a time.
+        actor.health = 200;
+        ars.snarks = 2;
+        giveWeapon(g.player, kWeaponSnark);
+        g.player.inv.current = kWeaponSnark;
+        weapon = WeaponState();
+        {
+            const fx chest[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36)};
+            aimAt(chest, eye, forward, right);
+        }
+        did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        check((did & kWeaponFired) && ars.snarks == 1, "a snark is let go");
+        int bitten = -1;
+        for (int frame = 0; frame < 30 * 6 && bitten < 0; ++frame)
+        {
+            hold();
+            tick(g, 2);
+            if (actor.health < 200)
+                bitten = frame;
+        }
+        std::printf("test_monsters: the snark bites %.1f s after it is let go\n", bitten / 30.0);
+        check(bitten >= 0 && (200 - actor.health) % kSnarkBite == 0, "... and bites the zombie, ten at a time");
+        // Fifteen seconds and it bursts.
+        bool burst = false;
+        for (int frame = 0; frame < 30 * 16 && !burst; ++frame)
+        {
+            hold();
+            tick(g, 2);
+            burst = g.times(CommonSound::SnarkBlast) > 0;
+        }
+        bool left = false;
+        for (const Projectile &p : g.actors.shots)
+            left = left || (p.active && p.kind == kShotSnark);
+        check(burst && !left, "... until it bursts, fifteen seconds after");
+        // The last one thrown, the hand is empty of snarks.
+        weapon = WeaponState();
+        did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        check((did & kWeaponFired) && ars.snarks == 0 && !hasWeapon(g.player, kWeaponSnark) &&
+                  g.player.inv.current != kWeaponSnark,
+              "the last snark gone, it is not held");
+        for (Projectile &p : g.actors.shots)
+            p.active = false;
+        actor.active = true;
+        actor.health = 200;
+        actor.ai = 0;
+
+        // The tripmine: on the floor at the player's feet, its beam straight
+        // up; two and a half seconds and it is set; the zombie across it,
+        // and it goes.
+        ars.tripmines = 1;
+        giveWeapon(g.player, kWeaponTripmine);
+        g.player.inv.current = kWeaponTripmine;
+        weapon = WeaponState();
+        {
+            const fx floor[3] = {g.player.origin[0] + fxFromInt(4), g.player.origin[1],
+                                 g.player.origin[2] - fxFromInt(100)};
+            aimAt(floor, eye, forward, right);
+        }
+        did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        g.drain();
+        const Projectile *mine = nullptr;
+        for (const Projectile &p : g.actors.shots)
+            mine = p.active && p.kind == kShotMine ? &p : mine;
+        check((did & kWeaponFired) && mine != nullptr && ars.tripmines == 0 && !hasWeapon(g.player, kWeaponTripmine) &&
+                  g.times(CommonSound::MineDeploy) == 1,
+              "a tripmine is put down; the last, so none is held");
+        if (mine == nullptr)
+            return;
+        // (The player out of its way.)
+        const fx mineAt[3] = {mine->pos[0], mine->pos[1], mine->pos[2]};
+        g.player.origin[0] += fxFromInt(48);
+        for (int frame = 0; frame < 30 * 3; ++frame)
+        {
+            hold();
+            tick(g, 2);
+        }
+        check(mine->active && mine->sprite == 1 && g.times(CommonSound::MineActivate) == 1, "... it is set");
+        for (int frame = 0; frame < 15; ++frame)
+        {
+            hold();
+            tick(g, 2);
+        }
+        check(mine->active && mine->sprite == 1, "... and stays set with nothing across it");
+        int blown = -1;
+        for (int frame = 0; frame < 30 && blown < 0; ++frame)
+        {
+            actor.pos[0] = mineAt[0];
+            actor.pos[1] = mineAt[1];
+            actor.pos[2] = mineAt[2] + fxFromInt(4);
+            g.player.health = 100;
+            tick(g, 2);
+            if (!mine->active)
+                blown = frame;
+        }
+        check(blown >= 0 && actor.health < 200 && g.times(CommonSound::Explode) >= 1,
+              "the zombie across its beam, it goes off and hurts it");
+        actor.active = true;
+        actor.health = 400;
+        actor.ai = 0;
+
+        // The satchel: thrown, then set off by the radio.
+        ars.satchels = 2;
+        giveWeapon(g.player, kWeaponSatchel);
+        g.player.inv.current = kWeaponSatchel;
+        weapon = WeaponState();
+        hold();
+        {
+            const fx feet[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+            aimAt(feet, eye, forward, right);
+        }
+        const int blasts = g.times(CommonSound::Explode);
+        did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        check((did & kWeaponFired) && ars.satchels == 1, "a satchel is thrown");
+        for (int frame = 0; frame < 30 * 2; ++frame)
+        {
+            hold();
+            tick(g, 2);
+        }
+        bool lying = false;
+        for (const Projectile &p : g.actors.shots)
+            lying = lying || (p.active && p.kind == kShotSatchel && pointContents(g.move, p.pos) != kContentsSolid);
+        check(lying && g.times(CommonSound::Explode) == blasts, "... and lies there, waiting");
+        for (int t = 0; t < 1000; t += 33)
+            weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, false, false, 33);
+        const int healthBefore = actor.health;
+        did = weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, true, false, 33);
+        hold();
+        tick(g, 2);
+        lying = false;
+        for (const Projectile &p : g.actors.shots)
+            lying = lying || (p.active && p.kind == kShotSatchel);
+        check((did & kWeaponFired) && !lying && ars.satchels == 1 && g.times(CommonSound::Explode) == blasts + 1 &&
+                  actor.health < healthBefore,
+              "the trigger again sets it off, which the zombie feels");
+        g.player.arsenal = nullptr;
+    }
+
     void testGrenade(const char *dir)
     {
         auto game = load(dir, "c1a1a");
@@ -1780,6 +2050,44 @@ static void testPick()
     const std::uint32_t mp5 = ask(0, true, true);
     check((mp5 & kWeaponReload) && !(mp5 & kWeaponSecondary) && inv.ammoAr == 2,
           "RELOAD reloads an MP5 with grenades to launch, and launches none");
+
+    // The touch screen's five slots are the game's five kinds of weapon: a
+    // touch takes the first of them carried, another the next, round again.
+    Arsenal ars;
+    player.arsenal = &ars;
+    inv.have = static_cast<std::uint8_t>(1u << kWeaponCrowbar | 1u << kWeaponGlock | 1u << kWeaponPython |
+                                         1u << kWeaponMp5 | 1u << kWeaponGrenade);
+    giveWeapon(player, kWeaponCrossbow);
+    giveWeapon(player, kWeaponSnark);
+    inv.current = kWeaponCrowbar;
+    check(weaponOfCategory(player, 1) == kWeaponCrowbar, "the first slot: the crowbar, the only one");
+    check(weaponOfCategory(player, 2) == kWeaponGlock, "the second: the pistol first");
+    inv.current = kWeaponGlock;
+    check(weaponOfCategory(player, 2) == kWeaponPython, "... then the .357");
+    inv.current = kWeaponPython;
+    check(weaponOfCategory(player, 2) == kWeaponGlock, "... then round again");
+    inv.current = kWeaponMp5;
+    check(weaponOfCategory(player, 3) == kWeaponCrossbow, "the third: past the shotgun not carried, the crossbow");
+    check(weaponOfCategory(player, 4) == kWeaponNone, "the fourth: nothing yet");
+    inv.current = kWeaponGrenade;
+    check(weaponOfCategory(player, 5) == kWeaponSnark, "the fifth: past the satchel and tripmine not carried, the snark");
+    check(weaponCategory(kWeaponSatchel) == 5 && weaponCategory(kWeaponCrossbow) == 3 && weaponCategory(kWeaponPython) == 2,
+          "each weapon in its kind");
+    // Stepping goes through all of them, the later ones too.
+    inv.current = kWeaponGrenade;
+    check(weaponAfter(player) != kWeaponGrenade && hasWeapon(player, weaponAfter(player)),
+          "the next weapon after the grenade is one carried");
+    std::uint8_t seen = 0;
+    for (int n = 0; n < 12; ++n)
+    {
+        inv.current = weaponAfter(player);
+        seen |= inv.current == kWeaponCrossbow ? 1 : (inv.current == kWeaponSnark ? 2 : 0);
+    }
+    check(seen == 3, "... and round them all, the crossbow and the snark among them");
+    takeWeapon(player, kWeaponSnark);
+    check(!hasWeapon(player, kWeaponSnark) && hasWeapon(player, kWeaponCrossbow), "one taken, the others kept");
+    player.arsenal = nullptr;
+    check(!hasWeapon(player, kWeaponCrossbow), "with no arsenal, none of the later ones");
 }
 
 int main()
@@ -1802,6 +2110,7 @@ int main()
         testKind(dir, "c1a2a", ActorKind::Slave, "alien slave", CommonSound::SlaveZap, 300, false, true);
         testKind(dir, "c1a1c", ActorKind::Bullsquid, "bullsquid", CommonSound::SquidSpit, 320, true, false);
         testGrenade(dir);
+        testLaterWeapons(dir);
         testHeadShot(dir);
         testGuns(dir);
         testGibs(dir);

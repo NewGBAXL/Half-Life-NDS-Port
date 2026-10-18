@@ -53,6 +53,11 @@ bind t "+reload"
 bind 4 "weapon_handgrenade"
 bind 5 "weapon_9mmAR"
 bind 6 "weapon_357"
+bind 7 "weapon_crossbow"
+bind 8 "weapon_satchel"
+bind 9 "weapon_tripmine"
+bind 0 "weapon_snark"
+bind m "give monster_zombie"
 crosshair 1
 cl_bob 0
 fps_max 60

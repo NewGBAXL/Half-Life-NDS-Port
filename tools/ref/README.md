@@ -25,10 +25,13 @@ removed when the run is over.)
   the emulator: `sleep <s>`, `key <name> <s>`, `shot <png>`, `burst <dir>
   <n>`. `a` is attack on both sides; the arrows walk and turn; F6, F7 and F9
   take the crowbar, the pistol and the shotgun in the real game; `4`, `5`
-  and `6` the hand grenade, the MP5 and the .357; `z` is the second trigger
-  on both sides (R on the console), `t` the real game's reload (the port's
-  is a tap on its RELOAD button, `tap 225 257`, and its weapons a tap on
-  their slots, `tap 65 422` for the pistol and 42 more for each one after).
+  and `6` the hand grenade, the MP5 and the .357; `7`, `8`, `9` and `0` the
+  crossbow, the satchel, the tripmine and the snark; `m` makes a zombie
+  where the player stands there (the game's `give`); `z` the second trigger (R on
+  the console), `t` the real game's reload (the port's is a tap on its
+  RELOAD button, `tap 225 257`, and its weapons a tap on the slot of their
+  kind, as the game's 1 to 5: `tap 28 422` for the first and 50 more for
+  each one after, a second tap the next weapon of that kind).
 - **How bright it is.** The side folder's game is given the player's own
   video settings (`brightness`, `gamma`, `gl_overbright`, `texgamma`,
   `lightgamma`, read from `valve/config.cfg` and never written back), so
