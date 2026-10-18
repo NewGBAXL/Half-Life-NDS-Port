@@ -128,7 +128,7 @@ namespace hldata
     // ------------------------------------------------------- who gets drawn
 
     inline constexpr int kDrawLevels = 4;  ///< the most levels of detail a model has
-    inline constexpr int kDrawMost = 12;   ///< the most actors drawn at once
+    inline constexpr int kDrawMost = 16;   ///< the most actors drawn at once (a DSi; a DS fewer)
     /// How far the models' share may grow for an enemy's sake, out of the
     /// world's far end.
     inline constexpr int kDrawGrowPolygons = 300;
@@ -168,17 +168,22 @@ namespace hldata
     };
 
     /// `count` candidates (at most kDrawMost * 2), in drawing order; no more
-    /// than `limit` drawn -- but an enemy is, up to kDrawMost. `pressure`
+    /// than `limit` drawn -- but an enemy is, up to `enemyMost`. `pressure`
     /// (0..3) is how full the frame's passes have been lately; `whole` is
     /// the size over which a model's finest level is "the game's own mesh",
-    /// kept for the nearest in a frame with room.
+    /// kept for the nearest in a frame with room. The share may grow by up
+    /// to `growPolygons` / `growVertices` out of the world's for the enemies
+    /// and the people; past that the people give way, and an enemy only
+    /// when the enemies alone cannot be had.
     inline DrawPlan planModels(const DrawCandidate *all, int count, int limit, const DrawHeld &held, int pressure,
-                               int sharePolygons, int shareVertices, int whole)
+                               int sharePolygons, int shareVertices, int whole, int enemyMost = 12,
+                               int growPolygons = kDrawGrowPolygons, int growVertices = kDrawGrowVertices)
     {
         DrawPlan plan;
         if (count > kDrawMost * 2)
             count = kDrawMost * 2;
         limit = limit < 1 ? 1 : (limit > kDrawMost ? kDrawMost : limit);
+        enemyMost = enemyMost < limit ? limit : (enemyMost > kDrawMost ? kDrawMost : enemyMost);
         pressure = pressure < 0 ? 0 : (pressure > 3 ? 3 : pressure);
 
         // The weapon in hand is always in view.
@@ -195,7 +200,7 @@ namespace hldata
         for (int i = 0; i < count; ++i)
         {
             const DrawCandidate &one = all[i];
-            const bool place = kept < limit || (one.kind == kDrawEnemy && kept < kDrawMost);
+            const bool place = kept < limit || (one.kind == kDrawEnemy && kept < enemyMost);
             if (!place)
             {
                 ++plan.cut[one.kind];
@@ -263,8 +268,8 @@ namespace hldata
         {
             const int needPolygons = sum(false, kDrawPerson) - capPolygons;
             const int needVertices = sum(true, kDrawPerson) - capVertices;
-            const int morePolygons = needPolygons < 0 ? 0 : (needPolygons > kDrawGrowPolygons ? kDrawGrowPolygons : needPolygons);
-            const int moreVertices = needVertices < 0 ? 0 : (needVertices > kDrawGrowVertices ? kDrawGrowVertices : needVertices);
+            const int morePolygons = needPolygons < 0 ? 0 : (needPolygons > growPolygons ? growPolygons : needPolygons);
+            const int moreVertices = needVertices < 0 ? 0 : (needVertices > growVertices ? growVertices : needVertices);
             capPolygons += morePolygons;
             capVertices += moreVertices;
             plan.grown = morePolygons;
@@ -272,19 +277,23 @@ namespace hldata
             tight = true;
         }
         // 4. And if that is still not enough (a dozen soldiers at once):
-        //    the farthest person, then the farthest enemy, until it is.
-        while (over())
+        //    the people, the farthest first; and only then -- the enemies
+        //    alone being more than can be had -- the farthest enemy.
+        for (const int kind : {static_cast<int>(kDrawPerson), static_cast<int>(kDrawEnemy)})
         {
-            int who = -1;
-            for (int i = 0; i < count; ++i)
+            while (over())
             {
-                if (plan.drawn[i] && all[i].kind <= kDrawPerson)
-                    who = i;
+                int who = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (plan.drawn[i] && all[i].kind == kind)
+                        who = i;
+                }
+                if (who < 0)
+                    break;
+                plan.drawn[who] = false;
+                ++plan.cut[all[who].kind];
             }
-            if (who < 0)
-                break;
-            plan.drawn[who] = false;
-            ++plan.cut[all[who].kind];
         }
 
         // Then what there is to pick up, and the rest, for as long as they

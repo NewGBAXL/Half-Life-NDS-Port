@@ -15,6 +15,7 @@
 #include "audio/DspAudio.hpp"
 #include "audio/Sound.hpp"
 #include "render/BottomScreen.hpp"
+#include "render/EffectDraw.hpp"
 #include "render/ModelDraw.hpp"
 #include "render/WorldDraw.hpp"
 
@@ -79,8 +80,9 @@ namespace hlrt
             // the eye is.
             if (modelDraw.cutOf(0) + modelDraw.cutOf(1) + modelDraw.cutOf(2) + modelDraw.cutOf(3) + modelDraw.grown() != 0)
             {
-                std::snprintf(line, sizeof(line), "cut A%d B%d C%d D%d +%d%s", modelDraw.cutOf(0), modelDraw.cutOf(1),
-                              modelDraw.cutOf(2), modelDraw.cutOf(3), modelDraw.grown(), modelDraw.strained() ? " full" : "");
+                std::snprintf(line, sizeof(line), "cut A%d B%d C%d D%d +%d%s e%d", modelDraw.cutOf(0), modelDraw.cutOf(1),
+                              modelDraw.cutOf(2), modelDraw.cutOf(3), modelDraw.grown(), modelDraw.strained() ? " full" : "",
+                              effectDraw.refused());
                 break;
             }
             std::snprintf(line, sizeof(line), "pos %5d %5d %5d %s",

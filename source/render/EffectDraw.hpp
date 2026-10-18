@@ -72,6 +72,13 @@ namespace hlrt
         };
         Item items_[kMaxItems];
         int count_ = 0;
+        int refused_ = 0; ///< this pass: what was in view and found the list full
+
+    public:
+        /// What this pass had in view and could not take (the list was full).
+        int refused() const { return refused_; }
+
+    private:
         void drawRecord(int index);
         void drawShot(int index);
         void drawEffect(int index);

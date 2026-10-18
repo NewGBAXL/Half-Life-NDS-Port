@@ -237,6 +237,7 @@ namespace hlrt
     void EffectDraw::gather(int &polygons, int &vertices)
     {
         count_ = 0;
+        refused_ = 0;
         if (player.noclip)
             return;
         const ActorWorld &a = game.actors;
@@ -256,7 +257,10 @@ namespace hlrt
                     return;
             }
             if (count_ == kMaxItems)
+            {
+                ++refused_;
                 return;
+            }
             // (The same measure the glass is sorted by.)
             const std::int32_t distance = (d[0] >> 1) * (d[0] >> 1) + (d[1] >> 1) * (d[1] >> 1) + (d[2] >> 1) * (d[2] >> 1);
             int slot = count_++;
@@ -269,6 +273,37 @@ namespace hlrt
             polygons += quads;
             vertices += quads * 4;
         };
+        // Blood, a gun's flash, a burst: what tells the player what is
+        // happening to whom comes first (the list has a limit, and what
+        // misses it is the map's decoration, not these), and is not left out
+        // for being small and far. Only what is in view, though.
+        for (int n = 0; n < kMaxEffects; ++n)
+        {
+            const Effect &effect = a.effects[n];
+            if (effect.kind == 0 || effect.wholeMs <= 0)
+                continue;
+            const bool line = effect.kind == kEffectBolt || effect.kind == kEffectTracer;
+            const fx middle[3] = {line ? (effect.a[0] + effect.b[0]) / 2 : effect.a[0],
+                                  line ? (effect.a[1] + effect.b[1]) / 2 : effect.a[1],
+                                  line ? (effect.a[2] + effect.b[2]) / 2 : effect.a[2]};
+            const std::int16_t a16[3] = {static_cast<std::int16_t>(fxToInt(effect.a[0])),
+                                         static_cast<std::int16_t>(fxToInt(effect.a[1])),
+                                         static_cast<std::int16_t>(fxToInt(effect.a[2]))};
+            const int reach = effect.size > 16 ? effect.size : 16;
+            if (line)
+            {
+                const std::int16_t b16[3] = {static_cast<std::int16_t>(fxToInt(effect.b[0])),
+                                             static_cast<std::int16_t>(fxToInt(effect.b[1])),
+                                             static_cast<std::int16_t>(fxToInt(effect.b[2]))};
+                if (!worldDraw.ballVisible(a16, 32) && !worldDraw.ballVisible(b16, 32))
+                    continue;
+            }
+            else if (!worldDraw.ballVisible(a16, reach))
+            {
+                continue;
+            }
+            add(kEffect, n, middle, 1 << 14, effect.kind == kEffectBolt ? 4 : 1);
+        }
         for (int i = 0; i < logic.recordCount; ++i)
         {
             const LogicRecord &record = logic.records[i];
@@ -310,7 +345,12 @@ namespace hlrt
         }
         for (int n = 0; n < kMaxProjectiles; ++n)
         {
-            if (a.shots[n].active)
+            if (!a.shots[n].active)
+                continue;
+            const std::int16_t at[3] = {static_cast<std::int16_t>(fxToInt(a.shots[n].pos[0])),
+                                        static_cast<std::int16_t>(fxToInt(a.shots[n].pos[1])),
+                                        static_cast<std::int16_t>(fxToInt(a.shots[n].pos[2]))};
+            if (worldDraw.ballVisible(at, 16))
                 add(kShot, n, a.shots[n].pos, 8, 1);
         }
         // The beams of the tripmines that are armed.
@@ -340,19 +380,11 @@ namespace hlrt
             const Piece &piece = a.pieces[n];
             if (piece.kind != kPieceShard || piece.alpha >= 31 || !pieceSeen(piece))
                 continue;
-            add(kPiece, n, piece.pos, piece.half * 40, 1);
-        }
-        for (int n = 0; n < kMaxEffects; ++n)
-        {
-            const Effect &effect = a.effects[n];
-            if (effect.kind == 0 || effect.wholeMs <= 0)
-                continue;
-            const bool line = effect.kind == kEffectBolt || effect.kind == kEffectTracer;
-            const fx middle[3] = {line ? (effect.a[0] + effect.b[0]) / 2 : effect.a[0],
-                                  line ? (effect.a[1] + effect.b[1]) / 2 : effect.a[1],
-                                  line ? (effect.a[2] + effect.b[2]) / 2 : effect.a[2]};
-            add(kEffect, n, middle, line ? 64 : (effect.size > 16 ? effect.size : 16),
-                effect.kind == kEffectBolt ? 4 : 1);
+            const std::int16_t at[3] = {static_cast<std::int16_t>(fxToInt(piece.pos[0])),
+                                        static_cast<std::int16_t>(fxToInt(piece.pos[1])),
+                                        static_cast<std::int16_t>(fxToInt(piece.pos[2]))};
+            if (worldDraw.ballVisible(at, 16))
+                add(kPiece, n, piece.pos, piece.half * 40, 1);
         }
     }
 
@@ -566,8 +598,16 @@ namespace hlrt
         int marks = 0, pieces = 0;
         for (const Decal &decal : a.decals)
             marks += decal.active;
+        // (Pieces: those that will be drawn -- seen, and in view.)
         for (const Piece &piece : a.pieces)
-            pieces += piece.kind != 0;
+        {
+            if (piece.kind == 0 || !pieceSeen(piece))
+                continue;
+            const std::int16_t at[3] = {static_cast<std::int16_t>(fxToInt(piece.pos[0])),
+                                        static_cast<std::int16_t>(fxToInt(piece.pos[1])),
+                                        static_cast<std::int16_t>(fxToInt(piece.pos[2]))};
+            pieces += worldDraw.ballVisible(at, 16) ? 1 : 0;
+        }
         const int most = isDSiMode() ? kDecalPolygons : kDecalPolygons / 2;
         marks = marks > most ? most : marks;
         polygons += marks + pieces;

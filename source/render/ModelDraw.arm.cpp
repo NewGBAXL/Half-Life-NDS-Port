@@ -319,11 +319,27 @@ namespace hlrt
                                          model->clips[actor.clip].endUp < 0
                                      ? model->clips[actor.clip].endUp
                                      : 0;
-            const DrawPoints points =
+            DrawPoints points =
                 actorViewPoints(actor, model->header->maxs[2], model->header->radius, clipDown);
+            // An enemy is seen however far off it is (the fog has it); and if
+            // its middle and head are in places the eye cannot see, its sides
+            // may be in one that it can (a wide one at a doorway).
+            const bool enemy = drawClass(actor) == kDrawEnemy;
+            if (enemy && points.count + 4 <= DrawPoints::kMost)
+            {
+                const int half = model->header->radius / 2;
+                const std::int16_t mid = points.at[0][2];
+                for (int k = 0; k < 4; ++k)
+                {
+                    std::int16_t *p = points.at[points.count++];
+                    p[0] = static_cast<std::int16_t>(points.at[0][0] + ((k & 1) ? half : -half));
+                    p[1] = static_cast<std::int16_t>(points.at[0][1] + ((k & 2) ? half : -half));
+                    p[2] = mid;
+                }
+            }
             bool visible = false;
             for (int k = 0; k < points.count && !visible; ++k)
-                visible = worldDraw.ballVisible(points.at[k], model->header->radius);
+                visible = worldDraw.ballVisible(points.at[k], model->header->radius, enemy);
             if (!visible)
                 continue;
             // (How far off: the longest of the three ways and half the
@@ -435,8 +451,18 @@ namespace hlrt
                 one.vertices[l] = static_cast<std::uint16_t>(v);
             }
         }
-        const DrawPlan chosen =
-            planModels(candidates, looked, limit, inHand, pressure, kMaxPolygons, kMaxVertices, kWholeModel);
+        // The models' share of this pass: as much of it as it always was,
+        // but no more than seven tenths of what the pass now has (when the
+        // hardware has had to be held back, the world must keep some); and
+        // what it may grow by for the enemies, up to nine tenths in all.
+        const int passPolygons = worldDraw.polygonBudget(), passVertices = worldDraw.vertexBudget();
+        const int sharePolygons = kMaxPolygons < passPolygons * 7 / 10 ? kMaxPolygons : passPolygons * 7 / 10;
+        const int shareVertices = kMaxVertices < passVertices * 13 / 20 ? kMaxVertices : passVertices * 13 / 20;
+        const int growPolygons = passPolygons * 9 / 10 - sharePolygons;
+        const int growVertices = passVertices * 9 / 10 - shareVertices;
+        const DrawPlan chosen = planModels(candidates, looked, limit, inHand, pressure, sharePolygons, shareVertices,
+                                           kWholeModel, isDSiMode() ? kDrawMost : 12, growPolygons > 0 ? growPolygons : 0,
+                                           growVertices > 0 ? growVertices : 0);
         heldLevel_ = chosen.heldLevel;
         heldDrawn_ = held != nullptr;
         polygons = chosen.polygons;

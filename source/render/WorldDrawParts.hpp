@@ -41,10 +41,10 @@ namespace hlrt::worldparts
         }
 
         inline bool sphereOutside(const CullPlane *planes, const std::int16_t *center,
-                                  std::int32_t radius)
+                                  std::int32_t radius, int planeCount = Camera::kPlaneCount)
         {
             const std::int32_t reach = radius << 12;
-            for (int p = 0; p < Camera::kPlaneCount; ++p)
+            for (int p = 0; p < planeCount; ++p)
             {
                 const CullPlane &plane = planes[p];
                 const std::int32_t d = plane.normal[0] * center[0] + plane.normal[1] * center[1] +

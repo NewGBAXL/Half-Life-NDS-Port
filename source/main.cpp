@@ -22,6 +22,7 @@
 #include "audio/DspAudio.hpp"
 #include "audio/Sound.hpp"
 #include "render/GpuStats.hpp"
+#include "render/EffectDraw.hpp"
 #include "render/ModelDraw.hpp"
 #include "render/HudDraw.hpp"
 #include "render/FrameFreeze.hpp"
@@ -854,6 +855,7 @@ int main(int argc, char *argv[])
                 const int took = static_cast<int>(now - lastPass);
                 hlrt::gpuStats.frame(stats.hwPolygons, stats.hwVertices, took);
                 hlrt::gpuStats.view(stats.budgetHit, hlrt::worldDraw.pressure() != 0);
+                hlrt::gpuStats.losses(hlrt::modelDraw.cutOf(0), hlrt::effectDraw.refused());
                 lastPass = now;
                 // A fade the map has asked for: the top screen's brightness.
                 hlrt::screenFade.setFade(hlrt::game.logic.fadeLevel);

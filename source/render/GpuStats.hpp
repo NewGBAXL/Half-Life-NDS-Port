@@ -47,6 +47,13 @@ namespace hlrt
             map_.cut += cut;
             map_.pressed += pressed;
         }
+        /// What a pass left out that should not be: enemies in view not
+        /// drawn, and effects (blood, a flash) in view not taken.
+        void losses(int enemies, int effects)
+        {
+            map_.enemiesCut += enemies != 0;
+            map_.effectsRefused += static_cast<std::uint32_t>(effects);
+        }
         const Frame &last() const { return last_; }
 
         /// The lowest lead since this was last asked (the overlay asks).
@@ -72,6 +79,8 @@ namespace hlrt
             std::uint32_t slow = 0; ///< passes that took more than one blank
             std::uint32_t cut = 0;     ///< passes cut off at a distance
             std::uint32_t pressed = 0; ///< passes with the small and far left out
+            std::uint32_t enemiesCut = 0;     ///< passes with an enemy in view not drawn
+            std::uint32_t effectsRefused = 0; ///< effects in view not taken, in all
         };
         Frame last_;
         Totals map_;

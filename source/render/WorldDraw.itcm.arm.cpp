@@ -55,8 +55,8 @@ namespace hlrt
         // The models have been costed already (ModelDraw::plan): the world
         // has what they leave.
         // (... and the brushes, whose share is set aside too: planBrushes.)
-        const int polygonBudget = this->polygonBudget() - modelPolygons_ - brushPolygons_;
-        const int vertexBudget = this->vertexBudget() - modelVertices_ - brushVertices_;
+        const int polygonBudget = this->polygonBudget() - modelPolygons_ - brushPolygons_ - lampPolygons_;
+        const int vertexBudget = this->vertexBudget() - modelVertices_ - brushVertices_ - lampVertices_;
 
         int sp = 0;
         walkStack[sp++] = static_cast<std::int16_t>(view.models[0].headNode);
@@ -333,8 +333,19 @@ namespace hlrt
             // with the models: the world has what both leave.)
             effectDraw.gather(modelPolygons_, modelVertices_);
             // (... and the head-up display, which is drawn over it all.)
-            modelPolygons_ += HudDraw::kPolygons + (hudDraw.lampAlight() ? HudDraw::kLampPolygons >> (modelDraw.strained() ? 1 : 0) : 0);
-            modelVertices_ += HudDraw::kVertices + (hudDraw.lampAlight() ? HudDraw::kLampVertices : 0);
+            modelPolygons_ += HudDraw::kPolygons;
+            modelVertices_ += HudDraw::kVertices;
+            // (... and room for the lamp's light: as much as it lit the pass
+            // before and a little more -- all it may have, the pass it comes on.)
+            lampPolygons_ = lampVertices_ = 0;
+            if (hudDraw.lampAlight())
+            {
+                const int mostPolygons = HudDraw::kLampPolygons >> (modelDraw.strained() ? 1 : 0);
+                lampPolygons_ = lampLastPolygons_ < 0 ? mostPolygons : lampLastPolygons_ + 24;
+                lampVertices_ = lampLastPolygons_ < 0 ? HudDraw::kLampVertices : lampLastVertices_ + 96;
+                lampPolygons_ = lampPolygons_ > mostPolygons ? mostPolygons : lampPolygons_;
+                lampVertices_ = lampVertices_ > HudDraw::kLampVertices ? HudDraw::kLampVertices : lampVertices_;
+            }
             // (... and the marks and small things there are: nothing, with
             // none.)
             effectDraw.reserve(modelPolygons_, modelVertices_);

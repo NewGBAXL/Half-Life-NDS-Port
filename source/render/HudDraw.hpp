@@ -6,9 +6,13 @@
 // while a map loads.
 //
 // Both are the game's own pictures, cooked to the card (shared/HlUi.hpp); a
-// card without them has neither. They are drawn as flat quads a little way
-// in front of the eye, through the same projection as the world: that is
-// right whatever the view, and nearer than anything else can be.
+// card without them has neither. The display is not 3D at all: it is put on
+// sprites of the top screen (the main engine's, in video bank F, after
+// TopText's in G), added to the picture as the game adds its display -- so
+// it costs the 3D engine nothing, and is always in front. A pane redrawn when
+// what it shows changes: the bottom row (health, armour, ammunition), the
+// lamp, the crosshair; and the red of being hurt, a sheet of sprites over all
+// of it, as bright as the hurt is. The loading picture is still a quad.
 
 #include <cstdint>
 
@@ -18,8 +22,9 @@ namespace hlrt
     {
     public:
         /// What it costs a frame, at most: taken off the world's budget.
-        static constexpr int kPolygons = 24;
-        static constexpr int kVertices = 96;
+        /// (Nothing: it is not 3D.)
+        static constexpr int kPolygons = 0;
+        static constexpr int kVertices = 0;
         /// ... and what the lamp's light may cost besides, while it is
         /// alight: the surfaces in its beam are drawn twice.
         static constexpr int kLampPolygons = 120;
@@ -50,8 +55,16 @@ namespace hlrt
             for (int i = 0; i < 4; ++i)
                 pain_[i] = pain[i];
         }
-        /// Last thing in a pass.
+        /// Once a frame, after the pass: what the sprites are to show.
         void draw();
+        /// From the vertical blank interrupt: what draw() said, to the
+        /// sprites' table.
+        void onVblank();
+
+    private:
+        void compose(); ///< draw()'s work, into the sprites' copy
+
+    public:
         /// The marks' texture (an NEA_Material: HlUi.hpp, kDecalAtlasFile),
         /// or null on a card that has not got it.
         void *decalMaterial() const { return decalMaterial_; }
@@ -68,7 +81,7 @@ namespace hlrt
         void hideLoading();
 
     private:
-        void *material_ = nullptr; ///< NEA_Material
+        bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
         void *lampMaterial_ = nullptr;
         void *decalMaterial_ = nullptr;
         void *decalPalette_ = nullptr;

@@ -233,6 +233,38 @@ namespace
                   "when even that is not enough, the people go first");
             check(plan.drawn[0] && plan.drawn[1], "... and the nearest enemies never");
         }
+        // A person who is NEARER than every enemy still goes first: the
+        // enemies are dropped only once no person is left to drop.
+        {
+            DrawCandidate all[6];
+            for (int i = 0; i < 4; ++i)
+                all[i] = model(kDrawEnemy, 400, 2);
+            for (int i = 4; i < 6; ++i)
+                all[i] = model(kDrawPerson, 400, 2);
+            const DrawPlan plan = planModels(all, 6, 12, DrawHeld(), 0, 1000, 6000, kWhole, 12, 100, 1000);
+            check(plan.cut[kDrawPerson] == 2 && plan.cut[kDrawEnemy] < 4,
+                  "both people go before any enemy does");
+        }
+        // A small pass (the hardware held back): the share and how far it
+        // may grow are what the caller gives, and the enemies take them.
+        {
+            DrawCandidate all[4];
+            for (int i = 0; i < 4; ++i)
+                all[i] = model(kDrawEnemy, 150, 2);
+            const DrawPlan plan = planModels(all, 4, 8, DrawHeld(), 0, 300, 3000, kWhole, 12, 400, 1000);
+            check(plan.cut[kDrawEnemy] == 0 && plan.polygons <= 300 + 400,
+                  "four enemies in a small pass: all drawn, within what may be grown");
+        }
+        // As many enemies as a DSi may draw (16), and a DS (12).
+        {
+            DrawCandidate all[18];
+            for (int i = 0; i < 18; ++i)
+                all[i] = model(kDrawEnemy, 20);
+            const DrawPlan dsi = planModels(all, 18, 8, DrawHeld(), 0, 2000, 6000, kWhole, 16);
+            const DrawPlan ds = planModels(all, 18, 8, DrawHeld(), 0, 2000, 6000, kWhole, 12);
+            check(drawnOf(dsi, all, 18, kDrawEnemy) == 16 && drawnOf(ds, all, 18, kDrawEnemy) == 12,
+                  "sixteen enemies drawn on a DSi, twelve on a DS");
+        }
     }
 } // namespace
 

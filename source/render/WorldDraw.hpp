@@ -107,7 +107,7 @@ namespace hlrt
         /// For what is drawn besides the world (models): whether a ball at
         /// `centre` (whole units) can be seen at all -- its leaf is one the
         /// eye's leaf can see, and it is in the view.
-        bool ballVisible(const std::int16_t *centre, int radius) const;
+        bool ballVisible(const std::int16_t *centre, int radius, bool anyDistance = false) const;
         /// Take `polygons` and `vertices` from what is left of the pass.
         /// False, with nothing taken, if there is not that much.
         bool spend(int polygons, int vertices);
@@ -188,6 +188,13 @@ namespace hlrt
         void brushCost(std::uint32_t index, int &polygons, int &vertices) const;
         int brushPolygons_ = 0; ///< what the world leaves for the brushes this pass
         int brushVertices_ = 0;
+        /// What the world leaves for the lamp's light this pass: what it
+        /// lit the pass before, and a little (it is counted as it is drawn,
+        /// so this is only room kept, not a cost).
+        int lampPolygons_ = 0;
+        int lampVertices_ = 0;
+        int lampLastPolygons_ = -1; ///< what it lit last pass; -1: it was not lit
+        int lampLastVertices_ = 0;
         /// The texture matrix as liquids want it (it is also what slides a
         /// conveyor's belt, which puts this back when it has done).
         void sway();

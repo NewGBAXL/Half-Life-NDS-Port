@@ -497,12 +497,10 @@ namespace hlrt
         // not blend two polygons of the same ID over each other, which is
         // what keeps the back of a glass box from showing through its front
         // as a darker patch -- and lets a glow show through a pane.
-        {
-            const int marks = effectDraw.drawDecals();
-            const int pieces = effectDraw.drawSolid();
-            stats_.polygons += marks + pieces;
-            stats_.vertices += marks * 4 + pieces * 3;
-        }
+        // (Their room was set aside before the walk -- EffectDraw::reserve
+        // -- and is counted in already.)
+        effectDraw.drawDecals();
+        effectDraw.drawSolid();
         lampPass();
         const int effects = effectDraw.begin();
         int k = 0, e = 0, id = 0;
@@ -531,7 +529,10 @@ namespace hlrt
     {
         NEA_Material *light = static_cast<NEA_Material *>(hudDraw.lampMaterial());
         if (!game.lampLit || light == nullptr)
+        {
+            lampLastPolygons_ = -1;
             return;
+        }
         const LevelView &view = level.view;
         const LampBeam &beam = game.lampBeam;
         // The hardware's "draw where the depth is the same" (a polygon
@@ -540,7 +541,7 @@ namespace hlrt
         // matrices -- and nowhere else.
         constexpr int kDepthEqual = 1 << 14;
         constexpr int kLampId = 62;
-        int polygons = 0;
+        int polygons = 0, vertices = 0;
 
         NEA_MaterialUse(light);
         GFX_COLOR = 0x7FFF;
@@ -577,6 +578,7 @@ namespace hlrt
             lampStream(view.gxStream + surface.gxOfs, surface.gxWords, texCoord,
                        [](std::uint32_t word) { GFX_FIFO = word; }, textureCache.tint(surface.texture));
             polygons += surface.polygons;
+            vertices += surface.vertices;
             stats_.polygons += surface.polygons;
             stats_.vertices += surface.vertices;
             return true;
@@ -675,6 +677,8 @@ namespace hlrt
                 glPopMatrix(1);
         }
 
+        lampLastPolygons_ = polygons;
+        lampLastVertices_ = vertices;
         GFX_TEX_FORMAT = 0;
         NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), kCull, polygonMode());
         // The texture matrix back to what the rest of the frame is drawn
@@ -684,7 +688,7 @@ namespace hlrt
         sway();
     }
 
-    bool WorldDraw::ballVisible(const std::int16_t *centre, int radius) const
+    bool WorldDraw::ballVisible(const std::int16_t *centre, int radius, bool anyDistance) const
     {
         if (!level.loaded() || leafFrame_ == nullptr)
             return false;
@@ -694,7 +698,9 @@ namespace hlrt
         // half in a wall is still drawn if the view test lets it be.
         if (leaf != 0 && leafFrame_[leaf] != visFrame_)
             return false;
-        return !sphereOutside(camera.planes, centre, radius);
+        // (`anyDistance`: past the far end of the view too -- an enemy is
+        // drawn there, and the fog has it.)
+        return !sphereOutside(camera.planes, centre, radius, anyDistance ? Camera::kPlaneCount - 1 : Camera::kPlaneCount);
     }
 
     bool WorldDraw::spend(int polygons, int vertices)

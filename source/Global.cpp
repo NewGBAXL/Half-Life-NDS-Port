@@ -2,6 +2,7 @@
 
 #include "HlManifest.hpp"
 #include "data/VramWriter.hpp"
+#include "render/HudDraw.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
 
@@ -18,6 +19,8 @@ namespace
         // First: what is written to video memory has only until line 206.
         hlrt::vramWriter.onVblank();
         hlrt::GpuStats::onVblank();
+        // The display's sprites, as the frame before made them.
+        hlrt::hudDraw.onVblank();
         NEA_VBLFunc();
     }
 } // namespace

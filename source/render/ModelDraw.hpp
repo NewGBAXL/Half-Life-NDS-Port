@@ -28,7 +28,7 @@ namespace hlrt
         /// The most actors that can be drawn in one pass, nearest first; and
         /// how many may be on this machine (setLimit): what there is time to
         /// pose, not what there is room to draw.
-        static constexpr int kMaxDrawn = 12;
+        static constexpr int kMaxDrawn = 16;
         int cutOf(int kind) const { return cutClass_[kind & 3]; }
         int grown() const { return grown_; }
         bool strained() const { return strained_; }
