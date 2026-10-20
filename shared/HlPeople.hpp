@@ -118,16 +118,21 @@ namespace hldata
         /// Somewhere to run to from `threat`: the nearest node that is
         /// further from it than he is, that it cannot see, and that there
         /// is a way to. False if there is none.
-        inline bool personHide(LogicWorld &w, int index, const fx *threat, fx *out)
+        inline bool personHideSearch(LogicWorld &w, int index, const fx *threat, fx *out)
         {
             ActorWorld &a = *w.actors;
             const ActorState &me = a.states[index];
+            int pause = 0;
             const int mine = pathNearest(a, *w.world, me.pos, kWalkStanding, index);
+            std::uint8_t reached[kMaxPathNodes];
+            if (mine >= 0)
+                pathReach(a, mine, kPathLinkHuman, true, reached);
             int best = -1;
             fx bestD = fxFromInt(900);
             const fx from[3] = {threat[0], threat[1], threat[2] + fxFromInt(24)};
             for (int n = 0; n < a.nodeCount; ++n)
             {
+                thinkPoint(pause, 8);
                 const fx *p = a.nodes[n].pos;
                 const fx own[3] = {p[0] - me.pos[0], p[1] - me.pos[1], p[2] - me.pos[2]};
                 const fx far = fxLength(own);
@@ -139,7 +144,7 @@ namespace hldata
                 const fx eye[3] = {p[0], p[1], p[2] + fxFromInt(50)};
                 if (lineClear(*w.world, from, eye))
                     continue;
-                if (mine >= 0 && n != mine && pathStep(a, mine, n, kPathLinkHuman, true) == kNoPathNode)
+                if (mine >= 0 && n != mine && !reached[n])
                     continue;
                 best = n;
                 bestD = far;
@@ -149,6 +154,13 @@ namespace hldata
             for (int k = 0; k < 3; ++k)
                 out[k] = a.nodes[best].pos[k];
             return true;
+        }
+
+        /// Somewhere for the scientist at `index` to hide from `threat` (in
+        /// his tick: as a soldier's cover, it is part of deciding).
+        inline bool personHide(LogicWorld &w, int index, const fx *threat, fx *out)
+        {
+            return personHideSearch(w, index, threat, out);
         }
 
         /// Whether a guard can see `other` from where his eyes are: within

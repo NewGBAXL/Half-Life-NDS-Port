@@ -91,6 +91,9 @@ namespace hlrt
         /// would go in two pieces.
         static constexpr int kListWords = 24 * 1024;
         static constexpr int kRelaxWait = 120;
+        /// Nearer than this (whole units, along the view), nothing is left
+        /// out for being small: under pressure, only what is farther goes.
+        static constexpr int kDetailNearest = 256;
         static constexpr int kNoFog = 8192; ///< a fog distance that is no fog
         static constexpr NEA_CullingEnum kCull = NEA_CULL_NONE;
         static constexpr NEA_OtherFormatEnum kPolygonMode =

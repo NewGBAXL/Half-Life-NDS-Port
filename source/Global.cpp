@@ -4,6 +4,7 @@
 #include "data/VramWriter.hpp"
 #include "render/HudDraw.hpp"
 #include "render/Camera.hpp"
+#include "game/Think.hpp"
 #include "render/GpuStats.hpp"
 
 Global global;
@@ -85,6 +86,8 @@ void Global::InitVideo()
     // The projection the world is drawn through. NEA rebuilds it every frame
     // from these, so they are set once.
     NEA_SetFov(hlrt::Camera::kFovDegrees);
+    // The worker that thinks for the actors while a frame waits.
+    hlrt::think.start();
     NEA_ClippingPlanesSetI(hlrt::Camera::kNearClip, hlrt::Camera::kFarClip);
     NEA_ClearColorSet(RGB15(0, 0, 0), 31, 63);
 

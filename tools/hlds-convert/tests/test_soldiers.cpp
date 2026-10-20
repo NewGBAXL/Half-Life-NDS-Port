@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <memory>
 
+#include "HlThink.hpp"
 #include "TestGame.hpp"
 
 using namespace hlds;
@@ -450,12 +451,23 @@ namespace
 
     // ------------------------------------------------------------- squads
 
-    void testSquads(const char *dir)
+    /// `deferred`: their long thinking (cover, ways somewhere) asked for and
+    /// worked out between ticks, as the console's worker does it (HlThink.hpp)
+    /// -- the same fight, by the same rules.
+    void testSquads(const char *dir, bool deferred = false)
     {
         auto game = load(dir, "c1a3a");
         if (!game)
             return;
         Game &g = *game;
+        std::vector<ThinkSlot> slots(static_cast<std::size_t>(g.actors.count));
+        ThinkQueue queue;
+        queue.slots = slots.data();
+        queue.count = g.actors.count;
+        queue.deferred = deferred;
+        int answered = 0;
+        if (deferred)
+            g.actors.think = &queue;
         g.player.origin[2] += fxFromInt(30000);
         tickStill(g);
         // The map's three squads of three, each under the one it flags.
@@ -514,6 +526,10 @@ namespace
         for (int ms = 0; ms < 30000; ms += 33)
         {
             g.frame();
+            // (The worker's turn: what was asked this tick, worked out
+            // before the next.)
+            while (deferred && thinkRunOne(g.logic))
+                ++answered;
             g.player.health = 100;
             for (int k = 0; k < 3; ++k)
                 g.player.origin[k] = stand[k];
@@ -563,10 +579,13 @@ namespace
             }
             mostFiring = firing > mostFiring ? firing : mostFiring;
         }
-        std::printf("test_soldiers: c1a3a, thirty seconds with a squad: %d woke; at most %d firing at once; "
+        std::printf("test_soldiers: c1a3a, thirty seconds with a squad%s: %d woke; at most %d firing at once; "
                     "%d runs for cover (%d to somewhere in sight); %d grenades thrown (%d against the rules); "
-                    "%d lines spoken\n",
-                    woke, mostFiring, covers, badCover, tosses, badToss, g.sentencesHeard);
+                    "%d lines spoken; %d questions answered outside the frame\n",
+                    deferred ? " (thinking outside the frame)" : "", woke, mostFiring, covers, badCover, tosses,
+                    badToss, g.sentencesHeard, answered);
+        if (deferred)
+            check(answered > 0, "their thinking is done outside the frame");
         check(woke == 3 && leaderFirst, "the whole squad learns of the player at once, and its leader opens fire");
         check(othersHid, "... while the others make for cover");
         check(signals == 1, "... with a wave of the hand first, the once");
@@ -898,6 +917,7 @@ int main()
         testCooked(dir);
         testSoldier(dir);
         testSquads(dir);
+        testSquads(dir, true);
         testGrenades(dir);
         testOddments(dir);
         testLauncher(dir);

@@ -284,13 +284,12 @@ namespace hldata
         /// units off, that is no nearer the threat than it is to him. False
         /// if there is nowhere (and then he does not look again for a
         /// while: looking is a good many lines through the world).
-        inline bool gruntFindCover(LogicWorld &w, int index, const fx *threat, int least, fx *out)
+        inline bool gruntCoverSearch(LogicWorld &w, int index, const fx *threat, int least, fx *out)
         {
             ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            if (me.coverMs > 0)
-                return false;
+            const ActorState &me = a.states[index];
             const MoveWorld &world = *w.world;
+            int pause = 0;
             fx sine, cosine;
             fxSinCos(me.yaw, sine, cosine);
             for (int n = 1; least == 0 && n <= 5; ++n)
@@ -313,8 +312,14 @@ namespace hldata
             // (Somewhere he can GET to: the node he is at, and a way from
             // it. A wall away is hidden, and no use.)
             const int mineNode = pathNearest(a, world, me.pos, kWalkStanding, index);
+            // (Which of the nodes he can get to at all, once: not a search
+            // for each.)
+            std::uint8_t reached[kMaxPathNodes];
+            if (mineNode >= 0)
+                pathReach(a, mineNode, kPathLinkHuman, true, reached);
             for (int n = 0; n < a.nodeCount; ++n)
             {
+                thinkPoint(pause, 8);
                 const fx *p = a.nodes[n].pos;
                 const fx mine[3] = {p[0] - me.pos[0], p[1] - me.pos[1], p[2] - me.pos[2]};
                 const fx far = fxLength(mine);
@@ -326,20 +331,32 @@ namespace hldata
                 const fx eye[3] = {p[0], p[1], p[2] + fxFromInt(50)};
                 if (lineClear(world, threat, eye))
                     continue;
-                if (mineNode >= 0 && n != mineNode &&
-                    pathStep(a, mineNode, n, kPathLinkHuman, true) == kNoPathNode)
+                if (mineNode >= 0 && n != mineNode && !reached[n])
                     continue;
                 best = n;
                 bestD = far;
             }
             if (best < 0)
-            {
-                me.coverMs = 2000;
                 return false;
-            }
             for (int k = 0; k < 3; ++k)
                 out[k] = a.nodes[best].pos[k];
             return true;
+        }
+
+        /// Somewhere out of the sight of `threat` for the soldier at `index`,
+        /// `least` units off at least. None found: he does not look again for
+        /// two seconds. (Worked out in his tick, always: it is chosen in the
+        /// middle of deciding what to do, and the decision is not to wait.
+        /// One search of the ways for every node makes it cheap enough.)
+        inline bool gruntFindCover(LogicWorld &w, int index, const fx *threat, int least, fx *out)
+        {
+            ActorState &me = w.actors->states[index];
+            if (me.coverMs > 0)
+                return false;
+            const bool found = gruntCoverSearch(w, index, threat, least, out);
+            if (!found)
+                me.coverMs = 2000;
+            return found;
         }
 
         // --------------------------------------------------- what he does

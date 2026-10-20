@@ -1,5 +1,6 @@
 #include "data/TextureStream.hpp"
 #include "net/NetGame.hpp"
+#include "game/Think.hpp"
 #include "game/Game.hpp"
 
 #include "HlMaterial.hpp"
@@ -41,6 +42,7 @@ namespace hlrt
 
     void Game::destroy()
     {
+        hlrt::think.detach(); // (before what the worker reads goes)
         std::free(linkShut_);
         linkShut_ = nullptr;
         actors.linkShut = nullptr;
@@ -219,6 +221,8 @@ namespace hlrt
         weapon_ = WeaponState();
         held = ActorState();
         inHand_ = -1;
+        // (Their long thinking, outside the frame: game/Think.cpp.)
+        hlrt::think.attach(logic);
         return true;
     }
 

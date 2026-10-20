@@ -738,12 +738,16 @@ namespace hldata
             // there to the floor (found once, when it first looks).
             if (actor.ai == kAiIdle && actor.reach == 0)
             {
+                // (As far down as the game looks, 2048; and no longer than
+                // its tongue can be drawn: kBarnacleTongueMost.)
                 const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] - fxFromInt(4)};
-                const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] - fxFromInt(1024)};
+                const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] - fxFromInt(2048)};
                 const Shot down = traceShot(*w.world, from, to);
-                actor.reach = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(1020)) * down.fraction) >>
+                actor.reach = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(2044)) * down.fraction) >>
                                               kFractionShift) -
                               fxFromInt(8);
+                if (actor.reach > kBarnacleTongueMost)
+                    actor.reach = kBarnacleTongueMost;
                 if (actor.reach < fxFromInt(8))
                     actor.reach = fxFromInt(8);
                 actor.goal[2] = actor.reach; // how long it is when let all the way down
@@ -2926,15 +2930,16 @@ namespace hldata
             return;
         }
         const MonsterKind &kind = monsterKind(actor.kind);
-        // (A barnacle's body is above its "feet".)
+        // (A barnacle hangs from its "feet", the mouth on the ceiling: its
+        // body is below them, as the game's box is, -32 to 0.)
         const bool hangs = actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle);
         for (int i = 0; i < 2; ++i)
         {
             mins[i] = actor.pos[i] - kind.half;
             maxs[i] = actor.pos[i] + kind.half;
         }
-        mins[2] = hangs ? actor.pos[2] - fxFromInt(8) : actor.pos[2];
-        maxs[2] = actor.pos[2] + kind.height;
+        mins[2] = hangs ? actor.pos[2] - kind.height : actor.pos[2];
+        maxs[2] = hangs ? actor.pos[2] : actor.pos[2] + kind.height;
     }
 
     /// Everything in this file that happens by itself, for `ms` more

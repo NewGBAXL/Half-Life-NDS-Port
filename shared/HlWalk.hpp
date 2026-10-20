@@ -457,8 +457,10 @@ namespace hldata
                           const fx *from, const fx *to, int steps)
     {
         fx at[3] = {from[0], from[1], from[2]};
+        int pause = 0;
         for (int n = 0; n <= steps; ++n)
         {
+            thinkPoint(pause, 6); // (three hull traces a step)
             const fx d[3] = {to[0] - at[0], to[1] - at[1], 0};
             const fx distance = fxLength(d);
             if (distance <= kWalkStep)
@@ -583,8 +585,10 @@ namespace hldata
             done[n] = 0;
         }
         far[from] = 0;
+        int pause = 0;
         for (;;)
         {
+            thinkPoint(pause, 24); // (a scan of every node a time)
             int at = -1;
             for (int n = 0; n < a.nodeCount; ++n)
             {
@@ -622,6 +626,40 @@ namespace hldata
             step = before[step];
         }
         return static_cast<std::uint8_t>(step);
+    }
+
+    /// Which nodes can be got to from node `from` at all, over the links as
+    /// they are now (for something of `size` that does or does not open
+    /// doors): `reached[n]` is 1 for each. The same search as pathStep's, made
+    /// once for every node -- what asking pathStep of each in turn would
+    /// tell, for a node's worth of the cost.
+    inline void pathReach(const ActorWorld &a, int from, std::uint8_t size, bool opens, std::uint8_t *reached)
+    {
+        for (int n = 0; n < a.nodeCount; ++n)
+            reached[n] = 0;
+        if (from < 0 || from >= a.nodeCount || a.links == nullptr)
+            return;
+        // (Only whether, not how far: a flood over the links will do.)
+        std::uint8_t queue[kMaxPathNodes];
+        int head = 0, tail = 0;
+        reached[from] = 1;
+        queue[tail++] = static_cast<std::uint8_t>(from);
+        while (head < tail)
+        {
+            const PathNode &node = a.nodes[queue[head++]];
+            for (int l = node.firstLink; l < node.firstLink + node.linkCount && l < a.linkCount; ++l)
+            {
+                const PathLink &link = a.links[l];
+                if (!(link.flags & size) || reached[link.to])
+                    continue;
+                const std::uint8_t shut = a.linkShut != nullptr ? a.linkShut[l] : kLinkOpen;
+                if (shut == kLinkNoWay || (shut == kLinkDoor && !opens))
+                    continue;
+                reached[link.to] = 1;
+                if (tail < kMaxPathNodes)
+                    queue[tail++] = link.to;
+            }
+        }
     }
 
     /// Which links something of that size takes.
@@ -662,11 +700,13 @@ namespace hldata
         }
 
         /// Work out where the walker at `index` should be making for on its
-        /// way to `dest` (feet): `dest` itself, or a path node.
-        inline void walkPlan(ActorWorld &a, const MoveWorld &world, int index, int small,
-                             const fx *dest, int reach)
+        /// way to `dest` (feet): `dest` itself, or a path node -- into
+        /// `actor` (the walker, or a copy of it), with a shut door on the way
+        /// to be asked to open left in `door` (a brush, or -1).
+        inline void walkPlanInto(const ActorWorld &a, const MoveWorld &world, int index, ActorState &actor,
+                                 int small, const fx *dest, int reach, int &door)
         {
-            ActorState &actor = a.states[index];
+            door = -1;
             const fx d[3] = {dest[0] - actor.pos[0], dest[1] - actor.pos[1], 0};
             // Straight there, if that is a walk that can be made.
             if (fxLength(d) < fxFromInt(reach) &&
@@ -700,9 +740,8 @@ namespace hldata
                     if (actor.goalNode >= 0 && a.linkShut != nullptr)
                     {
                         const int link = pathLinkBetween(a, actor.fromNode, actor.goalNode);
-                        if (link >= 0 && a.linkShut[link] == kLinkDoor && a.links[link].brush != kNoBrush &&
-                            a.doorsWanted < 4)
-                            a.doorWanted[a.doorsWanted++] = a.links[link].brush;
+                        if (link >= 0 && a.linkShut[link] == kLinkDoor && a.links[link].brush != kNoBrush)
+                            door = a.links[link].brush;
                     }
                 }
                 else
@@ -715,6 +754,21 @@ namespace hldata
             for (int i = 0; i < 3; ++i)
                 actor.goal[i] = a.nodes[actor.goalNode].pos[i];
             actor.hasGoal = true;
+        }
+
+        /// A door a walker wants opened (the logic opens it: a few a tick).
+        inline void walkWantDoor(ActorWorld &a, int door)
+        {
+            if (door >= 0 && a.doorsWanted < 4)
+                a.doorWanted[a.doorsWanted++] = static_cast<std::uint16_t>(door);
+        }
+
+        /// The same, for the walker itself, at once.
+        inline void walkPlan(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest, int reach)
+        {
+            int door = -1;
+            walkPlanInto(a, world, index, a.states[index], small, dest, reach, door);
+            walkWantDoor(a, door);
         }
     } // namespace detail
 
@@ -736,13 +790,51 @@ namespace hldata
         actor.thinkMs -= ms;
         if (actor.thinkMs <= 0)
         {
-            actor.thinkMs = still ? 60000 : 500;
-            detail::walkPlan(a, world, index, small, dest, still ? 1024 : 480);
-            // (Nothing found: asked again -- soon by something chasing,
-            // whose quarry moves; not so soon by something going to a mark,
-            // for which looking is dear and little will have changed.)
-            if (!actor.hasGoal)
-                actor.thinkMs = still ? 1400 : 500;
+            ThinkSlot *slot = a.think != nullptr && a.think->deferred && index < a.think->count
+                                  ? &a.think->slots[index]
+                                  : nullptr;
+            bool planned = slot == nullptr;
+            if (slot == nullptr)
+            {
+                detail::walkPlan(a, world, index, small, dest, still ? 1024 : 480);
+            }
+            else if (slot->kind == kThinkPlan && slot->state == kThinkDone)
+            {
+                // Worked out outside the frame: taken up, if it was worked
+                // out from where the walker still is on its way.
+                slot->state = kThinkFree;
+                if (slot->basis == actor.fromNode)
+                {
+                    actor.hasGoal = slot->found;
+                    actor.goalNode = slot->goalNode;
+                    actor.fromNode = slot->fromNode;
+                    for (int i = 0; i < 3; ++i)
+                        actor.goal[i] = slot->out[i];
+                    detail::walkWantDoor(a, slot->door);
+                    planned = true;
+                }
+            }
+            else if (slot->state == kThinkFree || (slot->kind != kThinkPlan && slot->state == kThinkDone))
+            {
+                // Asked; meanwhile on as it was going.
+                slot->kind = kThinkPlan;
+                slot->state = kThinkAsked;
+                for (int i = 0; i < 3; ++i)
+                    slot->at[i] = dest[i];
+                slot->small = static_cast<std::int16_t>(small);
+                slot->reach = static_cast<std::int16_t>(still ? 1024 : 480);
+                slot->basis = actor.fromNode;
+            }
+            if (planned)
+            {
+                actor.thinkMs = still ? 60000 : 500;
+                // (Nothing found: asked again -- soon by something chasing,
+                // whose quarry moves; not so soon by something going to a
+                // mark, for which looking is dear and little will have
+                // changed.)
+                if (!actor.hasGoal)
+                    actor.thinkMs = still ? 1400 : 500;
+            }
         }
         if (!actor.hasGoal)
             return kWalkNoWay;

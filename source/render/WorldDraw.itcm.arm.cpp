@@ -58,6 +58,13 @@ namespace hlrt
         const int polygonBudget = this->polygonBudget() - modelPolygons_ - brushPolygons_ - lampPolygons_;
         const int vertexBudget = this->vertexBudget() - modelVertices_ - brushVertices_ - lampVertices_;
 
+        // Once out of room, a surface that does not fit is left out and the
+        // walk goes on for smaller ones -- farther, all of them -- until
+        // there is almost no room left or this many in a row have not fitted
+        // (what the walk itself costs is held to that).
+        constexpr int kMissesMost = 48;
+        constexpr int kRoomLeast = 8;
+        int misses = 0;
         int sp = 0;
         walkStack[sp++] = static_cast<std::int16_t>(view.models[0].headNode);
         while (sp > 0)
@@ -111,7 +118,9 @@ namespace hlrt
                                                 (surface.center[1] - eyeAt[1]) * forward[1] +
                                                 (surface.center[2] - eyeAt[2]) * forward[2]) >>
                                                12;
-                    if (depth > static_cast<std::int32_t>(surface.radius) * detail)
+                    // (Never what is near: a wall at arm's length with a hole in
+                    // it is worse than any far thing missing.)
+                    if (depth > kDetailNearest && depth > static_cast<std::int32_t>(surface.radius) * detail)
                     {
                         // (Counted once, though it is met in every leaf it
                         // is part of.)
@@ -130,18 +139,28 @@ namespace hlrt
                 if (polygons + surface.polygons > polygonBudget ||
                     vertices + surface.vertices > vertexBudget)
                 {
-                    // Out of room, and everything still on the stack is farther
-                    // away than this: stop here.
-                    stats_.budgetHit = true;
-                    // How far off that is: where the fog has to be whole.
-                    const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
-                                                (surface.center[1] - eyeAt[1]) * forward[1] +
-                                                (surface.center[2] - eyeAt[2]) * forward[2]) >>
-                                               12;
-                    stats_.cutDistance = depth - surface.radius;
-                    sp = 0;
-                    break;
+                    // Out of room: everything still on the stack is farther
+                    // away than this. The first one marks where the view is
+                    // cut (where the fog has to be whole); after it, only what
+                    // still fits.
+                    if (!stats_.budgetHit)
+                    {
+                        stats_.budgetHit = true;
+                        const std::int32_t depth = ((surface.center[0] - eyeAt[0]) * forward[0] +
+                                                    (surface.center[1] - eyeAt[1]) * forward[1] +
+                                                    (surface.center[2] - eyeAt[2]) * forward[2]) >>
+                                                   12;
+                        stats_.cutDistance = depth - surface.radius;
+                    }
+                    if (++misses >= kMissesMost || polygonBudget - polygons < kRoomLeast ||
+                        vertexBudget - vertices < kRoomLeast * 3)
+                    {
+                        sp = 0;
+                        break;
+                    }
+                    continue;
                 }
+                misses = 0;
                 word |= bit;
                 polygons += surface.polygons;
                 vertices += surface.vertices;

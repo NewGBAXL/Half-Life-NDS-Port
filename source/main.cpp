@@ -781,7 +781,8 @@ int main(int argc, char *argv[])
 
     while (true)
     {
-        NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+        // (The wait is when the actors' thinking is done: game/Think.cpp.)
+        NEA_WaitForVBL(NEA_UPDATE_TASKS);
         // What is to be written to video memory is queued (VramWriter writes
         // it in the vertical blanks), and what is written is drawn.
         hlrt::textureStream.upload();

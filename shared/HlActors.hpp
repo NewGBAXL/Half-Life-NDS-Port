@@ -152,6 +152,11 @@ namespace hldata
     inline constexpr std::uint8_t kShotGrenade = 2;
     inline constexpr std::uint8_t kShotGib = 3; ///< something thrown out (HlEffects.hpp): falls, bounces, goes
     inline constexpr std::uint8_t kShotContact = 4; ///< a launcher's grenade: goes off at what it touches
+    /// A barnacle's tongue: as long as its bones make it with the slide at
+    /// nothing (barnacle.mdl, Bone16..20), and the most the slide lets out
+    /// (its controller's range, 1024) on top of that.
+    inline constexpr fx kBarnacleTongueBones = fxFromInt(85);
+    inline constexpr fx kBarnacleTongueMost = fxFromInt(1024 + 85);
     /// A crossbow's bolt: straight on, fast; into what it meets, or into the
     /// wall, where it stays a while (`sprite` 1: it is in the wall).
     inline constexpr std::uint8_t kShotBolt = 5;
@@ -315,6 +320,70 @@ namespace hldata
     /// (All of these on a DSi, half on a DS: ActorWorld::effectLimit.)
     inline constexpr int kMaxEffects = 48;
 
+    // ------------------------------------------------------------- thinking
+    //
+    // What the actors work out that takes long -- a way to somewhere -- can
+    // be worked out outside the frame: asked for in one tick, done while the console would otherwise
+    // wait for the screen (a worker of the 3D engine's: source/game/Think.cpp),
+    // and taken up in a later tick. HlThink.hpp does the work; here is only
+    // where it is asked for and left. Nothing of it is saved: an actor
+    // loaded from a save simply asks again.
+
+    inline constexpr std::uint8_t kThinkPlan = 1;  ///< walkPlan: where to make for next
+
+    inline constexpr std::uint8_t kThinkFree = 0;
+    inline constexpr std::uint8_t kThinkAsked = 1;
+    inline constexpr std::uint8_t kThinkWorking = 2;
+    inline constexpr std::uint8_t kThinkDone = 3;
+
+    /// One actor's question, and its answer.
+    struct ThinkSlot
+    {
+        std::uint8_t kind = 0;
+        std::uint8_t state = kThinkFree;
+        // Asked: where to, or from what; how (crouched or not, how far a
+        // straight walk is looked for, how near cover may be); and where the
+        // actor was on its way (an answer to an older question is not taken).
+        fx at[3] = {0, 0, 0};
+        std::int16_t small = 0;
+        std::int16_t reach = 0;
+        std::int16_t least = 0;
+        std::int16_t basis = -1;
+        // Found.
+        bool found = false;
+        fx out[3] = {0, 0, 0};
+        std::int16_t goalNode = -1;
+        std::int16_t fromNode = -1;
+        std::int16_t door = -1; ///< a shut door on the way, to be asked to open (a brush)
+    };
+
+    /// The questions of all of them. `deferred`: asked and answered later
+    /// (the console); otherwise every question is answered as it is asked,
+    /// as it always was (the host's tests, and before the worker is up).
+    struct ThinkQueue
+    {
+        ThinkSlot *slots = nullptr;
+        int count = 0;
+        bool deferred = false;
+        /// Set while a map is being left: whatever is being worked out is
+        /// finished at once, without stopping for the frame, and thrown away.
+        volatile bool abort = false;
+        int next = 0; ///< where the worker looks for the next question
+    };
+
+    /// Where long work stops a moment for the frame (the console's worker
+    /// sets it; null: never).
+    inline void (*thinkYield)() = nullptr;
+    /// Called every so often in a long loop: every `every` calls, a stop.
+    inline void thinkPoint(int &counter, int every)
+    {
+        if (thinkYield != nullptr && ++counter >= every)
+        {
+            counter = 0;
+            thinkYield();
+        }
+    }
+
     /// The actors of the loaded map and the models they are made of.
     struct ActorWorld
     {
@@ -338,6 +407,9 @@ namespace hldata
         /// How each link is just now, a byte a link (kLink*), kept by the
         /// logic, which knows the doors; null: all of them are open.
         std::uint8_t *linkShut = nullptr;
+        /// What is being thought out for them outside the frame (not saved:
+        /// a pointer). Null: everything is worked out as it is asked.
+        ThinkQueue *think = nullptr;
         /// The doors those who walk have asked to have opened since the
         /// logic last looked (brush indices): it opens them.
         std::uint16_t doorWanted[4] = {};
@@ -426,7 +498,12 @@ namespace hldata
         }
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
         {
-            controls[0] = -(actor.reach & ~(kFxOne - 1));
+            // Its tongue let down to `reach`: the slide is what is added to
+            // the length its bones already have (kBarnacleTongueBones -- what
+            // the game's -100 makes up for), so that the tip is where it
+            // grabs.
+            const fx slide = actor.reach > kBarnacleTongueBones ? actor.reach - kBarnacleTongueBones : 0;
+            controls[0] = -(slide & ~(kFxOne - 1));
             return true;
         }
         return false;

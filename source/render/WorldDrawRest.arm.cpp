@@ -951,7 +951,8 @@ namespace hlrt
         else if (lines < kLowLines)
             held_ += kStep / 4;
         else if (held_ > 0 && lines >= kEasyLines && stats_.hwPolygons < 1900)
-            held_ -= 2; // a second and more for each step taken
+            held_ -= 6; // (back about a third of a second for each step taken: what
+                        // was held for a heavy moment is not kept from the world for long)
         if (held_ > kMost)
             held_ = kMost;
         if (held_ < 0)
