@@ -110,6 +110,9 @@ namespace hlds
         int fonts = 0;     ///< of the three
         bool hud = false;  ///< the head-up display's pictures
         bool loading = false;
+        bool menu = false;  ///< the menu's background
+        bool logo = false;  ///< the animated title
+        bool intro = false; ///< the Valve intro (its pictures, and its sound)
         bool icons = false; ///< the weapons' pictures for the touch screen
         bool title = false; ///< the game's title
         bool decals = false; ///< the marks shots and blood leave

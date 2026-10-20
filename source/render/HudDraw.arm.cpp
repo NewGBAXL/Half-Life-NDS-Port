@@ -1,6 +1,10 @@
 #include "global_header.hpp"
 
 #include "render/HudDraw.hpp"
+#include "audio/Sound.hpp"
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
 
 #include "render/FrameFreeze.hpp"
 
@@ -157,6 +161,66 @@ namespace hlrt
         }
 
         NEA_Material *loadingShown = nullptr;
+        // The title screen's pictures (showMenu), and the intro's (playIntro).
+        NEA_Material *menuShown = nullptr;
+        NEA_Material *logoShown = nullptr;
+        NEA_Material *introShown = nullptr;
+
+        /// A picture over the whole screen, in the top 192 rows of its
+        /// 256-wide texture.
+        void screenPicture(NEA_Material *material)
+        {
+            NEA_MaterialUse(material);
+            NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+            GFX_COLOR = 0x7FFF;
+            beginFlat();
+            GFX_BEGIN = GL_QUADS;
+            corner(0, 0, 0, 0);
+            corner(0, 192, 0, kLoadingHeight);
+            corner(256, 192, kLoadingSize, kLoadingHeight);
+            corner(256, 0, kLoadingSize, 0);
+        }
+
+        void drawMenu()
+        {
+            if (menuShown == nullptr)
+                return;
+            screenPicture(menuShown);
+            if (logoShown == nullptr)
+                return;
+            // The animated title over it, across the top as the game has it:
+            // see-through by its own alpha, and on the picture's own depth
+            // (drawn where that depth is: over it).
+            NEA_MaterialUse(logoShown);
+            NEA_PolyFormat(31, 1, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, NEA_DEPTH_TEST_EQUAL);
+            GFX_COLOR = 0x7FFF;
+            beginFlat();
+            constexpr int kTop = 10;
+            GFX_BEGIN = GL_QUADS;
+            corner(0, kTop, 0, 0);
+            corner(0, kTop + kLogoHeight, 0, kLogoHeight);
+            corner(256, kTop + kLogoHeight, kLogoWidth, kLogoHeight);
+            corner(256, kTop, kLogoWidth, 0);
+        }
+
+        // Where the intro's picture is on the screen, and how big.
+        int introX = 0, introY = 0, introW = 0, introH = 0;
+
+        void drawIntro()
+        {
+            if (introShown == nullptr)
+                return;
+            NEA_MaterialUse(introShown);
+            NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+            GFX_COLOR = 0x7FFF;
+            beginFlat();
+            GFX_BEGIN = GL_QUADS;
+            corner(introX, introY, 0, 0);
+            corner(introX, introY + introH, 0, introH);
+            corner(introX + introW, introY + introH, introW, introH);
+            corner(introX + introW, introY, introW, 0);
+        }
+
         void drawLoading()
         {
             if (loadingShown == nullptr)
@@ -474,6 +538,237 @@ namespace hlrt
         frameFreeze.freeze();
         hideLoading();
         return true;
+    }
+
+    bool HudDraw::playIntro()
+    {
+        if (!global.hasFat)
+            return false;
+        std::FILE *file = std::fopen(global.dataPath(kIntroFile).c_str(), "rb");
+        if (file == nullptr)
+            return false;
+        IntroHeader header;
+        if (std::fread(&header, sizeof(header), 1, file) != 1 || std::memcmp(header.magic, kIntroMagic, 4) != 0 ||
+            header.version != kIntroVersion || header.frames == 0 || header.frameBytes != kIntroFrameBytes ||
+            header.textureSize != kIntroTextureSize || header.frameMicros == 0 ||
+            header.pictureWidth > kIntroTextureSize || header.pictureHeight > kIntroTextureSize)
+        {
+            std::fclose(file);
+            return false;
+        }
+        introX = header.pictureX;
+        introY = header.pictureY;
+        introW = header.pictureWidth;
+        introH = header.pictureHeight;
+        // One place in video memory for its picture, and one for its colours:
+        // each picture written there in turn, in the blank before it is shown.
+        NEA_TextureRegion region{};
+        NEA_PaletteRegion colours{};
+        NEA_Material *material = NEA_MaterialCreate();
+        NEA_Palette *palette = NEA_PaletteCreate();
+        auto *frame = static_cast<std::uint8_t *>(std::malloc(kIntroFrameBytes));
+        bool ok = material != nullptr && palette != nullptr && frame != nullptr &&
+                  NEA_TextureRegionReserve4x4(kIntroTexelBytes, &region) >= kIntroTexelBytes &&
+                  NEA_PaletteRegionReserve(kIntroPaletteColours * 2, &colours) >= kIntroPaletteColours * 2;
+        ok = ok &&
+             NEA_MaterialTexBindFixed(material, NEA_TEX4X4, kIntroTextureSize, kIntroTextureSize,
+                                      static_cast<NEA_TextureFlags>(0), region.texels) == 1 &&
+             NEA_PaletteBindFixed(palette, colours.base, kIntroPaletteColours, NEA_TEX4X4) == 1;
+        // The pictures are read in order, one ahead of the one shown (a few
+        // kilobytes from the card each fifteenth of a second): never a wait
+        // for the card in the blank, nor so long a frame that the sound runs
+        // dry. One fallen behind is skipped to.
+        int filePicture = 0; // where the file is
+        int pending = -1;    // the picture read and waiting to be shown
+        auto readPicture = [&](int n)
+        {
+            if (n != filePicture &&
+                std::fseek(file, static_cast<long>(sizeof(header) + static_cast<std::size_t>(n) * kIntroFrameBytes),
+                           SEEK_SET) != 0)
+                return false;
+            if (std::fread(frame, kIntroFrameBytes, 1, file) != 1)
+                return false;
+            filePicture = n + 1;
+            pending = n;
+            return true;
+        };
+        int shown = -1;
+        if (ok && readPicture(0))
+        {
+            NEA_MaterialSetPalette(material, palette);
+            sound.setMusic(kIntroTrack, 0);
+            const std::uint32_t start = Global::vblanks();
+            // (Not a press that was down when it began.)
+            scanKeys();
+            std::uint32_t was = keysHeld();
+            while (true)
+            {
+                NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+                const std::uint64_t micros = static_cast<std::uint64_t>(Global::vblanks() - start) * 1000000u / 60u;
+                const int due = static_cast<int>(micros / header.frameMicros);
+                if (pending >= 0 && pending <= due)
+                {
+                    NEA_VramWrite(region.texels, frame, kIntroTexelBytes);
+                    NEA_VramWrite(NEA_Texture4x4IndexAddress(region.texels), frame + kIntroTexelBytes, kIntroIndexBytes);
+                    NEA_VramWrite(colours.base, frame + kIntroTexelBytes + kIntroIndexBytes, kIntroPaletteColours * 2);
+                    shown = pending;
+                    pending = -1;
+                    introShown = material;
+                }
+                NEA_Process(drawIntro);
+                // (The screen is dark from start-up: let up once there is
+                // a picture to see.)
+                if (shown >= 0 && screenFade.curtained())
+                    screenFade.curtainUp();
+                sound.frame();
+                scanKeys();
+                const std::uint32_t held = keysHeld();
+                if (held & ~was)
+                    break; // (a button, or the stylus: enough)
+                was = held;
+                if (due >= header.frames)
+                    break;
+                // The next picture, now, while this one is shown.
+                if (pending < 0)
+                {
+                    const int next = shown + 1 > due ? shown + 1 : due;
+                    if (next < header.frames && !readPicture(next))
+                        break;
+                }
+            }
+            sound.setMusic(-1, 0);
+        }
+        // Black again, before its memory goes.
+        introShown = nullptr;
+        NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+        NEA_Process(drawIntro);
+        NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+        if (material != nullptr)
+            NEA_MaterialDelete(material);
+        if (palette != nullptr)
+            NEA_PaletteDelete(palette);
+        if (region.texels != nullptr)
+            NEA_TextureRegionRelease(&region);
+        if (colours.base != nullptr)
+            NEA_PaletteRegionRelease(&colours);
+        std::free(frame);
+        std::fclose(file);
+        return shown >= 0;
+    }
+
+    bool HudDraw::showMenu()
+    {
+        if (!global.hasFat)
+            return false;
+        if (menuMaterial_ == nullptr)
+        {
+            NEA_Material *material = nullptr;
+            NEA_Palette *palette = nullptr;
+            if (!TextureCache::loadFile(global.commonPath(kMenuFile).c_str(), false, kLoadingSize, kLoadingSize, 0,
+                                        material, palette))
+                return false;
+            menuMaterial_ = material;
+            menuPalette_ = palette;
+        }
+        // The animated title: its pictures read from the card as they come.
+        if (logoMaterial_ == nullptr)
+        {
+            std::FILE *file = std::fopen(global.commonPath(kLogoFile).c_str(), "rb");
+            LogoHeader header;
+            NEA_Material *material = NEA_MaterialCreate();
+            NEA_Palette *palette = NEA_PaletteCreate();
+            // (A grey ramp: what the texels say of their brightness.)
+            static std::uint16_t greys[32];
+            for (int n = 0; n < 32; ++n)
+                greys[n] = static_cast<std::uint16_t>(n | n << 5 | n << 10);
+            if (file != nullptr && std::fread(&header, sizeof(header), 1, file) == 1 &&
+                std::memcmp(header.magic, kLogoMagic, 4) == 0 && header.version == kLogoVersion &&
+                header.width == kLogoWidth && header.height == kLogoHeight && header.frames > 0 &&
+                header.frameMicros > 0 && material != nullptr && palette != nullptr &&
+                NEA_MaterialTexBlank(material, NEA_A3PAL32, kLogoWidth, kLogoTextureHeight,
+                                     static_cast<NEA_TextureFlags>(0)) == 1 &&
+                NEA_PaletteLoad(palette, greys, 32, NEA_A3PAL32) == 1)
+            {
+                NEA_MaterialSetPalette(material, palette);
+                logoMaterial_ = material;
+                logoPalette_ = palette;
+                logoFile_ = file;
+                logoFrames_ = header.frames;
+                logoMicros_ = header.frameMicros;
+                logoFrame_ = -1;
+            }
+            else
+            {
+                if (file != nullptr)
+                    std::fclose(file);
+                if (material != nullptr)
+                    NEA_MaterialDelete(material);
+                if (palette != nullptr)
+                    NEA_PaletteDelete(palette);
+            }
+        }
+        menuSince_ = Global::vblanks();
+        menuShown = static_cast<NEA_Material *>(menuMaterial_);
+        logoShown = nullptr;
+        return true;
+    }
+
+    void HudDraw::menuFrame()
+    {
+        if (menuShown == nullptr)
+            return;
+        // The title's picture due now (round and round), into its texture in
+        // this blank, if it is another.
+        if (logoMaterial_ != nullptr)
+        {
+            auto *material = static_cast<NEA_Material *>(logoMaterial_);
+            const std::uint64_t micros = static_cast<std::uint64_t>(Global::vblanks() - menuSince_) * 1000000u / 60u;
+            const int due = static_cast<int>((micros / logoMicros_) % static_cast<std::uint64_t>(logoFrames_));
+            if (due != logoFrame_)
+            {
+                auto *file = static_cast<std::FILE *>(logoFile_);
+                auto *texels = static_cast<std::uint8_t *>(NEA_MaterialTexGetData(material));
+                constexpr int kBytes = kLogoWidth * kLogoHeight;
+                if (texels != nullptr &&
+                    std::fseek(file, static_cast<long>(sizeof(LogoHeader) + static_cast<std::size_t>(due) * kBytes),
+                               SEEK_SET) == 0 &&
+                    std::fread(texels, kBytes, 1, file) == 1)
+                {
+                    NEA_MaterialTexSetDirty(material);
+                    NEA_MaterialTexVramUpdate(material);
+                    logoFrame_ = due;
+                    logoShown = material;
+                }
+            }
+        }
+        NEA_Process(drawMenu);
+    }
+
+    void HudDraw::hideMenu()
+    {
+        if (menuShown == nullptr)
+            return;
+        // What is on the screen stays there as a picture (as the loading
+        // picture does), and its textures go.
+        for (int n = 0; n < 2; ++n)
+        {
+            NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+            NEA_Process(drawMenu);
+        }
+        NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+        frameFreeze.freeze();
+        menuShown = logoShown = nullptr;
+        if (menuMaterial_ != nullptr)
+            NEA_MaterialDelete(static_cast<NEA_Material *>(menuMaterial_));
+        if (menuPalette_ != nullptr)
+            NEA_PaletteDelete(static_cast<NEA_Palette *>(menuPalette_));
+        if (logoMaterial_ != nullptr)
+            NEA_MaterialDelete(static_cast<NEA_Material *>(logoMaterial_));
+        if (logoPalette_ != nullptr)
+            NEA_PaletteDelete(static_cast<NEA_Palette *>(logoPalette_));
+        if (logoFile_ != nullptr)
+            std::fclose(static_cast<std::FILE *>(logoFile_));
+        menuMaterial_ = menuPalette_ = logoMaterial_ = logoPalette_ = logoFile_ = nullptr;
     }
 
     void HudDraw::hideLoading()

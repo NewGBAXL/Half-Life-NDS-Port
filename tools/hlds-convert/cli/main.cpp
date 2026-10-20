@@ -303,12 +303,15 @@ namespace
             std::fprintf(stderr, "error: %s\n", error.c_str());
         // What was made for the card as a whole.
         const CommonResult &common = converter.common();
-        std::printf("for the card: %d of 3 fonts, %s, %s, %s, %s, %s, %d menu sounds\n", common.fonts,
+        std::printf("for the card: %d of 3 fonts, %s, %s, %s, %s, %s, %d menu sounds; %s, %s, %s\n", common.fonts,
                     common.hud ? "the head-up display" : "no head-up display",
                     common.icons ? "the weapons' pictures" : "no weapons' pictures",
                     common.title ? "the game's title" : "no title",
                     common.decals ? "the marks" : "no marks",
-                    common.loading ? "the loading picture" : "no loading picture", common.sounds);
+                    common.loading ? "the loading picture" : "no loading picture", common.sounds,
+                    common.menu ? "the menu's background" : "no menu background",
+                    common.logo ? "the animated title" : "no animated title",
+                    common.intro ? "the Valve intro" : "no intro");
         for (const std::string &warning : common.warnings)
             std::printf("  warning: %s\n", warning.c_str());
         if (all)

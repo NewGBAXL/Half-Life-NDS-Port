@@ -80,6 +80,19 @@ namespace hlrt
         bool showLoading();
         void hideLoading();
 
+        /// The Valve intro (HlUi.hpp, kIntroFile) on the top screen, with its
+        /// sound, until it is over or a button or the stylus ends it. False
+        /// (and nothing shown) if the card has not got it.
+        bool playIntro();
+        /// The title screen's top: the game's menu background with its
+        /// animated title over it, drawn by menuFrame() -- once a frame,
+        /// straight after the wait for the screen -- until hideMenu(), which
+        /// leaves what is on the screen as a picture. False if the card has
+        /// not got the background.
+        bool showMenu();
+        void menuFrame();
+        void hideMenu();
+
     private:
         bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
         void *lampMaterial_ = nullptr;
@@ -88,6 +101,18 @@ namespace hlrt
         void *palette_ = nullptr;
         void *loadingMaterial_ = nullptr;
         void *loadingPalette_ = nullptr;
+        // The title screen's (showMenu): its background, its animated title
+        // (a texture rewritten as it moves, the file it moves through), and
+        // which of its pictures is shown, since when.
+        void *menuMaterial_ = nullptr;
+        void *menuPalette_ = nullptr;
+        void *logoMaterial_ = nullptr;
+        void *logoPalette_ = nullptr;
+        void *logoFile_ = nullptr;
+        int logoFrames_ = 0;
+        int logoFrame_ = -1;
+        std::uint32_t logoMicros_ = 0;
+        std::uint32_t menuSince_ = 0;
         bool suit_ = false;
         bool lampOn_ = false;
         bool lampSuit_ = false; ///< the suit is worn: its lamp is shown, alight or not

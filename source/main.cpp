@@ -691,12 +691,34 @@ int main(int argc, char *argv[])
     // if it loaded something; false for a new game.
     auto titleScreen = [&]() -> bool
     {
-        if (hlrt::hudDraw.showLoading())
+        // The game's menu background with its animated title (or, on a card
+        // without them, the loading picture, still).
+        bool moving = hlrt::hudDraw.showMenu();
+        if (moving)
+        {
+            NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+            hlrt::hudDraw.menuFrame();
             hlrt::screenFade.curtainUp();
+        }
+        else if (hlrt::hudDraw.showLoading())
+        {
+            hlrt::screenFade.curtainUp();
+        }
+        // (Before anything is loaded, the picture is kept and its textures go.)
+        auto leaving = [&]() { hlrt::hudDraw.hideMenu(); };
+        auto back = [&]() { moving = hlrt::hudDraw.showMenu(); };
         hlrt::menu.openTitle();
         while (true)
         {
-            swiWaitForVBlank();
+            if (moving)
+            {
+                NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
+                hlrt::hudDraw.menuFrame();
+            }
+            else
+            {
+                swiWaitForVBlank();
+            }
             hlrt::input.poll();
             hlrt::sound.frame();
             hlrt::netGame.frame();
@@ -704,12 +726,15 @@ int main(int argc, char *argv[])
             const Menu::Action item = hlrt::menu.frame();
             if (item == Menu::Action::Continue || item == Menu::Action::Load)
             {
+                leaving();
                 if (loadSave(error, hlrt::menu.slot()))
                     break;
+                back();
                 hlrt::menu.openTitle(); // (it could not be: the title again)
             }
             else if (item == Menu::Action::NewGame)
             {
+                leaving();
                 settings.save();
                 return false;
             }
@@ -718,12 +743,14 @@ int main(int argc, char *argv[])
             std::string map;
             if (hlrt::netGame.startAsked(map))
             {
+                leaving();
                 hlrt::game.resetProgress();
                 if (loadLevel(map, nullptr, error) == LoadResult::Ok)
                 {
                     hlrt::netGame.mapLoaded();
                     break;
                 }
+                back();
                 hlrt::netGame.leave();
                 hlrt::menu.openTitle();
             }
@@ -747,7 +774,11 @@ int main(int argc, char *argv[])
             saveNow(hldata::kSlotArrival, true);
         }
     };
-    // (A card set up to start somewhere for a test goes straight there.)
+    // At every start, as the game has it: the Valve intro (a button or the
+    // stylus skips it). Not for a card set up to start somewhere for a test,
+    // which goes straight there.
+    if (!debugging)
+        hlrt::hudDraw.playIntro();
     if (debugging || !titleScreen())
         newGame();
 

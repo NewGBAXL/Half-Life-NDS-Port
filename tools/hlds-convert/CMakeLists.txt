@@ -61,6 +61,7 @@ add_library(hlds_convert_core STATIC
     core/src/SpriteCook.cpp
     core/src/TextureEncoder.cpp
     core/src/TitlesFile.cpp
+    core/src/AviFile.cpp
     core/src/UiCook.cpp
     core/src/TextureBudget.cpp
     core/src/TextureFamily.cpp
@@ -122,6 +123,7 @@ if(HLDS_BUILD_TESTS)
             test_drawplan
             test_controls
             test_commands
+            test_avi
             test_net
             test_people
             test_boxes

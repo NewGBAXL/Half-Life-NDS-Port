@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -70,4 +71,22 @@ namespace hlds
     /// The loading picture as a texture: scaled to the screen, in the top
     /// rows of a square.
     RgbaImage loadingTexture(const IndexedImage &picture);
+
+    /// A TGA picture (uncompressed or run-length, 24 or 32 bits). False --
+    /// with `error` -- for anything else.
+    bool readTga(const std::vector<std::uint8_t> &bytes, RgbaImage &out, std::string &error);
+
+    /// The game's menu background as a texture like the loading picture's:
+    /// the HD layout (resource/HD_BackgroundLayout.txt) put together from
+    /// its tiles, a 4:3 piece of it around the lambda, scaled to the screen;
+    /// failing that, the 800x600 layout's, whole. False if neither is there.
+    /// (`find`: a path of the game folder's, found whatever its case; empty
+    /// if it is not there.)
+    bool menuBackground(const std::function<std::filesystem::path(const std::string &)> &find, RgbaImage &out,
+                        std::string &error);
+
+    /// The animated title as the console has it (HlUi.hpp, kLogoFile):
+    /// `frames` scaled to kLogoWidth x kLogoHeight, how bright each texel is
+    /// as its alpha and its grey.
+    std::vector<std::uint8_t> logoFile(const std::vector<RgbaImage> &frames, std::uint32_t frameMicros);
 } // namespace hlds

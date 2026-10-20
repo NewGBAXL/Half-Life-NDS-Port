@@ -274,6 +274,69 @@ namespace hldata
     inline constexpr int kLoadingSize = 256;
     inline constexpr int kLoadingHeight = 192;
 
+    // ------------------------------------------------------------- the title
+    //
+    // The title screen as the game has it: its menu background (the HD
+    // layout's, around the lambda) in the top 192 rows of a texture, as the
+    // loading picture is; over it, the game's animated HALF-LIFE (logo.avi);
+    // and before it all, at every start, the Valve intro (valve.avi).
+
+    inline constexpr const char *kMenuFile = "ui/menu.256x256.htx";
+
+    /// The animated title: `frames` pictures of `width` x `height` texels, a
+    /// byte each, A3I5 -- how bright as both the alpha (top 3 bits) and the
+    /// colour (a grey of 32: the low 5) -- one after the other after the
+    /// header, each shown `frameMicros`.
+    inline constexpr const char *kLogoFile = "ui/logo.hlo";
+    inline constexpr char kLogoMagic[4] = {'H', 'L', 'L', 'G'};
+    inline constexpr std::uint16_t kLogoVersion = 1;
+    inline constexpr int kLogoWidth = 256;
+    inline constexpr int kLogoHeight = 40;
+    inline constexpr int kLogoTextureHeight = 64; ///< the texture it is drawn from
+    struct LogoHeader
+    {
+        char magic[4];
+        std::uint16_t version;
+        std::uint16_t frames;
+        std::uint16_t width;
+        std::uint16_t height;
+        std::uint32_t frameMicros;
+    };
+    static_assert(sizeof(LogoHeader) == 16);
+
+    /// The Valve intro, loose in the data folder (read as it plays, not
+    /// kept): only the part of the game's film that is picture (its frame is
+    /// mostly black), the size it is on the screen of a PC at 640x480 -- a
+    /// 4x4 texture `textureSize` square, the picture in its top left
+    /// `pictureWidth` x `pictureHeight`, shown at (`pictureX`, `pictureY`) of
+    /// the screen, the rest black. Each picture: its texels, then its index,
+    /// then its palette (`paletteColours`, the rest zero), in records of
+    /// `frameBytes`, each shown `frameMicros`. Its sound is the music's track
+    /// kIntroTrack.
+    inline constexpr const char *kIntroFile = "intro.hvf";
+    inline constexpr char kIntroMagic[4] = {'H', 'L', 'V', 'F'};
+    inline constexpr std::uint16_t kIntroVersion = 2;
+    inline constexpr int kIntroTrack = 1; ///< (the game's first track was its program: free)
+    inline constexpr int kIntroTextureSize = 128;
+    inline constexpr int kIntroPaletteColours = 256;
+    inline constexpr int kIntroTexelBytes = kIntroTextureSize * kIntroTextureSize / 4;
+    inline constexpr int kIntroIndexBytes = kIntroTexelBytes / 2;
+    inline constexpr int kIntroFrameBytes = kIntroTexelBytes + kIntroIndexBytes + kIntroPaletteColours * 2;
+    struct IntroHeader
+    {
+        char magic[4];
+        std::uint16_t version;
+        std::uint16_t frames;
+        std::uint32_t frameMicros;
+        std::uint32_t frameBytes;
+        std::uint16_t paletteColours;
+        std::uint16_t textureSize;
+        std::uint16_t pictureX, pictureY;
+        std::uint16_t pictureWidth, pictureHeight;
+        std::uint32_t sourceHash; ///< of the film it was made from (a cook again keeps it)
+    };
+    static_assert(sizeof(IntroHeader) == 32);
+
     // ------------------------------------------------------------- menu sounds
 
     inline constexpr int kUiSoundPress = 0;  ///< a button of the menu

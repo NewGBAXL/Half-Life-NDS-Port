@@ -4,6 +4,8 @@
 #include "hlds/SoundCook.hpp"
 #include "hlds/SpriteCook.hpp"
 #include "hlds/Converter.hpp"
+
+#include "hlds/AviFile.hpp"
 #include "hlds/EntityCook.hpp"
 #include "hlds/MdlFile.hpp"
 #include "hlds/ModelCook.hpp"
@@ -1293,6 +1295,177 @@ namespace hlds
             else
                 result.warnings.push_back("the loading picture was not made" +
                                           (why.empty() ? std::string() : ": " + why));
+        }
+        // The title screen as the game has it: its menu background, its
+        // animated title, and the Valve intro played before it (the film's
+        // pictures loose on the card, read as it plays; its sound as the
+        // music's track kIntroTrack).
+        {
+            RgbaImage background;
+            const auto find = [&](const std::string &relative) { return findNoCase(options_.gameDir, relative); };
+            if (menuBackground(find, background, why) &&
+                texture(background, TextureFormat::Tex4x4, 1024, 0, hldata::kMenuFile))
+                result.menu = true;
+            else
+                result.warnings.push_back("the menu's background was not made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            std::vector<std::uint8_t> bytes;
+            AviFile avi;
+            const fs::path file = findNoCase(options_.gameDir, "media/logo.avi");
+            if (!file.empty() && readFile(file, bytes, why) && avi.load(bytes, why) &&
+                put(ui / hldata::kLogoFile, logoFile(avi.frames, avi.frameMicros)))
+                result.logo = true;
+            else
+                result.warnings.push_back("the animated title was not made" +
+                                          (why.empty() ? std::string() : ": " + why));
+        }
+        {
+            std::vector<std::uint8_t> bytes;
+            const fs::path file = findNoCase(options_.gameDir, "media/valve.avi");
+            const fs::path out = dataDir(options_.cardRoot) / hldata::kIntroFile;
+            if (!file.empty() && readFile(file, bytes, why))
+            {
+                const std::uint32_t source =
+                    hldata::crc32(bytes.data(), static_cast<std::uint32_t>(bytes.size())) ^ hldata::kIntroVersion ^
+                    encoder.version() * 131u;
+                // (Made once: the same film is not made again.)
+                std::vector<std::uint8_t> head;
+                hldata::IntroHeader old{};
+                std::error_code ec;
+                bool same = false;
+                if (std::FILE *f = std::fopen(out.string().c_str(), "rb"))
+                {
+                    same = std::fread(&old, sizeof(old), 1, f) == 1 && std::memcmp(old.magic, hldata::kIntroMagic, 4) == 0 &&
+                           old.version == hldata::kIntroVersion && old.sourceHash == source;
+                    std::fclose(f);
+                }
+                AviFile avi;
+                if (same)
+                {
+                    result.intro = true;
+                }
+                else if (avi.load(bytes, why))
+                {
+                    // Where the film is picture: what is not black in any of
+                    // its frames (it plays in the middle of a black frame).
+                    int left = avi.width, top = avi.height, right = 0, bottom = 0;
+                    for (const RgbaImage &frame : avi.frames)
+                        for (int y = 0; y < frame.height; ++y)
+                            for (int x = 0; x < frame.width; ++x)
+                            {
+                                const std::uint8_t *p = frame.at(x, y);
+                                if (p[0] > 12 || p[1] > 12 || p[2] > 12)
+                                {
+                                    left = std::min(left, x);
+                                    right = std::max(right, x + 1);
+                                    top = std::min(top, y);
+                                    bottom = std::max(bottom, y + 1);
+                                }
+                            }
+                    if (right <= left || bottom <= top)
+                    {
+                        left = top = 0;
+                        right = avi.width;
+                        bottom = avi.height;
+                    }
+                    // As big as it is on a PC's 640x480 (two fifths, on the
+                    // screen's 256), and no bigger than its texture.
+                    const int cropW = right - left, cropH = bottom - top;
+                    double scale = 256.0 / avi.width;
+                    scale = std::min({scale, static_cast<double>(hldata::kIntroTextureSize) / cropW,
+                                      static_cast<double>(hldata::kIntroTextureSize) / cropH});
+                    const int pictureW = std::max(4, static_cast<int>(cropW * scale + 0.5));
+                    const int pictureH = std::max(4, static_cast<int>(cropH * scale + 0.5));
+                    // (Where it is on the screen: where it is in the film.)
+                    const double screenScale = 256.0 / avi.width;
+                    const int centreX = static_cast<int>((left + right) / 2.0 * screenScale);
+                    const int centreY = static_cast<int>((top + bottom) / 2.0 * (192.0 / avi.height));
+                    hldata::IntroHeader header{};
+                    std::memcpy(header.magic, hldata::kIntroMagic, 4);
+                    header.version = hldata::kIntroVersion;
+                    header.frames = static_cast<std::uint16_t>(avi.frames.size());
+                    header.frameMicros = avi.frameMicros;
+                    header.frameBytes = hldata::kIntroFrameBytes;
+                    header.paletteColours = hldata::kIntroPaletteColours;
+                    header.textureSize = hldata::kIntroTextureSize;
+                    header.pictureWidth = static_cast<std::uint16_t>(pictureW);
+                    header.pictureHeight = static_cast<std::uint16_t>(pictureH);
+                    header.pictureX = static_cast<std::uint16_t>(std::clamp(centreX - pictureW / 2, 0, 256 - pictureW));
+                    header.pictureY = static_cast<std::uint16_t>(std::clamp(centreY - pictureH / 2, 0, 192 - pictureH));
+                    header.sourceHash = source;
+                    std::vector<std::uint8_t> film(sizeof(header) +
+                                                   static_cast<std::size_t>(header.frames) * hldata::kIntroFrameBytes);
+                    std::memcpy(film.data(), &header, sizeof(header));
+                    bool ok = true;
+                    for (std::size_t n = 0; n < avi.frames.size() && ok; ++n)
+                    {
+                        // Its picture, cut out and scaled, in the top left of
+                        // a small square texture.
+                        const RgbaImage &frame = avi.frames[n];
+                        RgbaImage crop;
+                        crop.width = cropW;
+                        crop.height = cropH;
+                        crop.rgba.resize(static_cast<std::size_t>(cropW) * cropH * 4);
+                        for (int y = 0; y < cropH; ++y)
+                            std::memcpy(crop.at(0, y), frame.at(left, top + y), static_cast<std::size_t>(cropW) * 4);
+                        const RgbaImage scaled = resample(crop, pictureW, pictureH);
+                        RgbaImage square;
+                        square.width = square.height = hldata::kIntroTextureSize;
+                        square.rgba.assign(static_cast<std::size_t>(square.width) * square.height * 4, 0);
+                        for (std::size_t i = 3; i < square.rgba.size(); i += 4)
+                            square.rgba[i] = 255;
+                        for (int y = 0; y < pictureH; ++y)
+                            std::memcpy(square.at(0, y), scaled.at(0, y), static_cast<std::size_t>(pictureW) * 4);
+                        CookedTexture encoded;
+                        ok = encoder.encode(square, hldata::kIntroPaletteColours, TextureFormat::Tex4x4, encoded, why) &&
+                             encoded.texels.size() == hldata::kIntroTexelBytes &&
+                             encoded.index.size() == hldata::kIntroIndexBytes &&
+                             encoded.palette.size() <= static_cast<std::size_t>(hldata::kIntroPaletteColours) * 2;
+                        if (!ok)
+                            break;
+                        std::uint8_t *at = film.data() + sizeof(header) + n * hldata::kIntroFrameBytes;
+                        std::memcpy(at, encoded.texels.data(), encoded.texels.size());
+                        std::memcpy(at + hldata::kIntroTexelBytes, encoded.index.data(), encoded.index.size());
+                        std::memcpy(at + hldata::kIntroTexelBytes + hldata::kIntroIndexBytes, encoded.palette.data(),
+                                    encoded.palette.size());
+                    }
+                    // Its sound: the music's way, in mono for a DS and in
+                    // stereo (the same both sides) for a DSi.
+                    if (ok && !avi.samples.empty() && avi.sampleRate > 0)
+                    {
+                        std::vector<std::int16_t> mono = avi.samples;
+                        if (avi.channels == 2)
+                        {
+                            mono.clear();
+                            for (std::size_t i = 0; i + 1 < avi.samples.size(); i += 2)
+                                mono.push_back(static_cast<std::int16_t>((avi.samples[i] + avi.samples[i + 1]) / 2));
+                        }
+                        const std::vector<std::int16_t> samples = resample(mono, avi.sampleRate, hldata::kMusicRate);
+                        hldata::MusicHeader musicHeader{};
+                        std::memcpy(musicHeader.magic, hldata::kMusicMagic, 4);
+                        musicHeader.version = hldata::kSoundVersion;
+                        musicHeader.rate = hldata::kMusicRate;
+                        musicHeader.bytes = static_cast<std::uint32_t>(samples.size());
+                        std::vector<std::uint8_t> track(sizeof(musicHeader) + samples.size());
+                        std::memcpy(track.data(), &musicHeader, sizeof(musicHeader));
+                        for (std::size_t i = 0; i < samples.size(); ++i)
+                            track[sizeof(musicHeader) + i] = static_cast<std::uint8_t>(samples[i] >> 8);
+                        char name[16], stereoName[16];
+                        hldata::musicFileName(hldata::kIntroTrack, name, sizeof(name));
+                        hldata::musicFileName(hldata::kIntroTrack, stereoName, sizeof(stereoName), true);
+                        const fs::path music = dataDir(options_.cardRoot) / "music";
+                        fs::create_directories(music, ec);
+                        ok = writeFileAtomic(music / name, track, why) &&
+                             writeFileAtomic(music / stereoName, encodeMusicStereo(mono, mono, avi.sampleRate), why);
+                    }
+                    if (ok && writeFileAtomic(out, film, why))
+                        result.intro = true;
+                }
+            }
+            if (!result.intro)
+                result.warnings.push_back("the Valve intro was not made" + (why.empty() ? std::string() : ": " + why));
         }
         std::error_code ec;
         fs::remove_all(temp, ec);

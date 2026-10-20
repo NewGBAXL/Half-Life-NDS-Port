@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "hlds/AtomicWrite.hpp"
@@ -386,6 +387,227 @@ namespace hlds
         for (std::size_t i = 3; i < out.rgba.size(); i += 4)
             out.rgba[i] = 255;
         std::memcpy(out.rgba.data(), scaled.rgba.data(), scaled.rgba.size());
+        return out;
+    }
+
+    bool readTga(const std::vector<std::uint8_t> &bytes, RgbaImage &out, std::string &error)
+    {
+        if (bytes.size() < 18)
+        {
+            error = "too short for a TGA picture";
+            return false;
+        }
+        const int idLength = bytes[0], mapType = bytes[1], type = bytes[2];
+        const int width = bytes[12] | bytes[13] << 8, height = bytes[14] | bytes[15] << 8;
+        const int bits = bytes[16], descriptor = bytes[17];
+        if (mapType != 0 || (type != 2 && type != 10) || (bits != 24 && bits != 32) || width <= 0 || height <= 0)
+        {
+            error = "a TGA picture of a kind not read";
+            return false;
+        }
+        const int bpp = bits / 8;
+        out.width = width;
+        out.height = height;
+        out.rgba.assign(static_cast<std::size_t>(width) * height * 4, 255);
+        std::size_t at = 18 + static_cast<std::size_t>(idLength);
+        const bool topFirst = (descriptor & 0x20) != 0;
+        const int count = width * height;
+        auto store = [&](int n, const std::uint8_t *p)
+        {
+            const int x = n % width, row = n / width;
+            const int y = topFirst ? row : height - 1 - row;
+            std::uint8_t *q = out.at(x, y);
+            q[0] = p[2];
+            q[1] = p[1];
+            q[2] = p[0];
+            q[3] = bpp == 4 ? p[3] : 255;
+        };
+        int n = 0;
+        while (n < count)
+        {
+            if (type == 2)
+            {
+                if (at + static_cast<std::size_t>(bpp) > bytes.size())
+                    break;
+                store(n++, &bytes[at]);
+                at += static_cast<std::size_t>(bpp);
+                continue;
+            }
+            if (at >= bytes.size())
+                break;
+            const int packet = bytes[at++];
+            const int run = (packet & 0x7F) + 1;
+            if (packet & 0x80)
+            {
+                if (at + static_cast<std::size_t>(bpp) > bytes.size())
+                    break;
+                for (int k = 0; k < run && n < count; ++k)
+                    store(n++, &bytes[at]);
+                at += static_cast<std::size_t>(bpp);
+            }
+            else
+            {
+                for (int k = 0; k < run && n < count; ++k)
+                {
+                    if (at + static_cast<std::size_t>(bpp) > bytes.size())
+                        break;
+                    store(n++, &bytes[at]);
+                    at += static_cast<std::size_t>(bpp);
+                }
+            }
+        }
+        if (n < count)
+        {
+            error = "a TGA picture cut short";
+            return false;
+        }
+        return true;
+    }
+
+    namespace
+    {
+        // A background layout: "resolution W H", then "file  fit  x  y" a
+        // line. The picture it puts together.
+        bool layoutPicture(const std::function<std::filesystem::path(const std::string &)> &find,
+                           const std::string &layout, RgbaImage &out, std::string &error)
+        {
+            const std::filesystem::path file = find(layout);
+            std::vector<std::uint8_t> text;
+            if (file.empty() || !readFile(file, text, error))
+            {
+                error = "no " + layout;
+                return false;
+            }
+            std::string all(text.begin(), text.end());
+            std::size_t start = 0;
+            int width = 0, height = 0, tiles = 0;
+            while (start < all.size())
+            {
+                std::size_t end = all.find('\n', start);
+                if (end == std::string::npos)
+                    end = all.size();
+                std::string line = all.substr(start, end - start);
+                start = end + 1;
+                std::vector<std::string> words;
+                std::size_t w = 0;
+                while (w < line.size())
+                {
+                    while (w < line.size() && std::isspace(static_cast<unsigned char>(line[w])))
+                        ++w;
+                    std::size_t e = w;
+                    while (e < line.size() && !std::isspace(static_cast<unsigned char>(line[e])))
+                        ++e;
+                    if (e > w)
+                        words.push_back(line.substr(w, e - w));
+                    w = e;
+                }
+                if (words.size() >= 3 && words[0] == "resolution")
+                {
+                    width = std::atoi(words[1].c_str());
+                    height = std::atoi(words[2].c_str());
+                    if (width <= 0 || height <= 0 || width > 8192 || height > 8192)
+                        return false;
+                    out.width = width;
+                    out.height = height;
+                    out.rgba.assign(static_cast<std::size_t>(width) * height * 4, 0);
+                    for (std::size_t i = 3; i < out.rgba.size(); i += 4)
+                        out.rgba[i] = 255;
+                    continue;
+                }
+                if (words.size() < 4 || width == 0)
+                    continue;
+                const std::filesystem::path tilePath = find(words[0]);
+                std::vector<std::uint8_t> bytes;
+                RgbaImage tile;
+                std::string why;
+                if (tilePath.empty() || !readFile(tilePath, bytes, why) || !readTga(bytes, tile, why))
+                    continue;
+                const int x0 = std::atoi(words[2].c_str()), y0 = std::atoi(words[3].c_str());
+                for (int y = 0; y < tile.height; ++y)
+                    for (int x = 0; x < tile.width; ++x)
+                        if (x0 + x >= 0 && x0 + x < width && y0 + y >= 0 && y0 + y < height)
+                            std::memcpy(out.at(x0 + x, y0 + y), tile.at(x, y), 4);
+                ++tiles;
+            }
+            if (tiles == 0)
+            {
+                error = "no tiles of " + layout;
+                return false;
+            }
+            return true;
+        }
+
+        bool allBlack(const RgbaImage &image)
+        {
+            for (std::size_t i = 0; i < image.rgba.size(); i += 4)
+                if (image.rgba[i] | image.rgba[i + 1] | image.rgba[i + 2])
+                    return false;
+            return true;
+        }
+    } // namespace
+
+    bool menuBackground(const std::function<std::filesystem::path(const std::string &)> &find, RgbaImage &out,
+                        std::string &error)
+    {
+        RgbaImage whole;
+        RgbaImage piece;
+        std::string why;
+        if (layoutPicture(find, "resource/HD_BackgroundLayout.txt", whole, why) && !allBlack(whole))
+        {
+            // A 4:3 piece of the wide picture, around the lambda (three
+            // fifths of the way across, as the game's art has it).
+            const int pieceWidth = std::min(whole.width, whole.height * 4 / 3);
+            int x0 = whole.width * 61 / 100 - pieceWidth / 2;
+            x0 = std::max(0, std::min(whole.width - pieceWidth, x0));
+            piece.width = pieceWidth;
+            piece.height = whole.height;
+            piece.rgba.resize(static_cast<std::size_t>(pieceWidth) * whole.height * 4);
+            for (int y = 0; y < whole.height; ++y)
+                std::memcpy(piece.at(0, y), whole.at(x0, y), static_cast<std::size_t>(pieceWidth) * 4);
+        }
+        else if (layoutPicture(find, "resource/BackgroundLayout.txt", whole, why) && !allBlack(whole))
+        {
+            piece = whole;
+        }
+        else
+        {
+            error = why.empty() ? "the menu's background is all black" : why;
+            return false;
+        }
+        const RgbaImage scaled = resample(piece, hldata::kLoadingSize, hldata::kLoadingHeight);
+        out.width = out.height = hldata::kLoadingSize;
+        out.rgba.assign(static_cast<std::size_t>(out.width) * out.height * 4, 0);
+        for (std::size_t i = 3; i < out.rgba.size(); i += 4)
+            out.rgba[i] = 255;
+        std::memcpy(out.rgba.data(), scaled.rgba.data(), scaled.rgba.size());
+        return true;
+    }
+
+    std::vector<std::uint8_t> logoFile(const std::vector<RgbaImage> &frames, std::uint32_t frameMicros)
+    {
+        hldata::LogoHeader header{};
+        std::memcpy(header.magic, hldata::kLogoMagic, 4);
+        header.version = hldata::kLogoVersion;
+        header.frames = static_cast<std::uint16_t>(frames.size());
+        header.width = hldata::kLogoWidth;
+        header.height = hldata::kLogoHeight;
+        header.frameMicros = frameMicros;
+        std::vector<std::uint8_t> out(sizeof(header));
+        std::memcpy(out.data(), &header, sizeof(header));
+        for (const RgbaImage &frame : frames)
+        {
+            const RgbaImage small = resample(frame, hldata::kLogoWidth, hldata::kLogoHeight);
+            for (int y = 0; y < hldata::kLogoHeight; ++y)
+            {
+                for (int x = 0; x < hldata::kLogoWidth; ++x)
+                {
+                    const std::uint8_t *p = small.at(x, y);
+                    // (How bright: its alpha, three bits, and its grey, five.)
+                    const int light = std::max({p[0], p[1], p[2]});
+                    out.push_back(static_cast<std::uint8_t>((light >> 5) << 5 | (light >> 3)));
+                }
+            }
+        }
         return out;
     }
 } // namespace hlds
