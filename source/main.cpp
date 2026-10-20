@@ -485,6 +485,10 @@ namespace
             more.satchels = 5;
             more.tripmines = 5;
             more.snarks = 15;
+            more.have = static_cast<std::uint16_t>(more.have | hldata::kArsenalRpgLoaded);
+            more.rockets = 5;
+            more.uranium = 100;
+            more.hornets = 8;
             return "given";
         }
         case Command::Give:

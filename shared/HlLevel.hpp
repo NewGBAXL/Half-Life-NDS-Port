@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 30;
+    inline constexpr std::uint16_t kLevelVersion = 31;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes.
@@ -61,8 +61,9 @@ namespace hldata
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
     /// none), 29 -> 30 the later weapons' items (cooked after every other
-    /// actor) and sounds (after the others: kCommonSoundsBefore30), none
-    /// that a save points at.
+    /// actor) and sounds (after the others: kCommonSoundsBefore30), 30 -> 31
+    /// the last four weapons and the weaponbox (items cooked after even
+    /// those, sounds after theirs: commonsOf), none that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
@@ -815,12 +816,40 @@ namespace hldata
         Satchel,    ///< one charge
         Tripmine,   ///< one mine
         Snark,      ///< a nest of five
+        // ... and the last four, and the box of ammunition (from level
+        // version 31, cooked after even those above: kItemFirstLast):
+        Rpg,        ///< comes with a rocket in it and one besides
+        RpgClip,    ///< two rockets
+        Gauss,      ///< 20 uranium
+        GaussClip,  ///< 20 uranium (the egon's too)
+        Egon,       ///< 20 uranium
+        Hornetgun,  ///< full of hornets
+        /// A weaponbox: ammunition of several kinds at once. ActorRecord::item
+        /// is this in its low 8 bits, and above them where in the level's
+        /// Strings what is in it is written: "uranium=60 rockets=8".
+        Weaponbox,
         Count
     };
     /// The first of those: an actor of one of these is cooked after every
     /// other actor (so that a save made before they were points at the same
     /// actors it did).
     inline constexpr ItemKind kItemFirstMore = ItemKind::Crossbow;
+    /// ... and the first of the last ones, cooked after those (so that a
+    /// save of a map of version 30 points at the same actors it did).
+    inline constexpr ItemKind kItemFirstLast = ItemKind::Rpg;
+    inline constexpr int kItemStringShift = 8; ///< a weaponbox's Strings offset, in ActorRecord::item
+    /// Whether an item actor's ActorRecord::item makes sense: a kind there is,
+    /// and for a weaponbox where its contents are in the level's Strings
+    /// (`stringsSize` bytes); for anything else nothing above the kind.
+    inline bool itemWordOk(std::uint32_t item, std::uint32_t stringsSize)
+    {
+        const std::uint32_t kind = item & 0xFFu;
+        if (kind >= static_cast<std::uint32_t>(ItemKind::Count))
+            return false;
+        if (kind == static_cast<std::uint32_t>(ItemKind::Weaponbox))
+            return (item >> kItemStringShift) < stringsSize;
+        return (item >> kItemStringShift) == 0;
+    }
 
     /// A sound the map plays: the file it is in under snd/ on the card,
     /// without the extension ("ambience_labdrone2.11k"). Empty: the map has

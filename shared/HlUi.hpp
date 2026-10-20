@@ -131,6 +131,9 @@ namespace hldata
     inline constexpr UiRect kHudAmmoSatchel = {18, 64, 18, 18};
     inline constexpr UiRect kHudAmmoTripmine = {36, 64, 18, 18};
     inline constexpr UiRect kHudAmmoSnark = {54, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoRocket = {72, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoUranium = {90, 64, 18, 18};
+    inline constexpr UiRect kHudAmmoHornet = {108, 64, 18, 18};
 
     // ------------------------------------------------------------- marks
     //
@@ -199,7 +202,7 @@ namespace hldata
     inline constexpr char kIconsMagic[4] = {'H', 'L', 'I', 'C'};
     inline constexpr std::uint16_t kIconsVersion = 1;
     inline constexpr const char *kWeaponIconsFile = "ui/weapons.hic";
-    inline constexpr int kWeaponIcons = 10;
+    inline constexpr int kWeaponIcons = 14;
     inline constexpr int kWeaponIconWidth = 38;
     inline constexpr int kWeaponIconHeight = 16;
     inline constexpr int kIconMaxWidth = 80;

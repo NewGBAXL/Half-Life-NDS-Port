@@ -345,10 +345,12 @@ namespace hlrt
             return;
 
         const bool gun = weapon_ == kWeaponGlock || weapon_ == kWeaponShotgun || weapon_ == kWeaponMp5 ||
-                         weapon_ == kWeaponPython || weapon_ == kWeaponCrossbow;
-        // (What is thrown or put down: a count of itself.)
+                         weapon_ == kWeaponPython || weapon_ == kWeaponCrossbow || weapon_ == kWeaponRpg;
+        // (What is thrown or put down, and what is fed from one store: a
+        // count of itself.)
         const bool counted = weapon_ == kWeaponGrenade || weapon_ == kWeaponSatchel || weapon_ == kWeaponTripmine ||
-                             weapon_ == kWeaponSnark;
+                             weapon_ == kWeaponSnark || weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ||
+                             weapon_ == kWeaponHornetgun;
         // The bottom row, drawn again when what it says has changed.
         const int healthShown = health_ < 25 ? -1000 - health_ : health_;
         if (healthShown != shownHealth || armor_ != shownArmor || weapon_ != shownWeapon || clip_ != shownClip ||
@@ -377,6 +379,9 @@ namespace hlrt
                                     : weapon_ == kWeaponSatchel  ? kHudAmmoSatchel
                                     : weapon_ == kWeaponTripmine ? kHudAmmoTripmine
                                     : weapon_ == kWeaponSnark    ? kHudAmmoSnark
+                                    : weapon_ == kWeaponRpg      ? kHudAmmoRocket
+                                    : weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ? kHudAmmoUranium
+                                    : weapon_ == kWeaponHornetgun ? kHudAmmoHornet
                                                                  : kHudAmmo9mm;
                 blit(236, 169 - 160, icon);
                 if (gun)

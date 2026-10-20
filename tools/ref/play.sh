@@ -57,6 +57,10 @@ bind 7 "weapon_crossbow"
 bind 8 "weapon_satchel"
 bind 9 "weapon_tripmine"
 bind 0 "weapon_snark"
+bind 1 "weapon_rpg"
+bind 2 "weapon_gauss"
+bind 3 "weapon_egon"
+bind h "weapon_hornetgun"
 bind m "give monster_zombie"
 crosshair 1
 cl_bob 0

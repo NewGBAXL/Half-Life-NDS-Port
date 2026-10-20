@@ -103,6 +103,10 @@ namespace hlrt
                 arsenal.satchels = 5;
                 arsenal.tripmines = 5;
                 arsenal.snarks = 15;
+                arsenal.have = static_cast<std::uint16_t>(arsenal.have | kArsenalRpgLoaded);
+                arsenal.rockets = 4;
+                arsenal.uranium = 100;
+                arsenal.hornets = 8;
                 if (weapon > kWeaponNone && weapon < kWeaponCount)
                     state.inv.current = static_cast<std::uint8_t>(weapon);
             }

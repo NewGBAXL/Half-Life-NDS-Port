@@ -26,7 +26,8 @@ removed when the run is over.)
   <n>`. `a` is attack on both sides; the arrows walk and turn; F6, F7 and F9
   take the crowbar, the pistol and the shotgun in the real game; `4`, `5`
   and `6` the hand grenade, the MP5 and the .357; `7`, `8`, `9` and `0` the
-  crossbow, the satchel, the tripmine and the snark; `m` makes a zombie
+  crossbow, the satchel, the tripmine and the snark; `1`, `2`, `3` and `h`
+  the RPG, the gauss, the egon and the hornetgun; `m` makes a zombie
   where the player stands there (the game's `give`); `z` the second trigger (R on
   the console), `t` the real game's reload (the port's is a tap on its
   RELOAD button, `tap 225 257`, and its weapons a tap on the slot of their

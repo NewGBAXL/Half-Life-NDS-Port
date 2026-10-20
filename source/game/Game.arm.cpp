@@ -158,9 +158,11 @@ namespace hlrt
         gibModelsFind(actors, view.modelRefs, static_cast<int>(view.modelRefCount));
         {
             // (In the order of the kinds: the bolt, the satchel, the player's
-            // tripmine -- the held model's mine -- and the snark.)
-            static const char *const kThrown[4] = {"crossbow_bolt", "w_satchel", "v_tripmine", "w_squeak"};
-            for (int k = 0; k < 4; ++k)
+            // tripmine -- the held model's mine -- the snark, the rocket and
+            // the hornet.)
+            static const char *const kThrown[6] = {"crossbow_bolt", "w_satchel", "v_tripmine",
+                                                   "w_squeak",      "rpgrocket", "hornet"};
+            for (int k = 0; k < 6; ++k)
             {
                 thrown_[k] = -1;
                 for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
@@ -197,7 +199,7 @@ namespace hlrt
         logic.modelSounds = view.modelSoundCount != 0 ? view.modelSounds : nullptr;
         logic.modelSoundCount = static_cast<int>(view.modelSoundCount);
         heard.count = 0;
-        heard.commons = view.header->version < 30 ? kCommonSoundsBefore30 : static_cast<std::uint16_t>(CommonSound::Count);
+        heard.commons = commonsOf(view.header->version);
         logic.cornerState = cornerState_;
         logic.cornerCount = static_cast<int>(view.cornerCount);
         // Places every brush where the map starts it, for the renderer and
@@ -224,13 +226,14 @@ namespace hlrt
     {
         static const char *const kModels[] = {nullptr,      "v_crowbar", "v_9mmhandgun", "v_shotgun",
                                               "v_grenade",  "v_9mmar",   "v_357",        "v_crossbow",
-                                              "v_satchel",  "v_tripmine", "v_squeak"};
+                                              "v_satchel",  "v_tripmine", "v_squeak",    "v_rpg",
+                                              "v_gauss",    "v_egon",    "v_hgun"};
         static const char *const kIdle[] = {nullptr, "idle1", "idle1", "sm_idle", "idle", "longidle", "idle1",
-                                            "idle1", "idle1", "idle1", "idle1"};
-        // (How each comes out: most say "draw"; the crossbow "draw1", the
-        // MP5 "deploy", a snark "up".)
+                                            "idle1", "idle1", "idle1", "idle1", "idle", "idle", "idle1", "idle1"};
+        // (How each comes out: most say "draw"; the crossbow and the RPG
+        // "draw1", the MP5 "deploy", a snark and the hornetgun "up".)
         static const char *const kDraw[] = {nullptr, "draw", "draw", "draw", "draw", "deploy", "draw",
-                                            "draw1", "draw", "draw", "up"};
+                                            "draw1", "draw", "draw", "up",   "draw1", "draw", "draw", "up"};
         static_assert(sizeof(kModels) / sizeof(kModels[0]) == kWeaponCount);
         const LevelView &view = level.view;
         const int weapon = player.state.inv.current;
@@ -538,12 +541,15 @@ namespace hlrt
         inv.current = save.weapon < kWeaponCount ? save.weapon : kWeaponNone;
         // The later weapons (none, from a save made before they were).
         player.arsenal = save.arsenal;
-        player.arsenal.have &= static_cast<std::uint16_t>((1u << (kWeaponCount - kWeaponFirstMore)) - 1u);
+        player.arsenal.have &= kArsenalKept; // (the weapons there are, and the RPG's state)
         player.arsenal.boltsClip = within(save.arsenal.boltsClip, 5);
         player.arsenal.bolts = within(save.arsenal.bolts, 50);
         player.arsenal.satchels = within(save.arsenal.satchels, 5);
         player.arsenal.tripmines = within(save.arsenal.tripmines, 5);
         player.arsenal.snarks = within(save.arsenal.snarks, 15);
+        player.arsenal.rockets = within(save.arsenal.rockets, 5);
+        player.arsenal.uranium = within(save.arsenal.uranium, 100);
+        player.arsenal.hornets = within(save.arsenal.hornets, 8);
         player.state.arsenal = &player.arsenal;
         player.state.cheats = &cheats;
         inv.clipGlock = within(save.clipGlock, 17);
@@ -823,6 +829,17 @@ namespace hlrt
             if (player.state.inv.current != inHand_ ||
                 (inHand_ == kWeaponSatchel && radio_ != satchelsOut()))
                 takeInHand();
+            // The RPG is held as it is: with its rocket in, or without.
+            if (inHand_ == kWeaponRpg && held.active)
+            {
+                if (const ModelView *model = actorModel(actors, held))
+                {
+                    const bool loaded = (player.arsenal.have & kArsenalRpgLoaded) != 0;
+                    const int idle = model->findClip(nameHash(loaded ? "idle" : "idle2"));
+                    if (idle >= 0)
+                        held.restClip = static_cast<std::int16_t>(idle);
+                }
+            }
             if (held.active)
             {
                 // What the weapon's own code says the hand does.
@@ -918,10 +935,16 @@ namespace hlrt
             // is in it and what is carried for it.)
             const std::int16_t *stock = weaponStock(player.state);
             const std::int16_t *clip = gunClip(player.state), *spare = gunSpare(player.state);
-            const int first = stock != nullptr ? *stock : (clip != nullptr ? *clip : 0);
-            const int second = stock != nullptr ? 0 : (spare != nullptr ? *spare : 0);
+            int first = stock != nullptr ? *stock : (clip != nullptr ? *clip : 0);
+            int second = stock != nullptr ? 0 : (spare != nullptr ? *spare : 0);
+            // (The RPG: the rocket in it, and those carried.)
+            if (inv.current == kWeaponRpg)
+            {
+                first = (player.arsenal.have & kArsenalRpgLoaded) != 0 ? 1 : 0;
+                second = player.arsenal.rockets;
+            }
             // (Every weapon's bit: the first six's, then the Arsenal's.)
-            const unsigned have = inv.have | (static_cast<unsigned>(player.arsenal.have) << kWeaponFirstMore);
+            const unsigned have = inv.have | (static_cast<unsigned>(player.arsenal.have & kArsenalWeapons) << kWeaponFirstMore);
             bottomScreen.setStatus(inv.current, first, second, have,
                                    clip != nullptr && spare != nullptr && *clip < gunKind(inv.current).holds &&
                                        *spare > 0);

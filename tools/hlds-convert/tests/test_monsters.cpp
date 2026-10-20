@@ -1257,6 +1257,212 @@ namespace
         check(actor.ai >= kAiDying && rounds <= needs && rounds >= (needs + 2) / 3, text);
     }
 
+    /// The last four, on a zombie in c1a1a; and the weaponbox.
+    void testLastWeapons(const char *dir)
+    {
+        auto game = load(dir, "c1a1a");
+        if (!game)
+            return;
+        Game &g = *game;
+        int zombie = -1;
+        for (int nth = 0; nth < 4 && zombie < 0; ++nth)
+        {
+            const int candidate = findKind(g, ActorKind::Zombie, nth);
+            if (candidate >= 0 && standNear(g, candidate, 250))
+                zombie = candidate;
+        }
+        check(zombie >= 0, "a zombie for the last weapons");
+        if (zombie < 0)
+            return;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            if (i != zombie && isMonster(g.actors.states[i].kind))
+                g.actors.states[i].active = false;
+        }
+        ActorState &actor = g.actors.states[zombie];
+        const fx home[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+        const fx stand[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2]};
+        Arsenal ars;
+        g.player.arsenal = &ars;
+        tick(g, 2);
+        WeaponState weapon;
+        fx eye[3], forward[3], right[3];
+        const fx up[3] = {0, 0, kFxOne};
+        int aimHigh = 36; // (where on the zombie: its chest; the RPG its head, over the floor)
+        auto aim = [&]()
+        {
+            for (int k = 0; k < 3; ++k)
+                g.player.origin[k] = stand[k];
+            eye[0] = g.player.origin[0];
+            eye[1] = g.player.origin[1];
+            eye[2] = g.player.origin[2] + g.player.viewHeight;
+            const fx at[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(aimHigh)};
+            fx to[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+            const fx length = fxLength(to);
+            for (int k = 0; k < 3; ++k)
+                forward[k] = static_cast<fx>((static_cast<std::int64_t>(to[k]) << kFxShift) / length);
+            const fx level[3] = {forward[0], forward[1], 0};
+            const fx flat = fxLength(level);
+            right[0] = static_cast<fx>((static_cast<std::int64_t>(forward[1]) << kFxShift) / flat);
+            right[1] = static_cast<fx>((static_cast<std::int64_t>(-forward[0]) << kFxShift) / flat);
+            right[2] = 0;
+        };
+        auto hold = [&]()
+        {
+            for (int k = 0; k < 3; ++k)
+                actor.pos[k] = home[k];
+            g.player.health = 100;
+        };
+        auto fresh = [&](int health)
+        {
+            actor.active = true;
+            actor.ai = 0;
+            actor.health = health;
+            for (Projectile &p : g.actors.shots)
+                p.active = false;
+            weapon = WeaponState();
+        };
+        auto use = [&](bool attack, bool second = false)
+        {
+            return weaponsTick(g.logic, g.player, weapon, eye, forward, right, up, attack, false, 33, second);
+        };
+        std::uint32_t got = 0;
+
+        // The pickups, by the game's amounts.
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Rpg), got) &&
+                  hasWeapon(g.player, kWeaponRpg) && (ars.have & kArsenalRpgLoaded) && ars.rockets == 0,
+              "the RPG comes with its rocket in it");
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::RpgClip), got) && ars.rockets == 1,
+              "... a box of rockets is one more");
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Gauss), got) &&
+                  hasWeapon(g.player, kWeaponGauss) && ars.uranium == 20,
+              "the gauss comes with twenty uranium");
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Egon), got) &&
+                  hasWeapon(g.player, kWeaponEgon) && ars.uranium == 40,
+              "... the egon with twenty more, the same store");
+        check(hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Hornetgun), got) &&
+                  hasWeapon(g.player, kWeaponHornetgun) && ars.hornets == 8,
+              "the hornetgun comes full");
+        check(!hldata::detail::itemTake(g.player, static_cast<std::uint8_t>(ItemKind::Hornetgun), got),
+              "... and another is no use: it grows its own");
+        // Slot 4: the game's heavy weapons, in its order.
+        g.player.inv.current = kWeaponCrowbar;
+        check(weaponOfCategory(g.player, 4) == kWeaponRpg, "slot 4: the RPG first");
+        g.player.inv.current = kWeaponRpg;
+        check(weaponOfCategory(g.player, 4) == kWeaponGauss, "... then the gauss");
+        g.player.inv.current = kWeaponGauss;
+        check(weaponOfCategory(g.player, 4) == kWeaponEgon, "... the egon");
+        g.player.inv.current = kWeaponEgon;
+        check(weaponOfCategory(g.player, 4) == kWeaponHornetgun, "... the hornetgun, and round again");
+
+        // The RPG: a rocket that is slow, then fast, and goes off at the
+        // zombie; then two seconds and another is in.
+        fresh(monsterKind(actor.kind).health); // (a zombie as it comes)
+        g.player.inv.current = kWeaponRpg;
+        aimHigh = 64;
+        aim();
+        std::uint32_t did = use(true);
+        bool flying = false;
+        for (const Projectile &p : g.actors.shots)
+            flying = flying || (p.active && p.kind == kShotRocket);
+        check((did & kWeaponFired) && flying && !(ars.have & kArsenalRpgLoaded), "the RPG fires its rocket");
+        int frames = 0;
+        for (; frames < 90 && actor.ai < kAiDying; ++frames)
+        {
+            hold();
+            aim();
+            use(false);
+            tick(g, 2);
+        }
+        std::printf("test_monsters: the rocket gets to a zombie 250 off in %d frames\n", frames);
+        check(actor.ai >= kAiDying && g.times(CommonSound::Explode) >= 1, "... which goes off at the zombie and kills it");
+        // (A second and a half before it may be fired again, and then two
+        // to put the next in.)
+        for (int t = 0; t < 3600; t += 33)
+            use(false);
+        check((ars.have & kArsenalRpgLoaded) && ars.rockets == 0, "two seconds on, the next is in");
+        did = use(false, true);
+        check((ars.have & kArsenalLaserOff), "the other trigger puts its laser out");
+        weapon.secondMs = 0;
+        use(false, true);
+        check(!(ars.have & kArsenalLaserOff), "... and on again");
+
+        // The gauss: twenty a shot, two uranium; charged, more, and a kick.
+        aimHigh = 36;
+        fresh(400);
+        g.player.inv.current = kWeaponGauss;
+        aim();
+        ars.uranium = 100;
+        did = use(true);
+        check((did & kWeaponFired) && ars.uranium == 98 && actor.health == 380, "the gauss: twenty, for two uranium");
+        weapon.cooldownMs = 0;
+        int frame = 0;
+        for (; frame < 4200 / 33; ++frame)
+            use(false, true);
+        const int spent = 98 - ars.uranium;
+        g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        did = use(false, false);
+        const fx kick[3] = {g.player.velocity[0], g.player.velocity[1], g.player.velocity[2]};
+        std::printf("test_monsters: a full gauss charge: %d uranium, the zombie at %d\n", spent, actor.health);
+        check((did & kWeaponSecondary) && spent >= 13 && spent <= 15 && actor.health <= 380 - 190,
+              "charged four seconds: about two hundred, for a uranium every third of a second");
+        check(fxToInt(fxLength(kick)) >= 900, "... and the player is thrown back by it");
+        // Held past ten seconds: in the hand.
+        fresh(400);
+        weapon.cooldownMs = 0;
+        bool burnt = false;
+        for (frame = 0; frame < 10200 / 33 && !burnt; ++frame)
+        {
+            g.player.health = 100;
+            use(false, true);
+            burnt = g.player.health < 100;
+        }
+        check(burnt && weapon.loading == 0 && frame >= 9900 / 33, "held ten seconds, it goes off in the hand");
+        g.player.health = 100;
+
+        // The egon: fourteen and a uranium every tenth of a second.
+        fresh(1000);
+        g.player.inv.current = kWeaponEgon;
+        aim();
+        ars.uranium = 100;
+        for (frame = 0; frame < 30; ++frame) // (a second)
+            use(true);
+        const int used = 100 - ars.uranium, hurt = 1000 - actor.health;
+        std::printf("test_monsters: a second of the egon: %d uranium, %d to the zombie\n", used, hurt);
+        check(used >= 9 && used <= 11 && hurt >= 9 * 14 && hurt <= 11 * 14, "the egon: 140 a second, ten uranium");
+        use(false);
+        check(weapon.loading == 0, "... and let go, it stops");
+
+        // The hornetgun: a homing hornet stings; it grows them back.
+        fresh(200);
+        g.player.inv.current = kWeaponHornetgun;
+        aim();
+        ars.hornets = 8;
+        did = use(true);
+        check((did & kWeaponFired) && ars.hornets == 7, "a hornet");
+        for (frame = 0; frame < 60 && actor.health == 200; ++frame)
+        {
+            hold();
+            tick(g, 2);
+        }
+        check(actor.health == 193, "... which stings for seven");
+        ars.hornets = 0;
+        for (int t = 0; t < 4100; t += 33)
+            use(false);
+        check(ars.hornets == 8, "and it grows them back, eight in four seconds");
+
+        // The weaponbox: all of it, each up to what is carried.
+        ars = Arsenal();
+        g.player.inv = Inventory();
+        got = 0;
+        check(hldata::detail::weaponboxTake(g.player, "uranium=60 tripmines=7 satchels=5 9mm=50 rockets=8", got) &&
+                  ars.uranium == 60 && ars.tripmines == 5 && ars.satchels == 5 && g.player.inv.ammo9mm == 50 &&
+                  ars.rockets == 5 && hasWeapon(g.player, kWeaponTripmine) && hasWeapon(g.player, kWeaponSatchel),
+              "a weaponbox: everything in it, up to what may be carried; the mines and charges as weapons");
+        check(!hldata::detail::weaponboxTake(g.player, "", got), "... and an empty one is nothing");
+        g.player.arsenal = nullptr;
+    }
+
     // ------------------------------------------- the weapons that came later
 
     /// The crossbow, the snark, the tripmine and the satchel, on a zombie in
@@ -2111,6 +2317,7 @@ int main()
         testKind(dir, "c1a1c", ActorKind::Bullsquid, "bullsquid", CommonSound::SquidSpit, 320, true, false);
         testGrenade(dir);
         testLaterWeapons(dir);
+        testLastWeapons(dir);
         testHeadShot(dir);
         testGuns(dir);
         testGibs(dir);

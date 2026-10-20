@@ -39,6 +39,13 @@ namespace
         check(kindOfName("barnacle") == ActorKind::Barnacle && kindOfName("zombie") == ActorKind::Zombie &&
                   kindOfName("monster_human_grunt") == ActorKind::Grunt && kindOfName("nothing") == ActorKind::Count,
               "... or a short one; and nothing else");
+        // (A weaponbox's word: its kind, and where its contents are.)
+        check(itemWordOk(static_cast<std::uint32_t>(ItemKind::Weaponbox) | (5u << kItemStringShift), 10) &&
+                  !itemWordOk(static_cast<std::uint32_t>(ItemKind::Weaponbox) | (50u << kItemStringShift), 10) &&
+                  !itemWordOk(static_cast<std::uint32_t>(ItemKind::Rpg) | (1u << kItemStringShift), 10) &&
+                  itemWordOk(static_cast<std::uint32_t>(ItemKind::Rpg), 0) &&
+                  !itemWordOk(static_cast<std::uint32_t>(ItemKind::Count), 10),
+              "an item's word: a weaponbox points into the strings, nothing else does");
         check(parseCommand("frobnicate").command == Command::Unknown && parseCommand("").command == Command::Unknown,
               "what is not a command is not one");
         line = parseCommand("a b c d e");
@@ -57,7 +64,9 @@ namespace
                                       "weapon_9mmar",    "weapon_handgrenade", "weapon_crossbow", "weapon_satchel",
                                       "weapon_tripmine", "weapon_snark",      "ammo_9mmclip",    "ammo_buckshot",
                                       "ammo_357",        "ammo_9mmar",        "ammo_argrenades", "ammo_crossbow",
-                                      "item_battery",    "item_healthkit",    "item_suit"};
+                                      "item_battery",    "item_healthkit",    "item_suit",       "weapon_rpg",
+                                      "ammo_rpgclip",    "weapon_gauss",      "ammo_gaussclip",  "weapon_egon",
+                                      "weapon_hornetgun"};
         bool all = true;
         for (const char *name : kNames)
             all = all && itemOfName(name) != ItemKind::None;

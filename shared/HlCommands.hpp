@@ -189,6 +189,9 @@ namespace hldata
         {"ammo_357", ItemKind::Ammo357},             {"weapon_crossbow", ItemKind::Crossbow},
         {"ammo_crossbow", ItemKind::Bolts},          {"weapon_satchel", ItemKind::Satchel},
         {"weapon_tripmine", ItemKind::Tripmine},     {"weapon_snark", ItemKind::Snark},
+        {"weapon_rpg", ItemKind::Rpg},               {"ammo_rpgclip", ItemKind::RpgClip},
+        {"weapon_gauss", ItemKind::Gauss},           {"ammo_gaussclip", ItemKind::GaussClip},
+        {"weapon_egon", ItemKind::Egon},             {"weapon_hornetgun", ItemKind::Hornetgun},
     };
     /// ItemKind::None if there is no such thing.
     inline ItemKind itemOfName(const char *name)

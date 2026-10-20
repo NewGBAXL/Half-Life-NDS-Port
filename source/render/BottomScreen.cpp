@@ -207,7 +207,8 @@ namespace hlrt
     {
         // (What a slot says with no picture to show: by weapon.)
         static const char *const kNames[kWeaponCount] = {"",     "BAR",  "9MM",   "SHOT", "GREN", "MP5",
-                                                         ".357", "XBOW", "SATCH", "MINE", "SNARK"};
+                                                         ".357", "XBOW", "SATCH", "MINE", "SNARK",
+                                                         "RPG",  "TAU",  "EGON",  "HIVE"};
         Canvas &canvas = touchCanvas.canvas();
         const TouchLayout at = touchLayout(mirrored_);
         const FontView &font = touchCanvas.font(kFontSmall);
@@ -265,7 +266,8 @@ namespace hlrt
             char text[16];
             std::snprintf(text, sizeof(text), "%d/%d", clip_, spare_);
             const bool counted = weapon == kWeaponGrenade || weapon == kWeaponSatchel || weapon == kWeaponTripmine ||
-                                 weapon == kWeaponSnark;
+                                 weapon == kWeaponSnark || weapon == kWeaponGauss || weapon == kWeaponEgon ||
+                                 weapon == kWeaponHornetgun;
             if (counted || textWidth(font, text) > r.w - 6)
                 std::snprintf(text, sizeof(text), "%d", clip_);
             drawTextCentred(canvas, font, cx, r.y + r.h - font.height() - 1, text, inkFor(font, kUiWhite));

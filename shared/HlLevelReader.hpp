@@ -333,7 +333,7 @@ namespace hldata
             if (actors[i].model >= modelRefCount || actors[i].name >= nameCount ||
                 actors[i].kind >= static_cast<std::uint8_t>(ActorKind::Count) ||
                 (actors[i].kind == static_cast<std::uint8_t>(ActorKind::Item)
-                     ? actors[i].item >= static_cast<std::uint32_t>(ItemKind::Count)
+                     ? !itemWordOk(actors[i].item, stringsSize)
                      : (actors[i].item >> kActorSquadShift) >= nameCount) ||
                 actors[i].target >= nameCount)
                 return LevelError::BadIndex;

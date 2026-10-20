@@ -982,6 +982,12 @@ namespace hlrt
             if (const SpriteRef *ref = sprite(CommonSprite::Beam, 20, RGB15(31, 28, 16)))
                 beam(*ref, 0, effect.a, effect.b, 20);
             break;
+        case kEffectBeam:
+            // The gauss's and the egon's: in their colours, fading out.
+            if (const SpriteRef *ref = sprite(CommonSprite::Beam, left, effect.colour))
+                beam(*ref, static_cast<int>(Global::vblanks() / 2 % (ref->frames > 0 ? ref->frames : 1)), effect.a,
+                     effect.b, effect.size * 16);
+            break;
         case kEffectMuzzle:
             if (const SpriteRef *ref = sprite(CommonSprite::Muzzle, 31))
                 picture(*ref, jitter(8) & 1, effect.a, camera.right, camera.up, 9, 9);

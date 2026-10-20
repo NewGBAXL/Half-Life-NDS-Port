@@ -203,12 +203,18 @@ namespace hlrt
         played_ = static_cast<std::uint32_t *>(std::calloc(view.logicCount / 32 + 1, sizeof(std::uint32_t)));
         soundsKept(view.logic, view.logicCount, view.logicSounds, view.logicSoundCount,
                    view.soundCount, kept, view.modelSounds, view.modelSoundCount);
+        // In two goes: everything but the later weapons' sounds, then those.
+        // Left with too little to play in (a DS, in a map with every weapon),
+        // the map does without the rest rather than without its memory --
+        // and the rest is a weapon's noise, not the map's own.
+        const int laterFrom = static_cast<int>(kCommonSoundsBefore30);
+        const int laterTo = static_cast<int>(commonsOf(view.header->version));
+        for (int pass = 0; pass < 2; ++pass)
         for (int i = 0; i < count; ++i)
         {
-            if (!kept[i] || view.sounds[i].name[0] == '\0')
+            const bool later = i >= laterFrom && i < laterTo;
+            if (later != (pass == 1) || !kept[i] || view.sounds[i].name[0] == '\0')
                 continue;
-            // Left with too little to play in, the map does without the
-            // rest of its sounds rather than without its memory.
             if (global.heapHeadroom() < 300 * 1024)
                 break;
             // (A DSi has the memory for the better copy, where there is one.)

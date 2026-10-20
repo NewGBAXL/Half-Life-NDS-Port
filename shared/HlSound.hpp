@@ -292,10 +292,39 @@ namespace hldata
         SnarkHunt2,
         SnarkHunt3,
         SnarkBlast,
+        // ... and the last four (from level version 31: kCommonSoundsBefore31).
+        RocketFire,   ///< the RPG, and its rocket's flight
+        RocketFly,
+        GaussFire,    ///< the gauss: a shot, its charging hum, the sparks of a discharge
+        GaussCharge,
+        Electro4,
+        Electro5,
+        Electro6,
+        EgonWindup,   ///< the egon: starting, running, stopping
+        EgonRun,
+        EgonOff,
+        HornetFire1,  ///< the hornetgun, and its hornets buzzing and stinging
+        HornetFire2,
+        HornetFire3,
+        HornetBuzz1,
+        HornetBuzz2,
+        HornetBuzz3,
+        HornetHit1,
+        HornetHit2,
+        HornetHit3,
         Count
     };
     /// How many of these a map of level version 29 or before has.
     inline constexpr std::uint16_t kCommonSoundsBefore30 = static_cast<std::uint16_t>(CommonSound::XbowFire);
+    /// ... and of version 30.
+    inline constexpr std::uint16_t kCommonSoundsBefore31 = static_cast<std::uint16_t>(CommonSound::RocketFire);
+    /// How many of them a map of level version `version` has (its sounds
+    /// after those are its own).
+    inline constexpr std::uint16_t commonsOf(std::uint16_t version)
+    {
+        return version < 30 ? kCommonSoundsBefore30
+                            : (version < 31 ? kCommonSoundsBefore31 : static_cast<std::uint16_t>(CommonSound::Count));
+    }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
 
     /// Where each of them is in the game's sound folder.
@@ -350,7 +379,14 @@ namespace hldata
             "weapons/xbow_fire1.wav", "weapons/xbow_hit1.wav",   "weapons/xbow_hitbod1.wav",
             "weapons/xbow_reload1.wav", "weapons/mine_deploy.wav", "weapons/mine_charge.wav",
             "weapons/g_bounce1.wav",  "squeek/sqk_deploy1.wav",  "squeek/sqk_hunt1.wav",
-            "squeek/sqk_hunt2.wav",   "squeek/sqk_hunt3.wav",    "squeek/sqk_blast1.wav"};
+            "squeek/sqk_hunt2.wav",   "squeek/sqk_hunt3.wav",    "squeek/sqk_blast1.wav",
+            "weapons/rocketfire1.wav", "weapons/rocket1.wav",    "weapons/gauss2.wav",
+            "ambience/pulsemachine.wav", "weapons/electro4.wav", "weapons/electro5.wav",
+            "weapons/electro6.wav",   "weapons/egon_windup2.wav", "weapons/egon_run3.wav",
+            "weapons/egon_off1.wav",  "agrunt/ag_fire1.wav",     "agrunt/ag_fire2.wav",
+            "agrunt/ag_fire3.wav",    "hornet/ag_buzz1.wav",     "hornet/ag_buzz2.wav",
+            "hornet/ag_buzz3.wav",    "hornet/ag_hornethit1.wav", "hornet/ag_hornethit2.wav",
+            "hornet/ag_hornethit3.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

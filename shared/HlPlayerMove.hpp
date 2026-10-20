@@ -93,7 +93,11 @@ namespace hldata
     inline constexpr std::uint8_t kWeaponSatchel = 8;
     inline constexpr std::uint8_t kWeaponTripmine = 9;
     inline constexpr std::uint8_t kWeaponSnark = 10;
-    inline constexpr std::uint8_t kWeaponCount = 11;
+    inline constexpr std::uint8_t kWeaponRpg = 11;
+    inline constexpr std::uint8_t kWeaponGauss = 12;
+    inline constexpr std::uint8_t kWeaponEgon = 13;
+    inline constexpr std::uint8_t kWeaponHornetgun = 14;
+    inline constexpr std::uint8_t kWeaponCount = 15;
     /// The first weapon Inventory::have has no bit for: from it on, they are
     /// the Arsenal's.
     inline constexpr std::uint8_t kWeaponFirstMore = 7;
@@ -116,11 +120,6 @@ namespace hldata
         std::int16_t ammoAr = 0;      ///< grenades for the MP5's launcher, 0..10
     };
 
-    /// What the player carries of the weapons that came after the first
-    /// six (kWeaponFirstMore on): kept apart from Inventory, which is in
-    /// every save and every level change as it is, so that a save made
-    /// before these were is read as it was written. (It goes in a save after
-    /// all the rest: HlSave.hpp.) Inventory::current may be any weapon.
     /// The cheats of the COMMAND line (Half-Life's own): for the session,
     /// never saved. Reached by a pointer from PlayerState, as the Arsenal is.
     struct Cheats
@@ -132,17 +131,24 @@ namespace hldata
         int timescale = 256;       ///< host_timescale, Q8
     };
 
+    /// What the player carries of the weapons that came after the first
+    /// six (kWeaponFirstMore on): kept apart from Inventory, which is in
+    /// every save and every level change as it is, so that a save made
+    /// before these were is read as it was written. (It goes in a save after
+    /// all the rest: HlSave.hpp.) Inventory::current may be any weapon.
     struct Arsenal
     {
-        std::uint16_t have = 0;       ///< a bit per weapon: 1 << (kWeapon* - kWeaponFirstMore)
+        /// A bit per weapon: 1 << (kWeapon* - kWeaponFirstMore); and, at
+        /// the top, the state of some (kArsenal*).
+        std::uint16_t have = 0;
         std::int16_t boltsClip = 0;   ///< in the crossbow
         std::int16_t bolts = 0;       ///< carried besides, 0..50
         std::int16_t satchels = 0;    ///< 0..5
         std::int16_t tripmines = 0;   ///< 0..5
         std::int16_t snarks = 0;      ///< 0..15
-        std::int16_t rockets = 0;     ///< (the weapons still to come)
-        std::int16_t uranium = 0;
-        std::int16_t hornets = 0;
+        std::int16_t rockets = 0;     ///< carried for the RPG, 0..5 (one more may be in it: kArsenalRpgLoaded)
+        std::int16_t uranium = 0;     ///< the gauss's and the egon's, 0..100
+        std::int16_t hornets = 0;     ///< in the hornetgun, 0..8 (it grows them)
         std::uint8_t zoomed = 0;      ///< the crossbow's sight is up
 
         template <class Ar>
@@ -151,6 +157,13 @@ namespace hldata
             ar &have &boltsClip &bolts &satchels &tripmines &snarks &rockets &uranium &hornets &zoomed;
         }
     };
+
+    /// Arsenal::have's weapon bits, and the state kept above them (in the
+    /// same field, so that a save holds it as it always held `have`).
+    inline constexpr std::uint16_t kArsenalWeapons = (1u << (kWeaponCount - kWeaponFirstMore)) - 1u;
+    inline constexpr std::uint16_t kArsenalRpgLoaded = 1u << 15; ///< a rocket in the RPG
+    inline constexpr std::uint16_t kArsenalLaserOff = 1u << 14;  ///< the RPG's laser is off
+    inline constexpr std::uint16_t kArsenalKept = kArsenalWeapons | kArsenalRpgLoaded | kArsenalLaserOff;
 
     struct PlayerState
     {
@@ -237,9 +250,9 @@ namespace hldata
             {kWeaponCrowbar},
             {kWeaponGlock, kWeaponPython},
             {kWeaponMp5, kWeaponShotgun, kWeaponCrossbow},
-            {},
+            {kWeaponRpg, kWeaponGauss, kWeaponEgon, kWeaponHornetgun},
             {kWeaponGrenade, kWeaponSatchel, kWeaponTripmine, kWeaponSnark}};
-        static const int kCounts[kWeaponCategories] = {1, 2, 3, 0, 4};
+        static const int kCounts[kWeaponCategories] = {1, 2, 3, 4, 4};
         if (category < 1 || category > kWeaponCategories)
         {
             count = 0;

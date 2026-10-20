@@ -59,7 +59,7 @@ namespace hlrt
         /// instead).
         int thrownModel(int kind) const
         {
-            return kind >= hldata::kShotBolt && kind <= hldata::kShotSnark ? thrown_[kind - hldata::kShotBolt] : -1;
+            return kind >= hldata::kShotBolt && kind <= hldata::kShotHornet ? thrown_[kind - hldata::kShotBolt] : -1;
         }
         bool lampLit = false;
         int lampDistance = 0; ///< how far off the lamp's light is, in units
@@ -138,7 +138,7 @@ namespace hlrt
         hldata::WeaponState weapon_;
         int inHand_ = -1; ///< the weapon `held` is the model of
         bool radio_ = false; ///< ... and it is the satchels' radio
-        std::int16_t thrown_[4] = {-1, -1, -1, -1}; ///< thrownModel
+        std::int16_t thrown_[6] = {-1, -1, -1, -1, -1, -1}; ///< thrownModel
         /// Whether any satchel charge is out (and so the radio in hand).
         bool satchelsOut() const
         {

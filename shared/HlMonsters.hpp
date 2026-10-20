@@ -1335,9 +1335,145 @@ namespace hldata
                 }
                 return true;
             }
+            // The last four, by the game's single-player amounts: the RPG
+            // comes with its rocket in it; a box of rockets is one more.
+            case ItemKind::Rpg:
+                if (later(kWeaponRpg))
+                {
+                    ars->have = static_cast<std::uint16_t>(ars->have | kArsenalRpgLoaded);
+                    return true;
+                }
+                return add(ars->rockets, 1, 5);
+            case ItemKind::RpgClip:
+                return add(ars->rockets, 1, 5);
+            case ItemKind::Gauss:
+            case ItemKind::Egon:
+            {
+                const std::uint8_t which = static_cast<ItemKind>(item) == ItemKind::Gauss ? kWeaponGauss : kWeaponEgon;
+                if (later(which))
+                {
+                    add(ars->uranium, 20, 100);
+                    return true;
+                }
+                return add(ars->uranium, 20, 100);
+            }
+            case ItemKind::GaussClip:
+                return add(ars->uranium, 20, 100);
+            case ItemKind::Hornetgun:
+                // (It grows its own hornets: another is no more of them.)
+                if (later(kWeaponHornetgun))
+                {
+                    ars->hornets = 8;
+                    return true;
+                }
+                return false;
             default:
                 return false;
             }
+        }
+
+        /// What is in a weaponbox (`contents`: "uranium=60 rockets=8", as
+        /// the level writes it), all of it at once, each up to what may be
+        /// carried; and the grenades, satchels and tripmines in it are their
+        /// weapons too, as picking those up is. True if there was anything.
+        inline bool weaponboxTake(PlayerState &player, const char *contents, std::uint32_t &got)
+        {
+            if (contents == nullptr)
+                return false;
+            Inventory &inv = player.inv;
+            Arsenal *ars = player.arsenal;
+            bool any = false;
+            auto add = [&](std::int16_t &what, int amount, int most)
+            {
+                if (amount > 0 && what < most)
+                    what = static_cast<std::int16_t>(what + amount > most ? most : what + amount);
+                any = any || amount > 0;
+            };
+            auto arm = [&](std::uint8_t which)
+            {
+                if (!hasWeapon(player, which))
+                {
+                    giveWeapon(player, which);
+                    got |= kGotWeapon;
+                }
+            };
+            for (const char *p = contents; *p != '\0';)
+            {
+                while (*p == ' ')
+                    ++p;
+                char key[16];
+                int n = 0;
+                while (*p != '\0' && *p != '=' && *p != ' ' && n < 15)
+                    key[n++] = *p++;
+                key[n] = '\0';
+                int amount = 0;
+                if (*p == '=')
+                {
+                    ++p;
+                    while (*p >= '0' && *p <= '9')
+                        amount = amount * 10 + (*p++ - '0');
+                }
+                while (*p != '\0' && *p != ' ')
+                    ++p;
+                if (amount <= 0)
+                    continue;
+                if (std::strcmp(key, "9mm") == 0)
+                    add(inv.ammo9mm, amount, 250);
+                else if (std::strcmp(key, "357") == 0)
+                    add(inv.ammo357, amount, 36);
+                else if (std::strcmp(key, "buckshot") == 0)
+                    add(inv.ammoBuck, amount, 125);
+                else if (std::strcmp(key, "argrenades") == 0)
+                    add(inv.ammoAr, amount, 10);
+                else if (std::strcmp(key, "grenades") == 0)
+                {
+                    add(inv.grenades, amount, 10);
+                    arm(kWeaponGrenade);
+                }
+                else if (ars == nullptr)
+                    continue;
+                else if (std::strcmp(key, "bolts") == 0)
+                    add(ars->bolts, amount, 50);
+                else if (std::strcmp(key, "rockets") == 0)
+                    add(ars->rockets, amount, 5);
+                else if (std::strcmp(key, "uranium") == 0)
+                    add(ars->uranium, amount, 100);
+                else if (std::strcmp(key, "satchels") == 0)
+                {
+                    add(ars->satchels, amount, 5);
+                    arm(kWeaponSatchel);
+                }
+                else if (std::strcmp(key, "tripmines") == 0)
+                {
+                    add(ars->tripmines, amount, 5);
+                    arm(kWeaponTripmine);
+                }
+                else if (std::strcmp(key, "snarks") == 0)
+                {
+                    add(ars->snarks, amount, 15);
+                    arm(kWeaponSnark);
+                }
+            }
+            return any;
+        }
+
+        /// What a weaponbox actor has in it (the level's text for it), or null.
+        inline const char *weaponboxContents(const LogicWorld &w, int index)
+        {
+            if (w.actors == nullptr || w.level == nullptr || w.level->strings == nullptr ||
+                index >= w.actors->recordCount || w.actors->records == nullptr)
+                return nullptr;
+            const std::uint32_t at = w.actors->records[index].item >> kItemStringShift;
+            return at < w.level->stringsSize ? w.level->strings + at : nullptr;
+        }
+        /// An item actor taken: a weaponbox by what is in it, anything else by
+        /// its kind.
+        inline bool itemTakeAt(const LogicWorld &w, PlayerState &player, int index, std::uint32_t &got)
+        {
+            const ActorState &actor = w.actors->states[index];
+            if (actor.item == static_cast<std::uint8_t>(ItemKind::Weaponbox))
+                return weaponboxTake(player, weaponboxContents(w, index), got);
+            return itemTake(player, actor.item, got);
         }
 
         // --------------------------------------------- makers and chargers
@@ -1800,6 +1936,120 @@ namespace hldata
                     }
                     for (int i = 0; i < 3; ++i)
                         shot.pos[i] = t.startSolid ? shot.pos[i] : to[i];
+                    continue;
+                }
+                if (shot.kind == kShotRocket || shot.kind == kShotHornet)
+                {
+                    const bool rocket = shot.kind == kShotRocket;
+                    // The rocket: a moment at half the world's pull, then lit
+                    // -- and faster, up to 2000, along where it goes. (Its
+                    // steering is the RPG's, while it is in hand: weaponsTick.)
+                    if (rocket)
+                    {
+                        if (shot.sprite == 0)
+                        {
+                            shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player) / 2) * ms) / 1000);
+                            if (shot.leftMs <= 30000 - 400)
+                            {
+                                shot.sprite = 1;
+                                if (w.heard != nullptr)
+                                    w.heard->add(CommonSound::RocketFly, shot.pos, 110, kRadiusMedium);
+                            }
+                        }
+                        else
+                        {
+                            const fx speed = fxLength(shot.velocity);
+                            if (speed > 0 && speed < fxFromInt(2000))
+                            {
+                                const fx faster = speed + static_cast<fx>((static_cast<std::int64_t>(fxFromInt(1500)) * ms) / 1000);
+                                const fx to = faster > fxFromInt(2000) ? fxFromInt(2000) : faster;
+                                for (int i = 0; i < 3; ++i)
+                                    shot.velocity[i] = static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * to) / speed);
+                            }
+                        }
+                    }
+                    else if (shot.sprite == 0)
+                    {
+                        // A homing hornet: after the nearest that fights within
+                        // 512 that it can see, at 600; and buzzing.
+                        int best = -1;
+                        std::int64_t nearest = static_cast<std::int64_t>(fxFromInt(512)) * fxFromInt(512);
+                        fx goal[3] = {0, 0, 0};
+                        for (int i = 0; i < a.count; ++i)
+                        {
+                            const ActorState &actor = a.states[i];
+                            if (!actor.active || !fights(actor.kind) || isTurret(actor.kind) || isMine(actor.kind) ||
+                                actor.ai >= kAiDying)
+                                continue;
+                            const fx at[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(24)};
+                            const fx d[3] = {at[0] - shot.pos[0], at[1] - shot.pos[1], at[2] - shot.pos[2]};
+                            const std::int64_t far = static_cast<std::int64_t>(fxLength(d)) * fxLength(d);
+                            if (far >= nearest || traceShot(*w.world, shot.pos, at).fraction < kFractionOne)
+                                continue;
+                            nearest = far;
+                            best = i;
+                            for (int k = 0; k < 3; ++k)
+                                goal[k] = at[k];
+                        }
+                        if (best >= 0)
+                        {
+                            const fx d[3] = {goal[0] - shot.pos[0], goal[1] - shot.pos[1], goal[2] - shot.pos[2]};
+                            const fx far = fxLength(d);
+                            // (Turned most of the way a tenth of a second.)
+                            const int keep = ms >= 100 ? 0 : 1024 - (ms * 819) / 100;
+                            for (int i = 0; far > 0 && i < 3; ++i)
+                            {
+                                const fx want = static_cast<fx>((static_cast<std::int64_t>(d[i]) * 600) / (far >> kFxShift > 0 ? far >> kFxShift : 1));
+                                shot.velocity[i] = static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * keep +
+                                                                    static_cast<std::int64_t>(want) * (1024 - keep)) >> 10);
+                            }
+                        }
+                        if (w.heard != nullptr && (chance(a) % 40) == 0)
+                            w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetBuzz1) + static_cast<int>(chance(a) % 3)),
+                                         shot.pos, 70, kRadiusSmall);
+                    }
+                    fx to[3];
+                    for (int i = 0; i < 3; ++i)
+                        to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
+                    const Shot line = traceShot(*w.world, shot.pos, to);
+                    std::int64_t reach = line.fraction;
+                    int struck = -1;
+                    for (int i = 0; i < a.count; ++i)
+                    {
+                        const ActorState &actor = a.states[i];
+                        if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying)
+                            continue;
+                        fx mins[3], maxs[3];
+                        targetBox(actor, mins, maxs);
+                        std::int64_t enter;
+                        if (lineEntersBox(shot.pos, to, mins, maxs, enter) && enter < reach)
+                        {
+                            reach = enter;
+                            struck = i;
+                        }
+                    }
+                    for (int i = 0; i < 3; ++i)
+                        shot.pos[i] += static_cast<fx>((static_cast<std::int64_t>(to[i] - shot.pos[i]) * reach) >> kFractionShift);
+                    const bool met = struck >= 0 || line.fraction < kFractionOne;
+                    if (rocket && (met || shot.leftMs <= 0))
+                    {
+                        // Off, where it met something: 100, to 250 units.
+                        shot.active = false;
+                        explodeAt(w, player, shot.pos, 100, true, true, true);
+                        continue;
+                    }
+                    if (!rocket && struck >= 0)
+                    {
+                        // A sting.
+                        shot.active = false;
+                        monsterHurt(w, struck, 7, false);
+                        if (w.heard != nullptr)
+                            w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
+                                         shot.pos, 100, kRadiusSmall);
+                        continue;
+                    }
+                    if (!rocket && (line.fraction < kFractionOne || shot.leftMs <= 0))
+                        shot.active = false; // (into a wall, or its time up)
                     continue;
                 }
                 if (shot.kind == kShotContact)
@@ -2808,7 +3058,7 @@ namespace hldata
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
-        if (!detail::itemTake(player, actor.item, a.got))
+        if (!detail::itemTakeAt(w, player, index, a.got))
             return false;
         a.got |= kGotItem;
         if (w.heard != nullptr)
@@ -2817,7 +3067,8 @@ namespace hldata
             w.heard->add(item == ItemKind::HealthKit ? CommonSound::MedKit
                          : (item == ItemKind::GlockClip || item == ItemKind::Buckshot ||
                             item == ItemKind::Mp5Clip || item == ItemKind::AmmoBox ||
-                            item == ItemKind::ArGrenades || item == ItemKind::Ammo357 || item == ItemKind::Bolts)
+                            item == ItemKind::ArGrenades || item == ItemKind::Ammo357 || item == ItemKind::Bolts ||
+                            item == ItemKind::RpgClip || item == ItemKind::GaussClip || item == ItemKind::Weaponbox)
                              ? CommonSound::AmmoPickup
                              : CommonSound::GunPickup,
                          nullptr);
@@ -2880,7 +3131,7 @@ namespace hldata
                         Arsenal trialArsenal = player.arsenal != nullptr ? *player.arsenal : Arsenal();
                         trial.arsenal = player.arsenal != nullptr ? &trialArsenal : nullptr;
                         std::uint32_t ignored = 0;
-                        if (a.wanted == -1 && detail::itemTake(trial, actor.item, ignored))
+                        if (a.wanted == -1 && detail::itemTakeAt(w, trial, i, ignored))
                             a.wanted = static_cast<std::int16_t>(i);
                     }
                     else
@@ -3020,6 +3271,11 @@ namespace hldata
             return ars != nullptr ? &ars->tripmines : nullptr;
         case kWeaponSnark:
             return ars != nullptr ? &ars->snarks : nullptr;
+        case kWeaponGauss:
+        case kWeaponEgon:
+            return ars != nullptr ? &ars->uranium : nullptr;
+        case kWeaponHornetgun:
+            return ars != nullptr ? &ars->hornets : nullptr;
         default:
             return nullptr;
         }
@@ -3144,7 +3400,8 @@ namespace hldata
     /// `range` units, and hurts: a monster, or something that breaks. True
     /// if it hurt anything.
     inline bool fireLine(LogicWorld &w, PlayerState &player, const fx *eye, const fx *dir, int range,
-                         int damage, bool bullet, bool mark = true, int *met = nullptr, int from = -1)
+                         int damage, bool bullet, bool mark = true, int *met = nullptr, int from = -1,
+                         fx *reached = nullptr)
     {
         if (met != nullptr)
             *met = kMetNothing;
@@ -3171,6 +3428,9 @@ namespace hldata
                 struck = i;
             }
         }
+        // (Where it got to, for whoever draws it: a beam's end.)
+        for (int i = 0; reached != nullptr && i < 3; ++i)
+            reached[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * nearest) >> kFractionShift);
         if (struck >= 0)
         {
             // Where it landed, what bleeds bleeds (people red, the aliens
@@ -3499,6 +3759,15 @@ namespace hldata
     /// MP5 too, which the other button cannot reload while it has
     /// grenades to launch). `forward`, `right` and `up` are the view's (Q12). Returns
     /// kWeapon* for what it did, for whoever draws it.
+    /// Where the RPG's laser falls: the first thing along the view.
+    inline void laserDot(const MoveWorld &world, const fx *eye, const fx *forward, fx *dot)
+    {
+        const fx end[3] = {eye[0] + forward[0] * 8192, eye[1] + forward[1] * 8192, eye[2] + forward[2] * 8192};
+        const Shot shot = traceShot(world, eye, end);
+        for (int i = 0; i < 3; ++i)
+            dot[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * shot.fraction) >> kFractionShift);
+    }
+
     inline std::uint32_t weaponsTick(LogicWorld &w, PlayerState &player, WeaponState &state,
                                      const fx *eye, const fx *forward, const fx *right, const fx *up,
                                      bool attack, bool next, int ms, bool second = false, int pick = 0,
@@ -3666,7 +3935,9 @@ namespace hldata
             return true;
         };
 
-        if (state.loading != 0)
+        // (The shotgun's loading, a shell at a time. `loading` is the RPG's,
+        // the gauss's and the egon's own too, which are no guns here.)
+        if (state.loading != 0 && inv.current == kWeaponShotgun && clip != nullptr)
         {
             // Firing breaks it off, with what is in it.
             if ((attack || second) && *clip > 0 && state.cooldownMs <= 0)
@@ -3933,6 +4204,337 @@ namespace hldata
                 return did;
             }
             idle("idle1", "fidgetnip", 3000, 2500);
+            return did;
+        }
+        // Where a beam starts: ahead of the eye, to the right and a little
+        // down, where the gun's end is.
+        fx muzzle[3];
+        for (int i = 0; i < 3; ++i)
+            muzzle[i] = eye[i] + forward[i] * 16 + right[i] * 5 - up[i] * 5;
+        if (inv.current == kWeaponRpg && ars != nullptr)
+        {
+            // The game's RPG: one rocket in it, two seconds to put in the
+            // next; the other trigger switches its laser, whose dot the
+            // rocket steers for.
+            const bool loaded = (ars->have & kArsenalRpgLoaded) != 0;
+            if (second && state.secondMs <= 0)
+            {
+                ars->have = static_cast<std::uint16_t>(ars->have ^ kArsenalLaserOff);
+                state.secondMs = 500;
+                say(CommonSound::Click, 100, 80);
+            }
+            // The rockets in flight, while it is in hand and the laser on:
+            // turned towards the dot -- most of the way each tenth of a second.
+            if ((ars->have & kArsenalLaserOff) == 0 && w.actors != nullptr && w.world != nullptr)
+            {
+                fx dot[3];
+                laserDot(*w.world, eye, forward, dot);
+                for (Projectile &shot : w.actors->shots)
+                {
+                    if (!shot.active || shot.kind != kShotRocket || shot.sprite != 1)
+                        continue;
+                    fx to[3] = {dot[0] - shot.pos[0], dot[1] - shot.pos[1], dot[2] - shot.pos[2]};
+                    const fx far = fxLength(to);
+                    const fx speed = fxLength(shot.velocity);
+                    if (far <= 0)
+                        continue;
+                    const int keep = ms >= 100 ? 0 : 1024 - (ms * 819) / 100; // (of 1024: 0.2 left a tenth on)
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const fx want = static_cast<fx>((static_cast<std::int64_t>(to[i]) * speed) / far);
+                        shot.velocity[i] = static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * keep +
+                                                            static_cast<std::int64_t>(want) * (1024 - keep)) >> 10);
+                    }
+                }
+            }
+            // A rocket put in, when the hand has done.
+            if (state.loading == 1)
+            {
+                if ((state.loadMs -= ms) > 0)
+                    return did;
+                state.loading = 0;
+                ars->have = static_cast<std::uint16_t>(ars->have | kArsenalRpgLoaded);
+                ars->rockets = static_cast<std::int16_t>(ars->rockets - 1);
+                return did;
+            }
+            if (!loaded && ars->rockets > 0 && state.cooldownMs <= 0)
+            {
+                state.loading = 1;
+                state.loadMs = 2000;
+                state.anim = "reload";
+                state.idleMs = 3000;
+                return did | kWeaponReload;
+            }
+            if (attack && state.cooldownMs <= 0)
+            {
+                if (!loaded)
+                {
+                    click();
+                    state.cooldownMs = 200;
+                    return did;
+                }
+                if (w.actors == nullptr)
+                    return did;
+                fx from[3], velocity[3];
+                for (int i = 0; i < 3; ++i)
+                {
+                    from[i] = eye[i] + forward[i] * 16 + right[i] * 8 - up[i] * 8;
+                    velocity[i] = forward[i] * 250 + player.velocity[i];
+                }
+                if (!launch(kShotRocket, from, velocity, 30000))
+                    return did;
+                ars->have = static_cast<std::uint16_t>(ars->have & ~kArsenalRpgLoaded);
+                say(CommonSound::RocketFire, 95 + static_cast<int>(chance() % 10));
+                state.anim = "fire";
+                state.cooldownMs = 1500;
+                state.idleMs = 5000;
+                if (w.actors != nullptr)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        w.actors->noise[i] = eye[i];
+                    w.actors->noiseMs = 400;
+                }
+                return did | kWeaponFired;
+            }
+            // (Empty, it is held as the game's empty one: idle2, fidget2.)
+            idle(loaded ? "idle" : "idle2", loaded ? "fidget" : "fidget2", 4000, 3000);
+            return did;
+        }
+        if (inv.current == kWeaponGauss && ars != nullptr)
+        {
+            // The game's gauss: a shot at the trigger; or, held on the other,
+            // a charge -- up to four seconds of it, a uranium every third of
+            // one -- let go as a beam through thin walls that throws the one
+            // who fires it back. Held past ten seconds it goes off in the hand.
+            auto beam = [&](const fx *from, const fx *to, std::uint16_t colour, int width)
+            {
+                if (w.actors == nullptr)
+                    return;
+                Effect &e = effectAdd(*w.actors, kEffectBeam, from, to, width, 200);
+                e.colour = colour;
+            };
+            const bool charging = state.loading == 1;
+            if (charging)
+            {
+                const int before = state.loadMs;
+                state.loadMs += ms;
+                // (A uranium a third of a second, until it is full.)
+                if (before < 4000 && state.loadMs / 300 > before / 300 && ars->uranium > 0)
+                    ars->uranium = static_cast<std::int16_t>(ars->uranium - 1);
+                if (state.loadMs >= 10000)
+                {
+                    // Too long: it goes off in the hand.
+                    state.loading = 0;
+                    state.loadMs = 0;
+                    playerHurt(player, 50);
+                    if (w.actors != nullptr)
+                        w.actors->got |= kGotHurt;
+                    say(static_cast<CommonSound>(static_cast<int>(CommonSound::Electro4) + static_cast<int>(chance() % 3)));
+                    state.anim = "idle";
+                    state.cooldownMs = 1000;
+                    return did;
+                }
+                if (second && ars->uranium > 0)
+                {
+                    state.anim = state.loadMs < 500 ? nullptr : "spin";
+                    return did;
+                }
+                // Let go (or nothing left to charge with): the beam.
+                state.loading = 0;
+                const int charge = state.loadMs > 4000 ? 4000 : state.loadMs;
+                state.loadMs = 0;
+                const int damage = 200 * charge / 4000 > 20 ? 200 * charge / 4000 : 20;
+                fx reached[3];
+                int met = kMetNothing;
+                fireLine(w, player, eye, forward, 8192, damage, false, true, &met, -1, reached);
+                beam(muzzle, reached, static_cast<std::uint16_t>(31 | 31 << 5 | 28 << 10), 6);
+                // Through a wall no thicker than what is left of it: a blast
+                // on the far side, the less for the thickness.
+                if (met == kMetWall && w.world != nullptr)
+                {
+                    for (int depth = 8; depth < damage; depth += 8)
+                    {
+                        const fx at[3] = {reached[0] + forward[0] * depth, reached[1] + forward[1] * depth,
+                                          reached[2] + forward[2] * depth};
+                        if (pointContents(*w.world, at) == kContentsSolid)
+                            continue;
+                        if (w.actors != nullptr)
+                            radiusDamage(w, player, at, damage - depth, (damage - depth) * 5 / 2, -1);
+                        break;
+                    }
+                }
+                // ... and the gun's kick, which the player feels.
+                for (int i = 0; i < 3; ++i)
+                    player.velocity[i] -= forward[i] * damage * 5;
+                say(CommonSound::GaussFire, 85 + static_cast<int>(chance() % 30));
+                state.anim = "fire";
+                state.cooldownMs = 1000;
+                state.idleMs = 5000;
+                return did | kWeaponFired | kWeaponSecondary;
+            }
+            if (second && state.cooldownMs <= 0 && ars->uranium > 0)
+            {
+                state.loading = 1;
+                state.loadMs = 0;
+                ars->uranium = static_cast<std::int16_t>(ars->uranium - 1);
+                say(CommonSound::GaussCharge, 110);
+                state.anim = "spinup";
+                return did;
+            }
+            if (attack && state.cooldownMs <= 0)
+            {
+                if (ars->uranium < 2)
+                {
+                    click();
+                    state.cooldownMs = 500;
+                    return did;
+                }
+                ars->uranium = static_cast<std::int16_t>(ars->uranium - 2);
+                // A shot: off a wall met at a slant (the game's: within sixty
+                // degrees of along it), what is left of it goes on.
+                fx from[3] = {eye[0], eye[1], eye[2]}, dir[3] = {forward[0], forward[1], forward[2]};
+                const fx *start = muzzle;
+                int damage = 20;
+                for (int bounce = 0; bounce < 3 && damage > 0; ++bounce)
+                {
+                    fx reached[3];
+                    int met = kMetNothing;
+                    fireLine(w, player, from, dir, 8192, damage, false, true, &met, -1, reached);
+                    beam(start, reached, static_cast<std::uint16_t>(31 | 26 << 5 | 6 << 10), 3);
+                    fx at[3], normal[3];
+                    const fx past[3] = {reached[0] + dir[0] * 2, reached[1] + dir[1] * 2, reached[2] + dir[2] * 2};
+                    if (met != kMetWall || w.world == nullptr || !traceShotWall(*w.world, from, past, at, normal))
+                        break;
+                    const fx along = static_cast<fx>((static_cast<std::int64_t>(dir[0]) * normal[0] +
+                                                      static_cast<std::int64_t>(dir[1]) * normal[1] +
+                                                      static_cast<std::int64_t>(dir[2]) * normal[2]) >> kFxShift);
+                    if (along < -kFxOne / 2)
+                        break; // (met square on: it stops there)
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        dir[i] = dir[i] - static_cast<fx>((static_cast<std::int64_t>(normal[i]) * along * 2) >> kFxShift);
+                        from[i] = at[i] + normal[i] / 2;
+                    }
+                    damage = damage * (kFxOne + along) / kFxOne;
+                    start = from;
+                }
+                say(CommonSound::GaussFire, 85 + static_cast<int>(chance() % 30), 100);
+                state.anim = "fire2";
+                state.cooldownMs = 200;
+                state.idleMs = 5000;
+                if (w.actors != nullptr)
+                {
+                    for (int i = 0; i < 3; ++i)
+                        w.actors->noise[i] = eye[i];
+                    w.actors->noiseMs = 400;
+                }
+                return did | kWeaponFired;
+            }
+            idle("idle", "fidget", 4000, 3000);
+            return did;
+        }
+        if (inv.current == kWeaponEgon && ars != nullptr)
+        {
+            // The game's egon: a beam for as long as the trigger is held and
+            // there is uranium -- 14 to what it meets and a uranium every
+            // tenth of a second.
+            const bool running = state.loading == 2;
+            if (attack && ars->uranium > 0 && state.cooldownMs <= 0)
+            {
+                if (!running)
+                {
+                    state.loading = 2;
+                    state.loadMs = 0;
+                    state.secondMs = 0;
+                    say(CommonSound::EgonWindup, 100);
+                    state.anim = "altfireon";
+                }
+                // (Its hum, again and again while it runs.)
+                if (state.secondMs <= 0)
+                {
+                    if (running)
+                        say(CommonSound::EgonRun, 100, 110);
+                    state.secondMs = 1000;
+                }
+                if ((state.loadMs -= ms) <= 0)
+                {
+                    state.loadMs += 100;
+                    if (state.loadMs <= 0)
+                        state.loadMs = 100;
+                    ars->uranium = static_cast<std::int16_t>(ars->uranium - 1);
+                    fx reached[3];
+                    fireLine(w, player, eye, forward, 2048, 14, false, false, nullptr, -1, reached);
+                    if (w.actors != nullptr)
+                    {
+                        Effect &e = effectAdd(*w.actors, kEffectBeam, muzzle, reached, 5, 120);
+                        e.colour = static_cast<std::uint16_t>(18 | 10 << 5 | 31 << 10);
+                        for (int i = 0; i < 3; ++i)
+                            w.actors->noise[i] = eye[i];
+                        w.actors->noiseMs = 200;
+                    }
+                    did |= kWeaponFired;
+                }
+                return did;
+            }
+            if (running)
+            {
+                // Let go, or empty: off.
+                state.loading = 0;
+                state.loadMs = 0;
+                say(CommonSound::EgonOff, 100);
+                state.anim = "altfireoff";
+                state.cooldownMs = 500;
+                state.idleMs = 3000;
+                return did;
+            }
+            if (attack && ars->uranium <= 0 && state.cooldownMs <= 0)
+            {
+                click();
+                state.cooldownMs = 500;
+            }
+            idle("idle1", "fidget1", 4000, 3000);
+            return did;
+        }
+        if (inv.current == kWeaponHornetgun && ars != nullptr)
+        {
+            // The game's hornetgun: it grows its own hornets, one each half
+            // second up to eight; a homing one four times a second, or the
+            // fast straight kind ten times a second.
+            if (ars->hornets < 8)
+            {
+                if ((state.loadMs -= ms) <= 0)
+                {
+                    ars->hornets = static_cast<std::int16_t>(ars->hornets + 1);
+                    state.loadMs += 500; // (what the tick ran over by counts towards the next)
+                }
+            }
+            else
+            {
+                state.loadMs = 500;
+            }
+            if ((attack || second) && state.cooldownMs <= 0 && ars->hornets > 0 && w.actors != nullptr)
+            {
+                const bool fast = !attack;
+                fx from[3], velocity[3];
+                for (int i = 0; i < 3; ++i)
+                {
+                    from[i] = eye[i] + forward[i] * 16 + right[i] * 8 - up[i] * 12;
+                    velocity[i] = forward[i] * (fast ? 1200 : 300);
+                }
+                Projectile *shot = projectileAdd(*w.actors, kShotHornet, from, velocity, 4000);
+                if (shot == nullptr)
+                    return did;
+                shot->sprite = fast ? 1 : 0;
+                ars->hornets = static_cast<std::int16_t>(ars->hornets - 1);
+                state.loadMs = 500;
+                say(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetFire1) + static_cast<int>(chance() % 3)),
+                    100, 110);
+                state.anim = "shoot";
+                state.cooldownMs = fast ? 100 : 250;
+                state.idleMs = 3000;
+                return did | kWeaponFired | (fast ? kWeaponSecondary : 0u);
+            }
+            idle("idle1", "fidgetsway", 4000, 3000);
             return did;
         }
         if (!isGun)

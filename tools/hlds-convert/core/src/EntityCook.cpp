@@ -62,7 +62,8 @@ namespace hlds
                 "weapon_python", "ammo_9mmAR", "ammo_mp5clip", "ammo_9mmbox", "ammo_ARgrenades",
                 "ammo_mp5grenades", "ammo_357", "monster_human_grunt", "monster_hgrunt_dead",
                 "monster_tripmine", "weapon_crossbow", "ammo_crossbow", "weapon_satchel", "weapon_tripmine",
-                "weapon_snark"};
+                "weapon_snark", "weapon_rpg", "ammo_rpgclip", "weapon_gauss", "ammo_gaussclip", "ammo_egonclip",
+                "weapon_egon", "weapon_hornetgun", "weaponbox"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -132,6 +133,14 @@ namespace hlds
             {"weapon_satchel", ItemKind::Satchel, "models/w_satchel.mdl"},
             {"weapon_tripmine", ItemKind::Tripmine, "models/v_tripmine.mdl"},
             {"weapon_snark", ItemKind::Snark, "models/w_sqknest.mdl"},
+            {"weapon_rpg", ItemKind::Rpg, "models/w_rpg.mdl"},
+            {"ammo_rpgclip", ItemKind::RpgClip, "models/w_rpgammo.mdl"},
+            {"weapon_gauss", ItemKind::Gauss, "models/w_gauss.mdl"},
+            {"ammo_gaussclip", ItemKind::GaussClip, "models/w_gaussammo.mdl"},
+            {"ammo_egonclip", ItemKind::GaussClip, "models/w_gaussammo.mdl"},
+            {"weapon_egon", ItemKind::Egon, "models/w_egon.mdl"},
+            {"weapon_hornetgun", ItemKind::Hornetgun, "models/w_hgun.mdl"},
+            {"weaponbox", ItemKind::Weaponbox, "models/w_weaponbox.mdl"},
         };
 
         ActorInfo actorOf(const Entity &entity)
@@ -383,13 +392,8 @@ namespace hlds
         // weapons allow: the heavy guns are the .357, the fast ones the
         // MP5, the crossbow the shotgun, and everything thrown or laid is
         // a hand grenade. Each line goes when its weapon comes.
+        // (Every weapon is the port's now: only the long jump stands in.)
         static const char *const kStandIns[][2] = {
-            {"weapon_rpg", "weapon_357"},           {"weapon_gauss", "weapon_357"},
-            {"weapon_egon", "weapon_9mmar"},        {"weapon_hornetgun", "weapon_9mmar"},
-            {"weapon_crossbow", "weapon_shotgun"},  {"weapon_satchel", "weapon_handgrenade"},
-            {"weapon_tripmine", "weapon_handgrenade"}, {"weapon_snark", "weapon_handgrenade"},
-            {"ammo_rpgclip", "ammo_357"},           {"ammo_gaussclip", "ammo_357"},
-            {"ammo_egonclip", "ammo_9mmar"},        {"ammo_crossbow", "ammo_buckshot"},
             {"item_longjump", "item_battery"},
         };
         int count = 0;
@@ -2215,19 +2219,22 @@ namespace hlds
             std::strncpy(ref.name, model.c_str(), sizeof(ref.name) - 1);
             out.modelRefs.push_back(ref);
         }
-        // (In two rounds: the items of the weapons that came later after all
-        // the rest, so that every other actor is where a save made before
-        // they were says it is.)
-        for (int round = 0; round < 2; ++round)
+        // (In three rounds: the items of the weapons that came later after
+        // all the rest, and those of the last ones after even those, so that
+        // every other actor is where a save made before they were says it
+        // is.)
+        for (int round = 0; round < 3; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
             const ActorInfo info = actorOf(entity);
             if (!info.is)
                 continue;
-            const bool later = info.item != ItemKind::None &&
-                               static_cast<int>(info.item) >= static_cast<int>(kItemFirstMore);
-            if (later != (round == 1))
+            const int itemRound = info.item == ItemKind::None ? 0
+                                  : static_cast<int>(info.item) >= static_cast<int>(kItemFirstLast) ? 2
+                                  : static_cast<int>(info.item) >= static_cast<int>(kItemFirstMore) ? 1
+                                                                                                     : 0;
+            if (itemRound != round)
                 continue;
             const auto found = std::find(models.begin(), models.end(), modelNameOf(info.file));
             if (found == models.end())
@@ -2246,6 +2253,30 @@ namespace hlds
                              : (static_cast<std::uint32_t>(std::clamp(
                                     static_cast<int>(numberKey(entity, "skin")), 0, 3))
                                 << kActorSkinShift);
+            if (info.item == ItemKind::Weaponbox)
+            {
+                // What is in it, written out where the level keeps its
+                // strings: the game's ammunition names, as the game reads
+                // them, made short ("Trip Mine" 7 is "tripmines=7").
+                static const char *const kAmmo[][2] = {
+                    {"9mm", "9mm"},           {"357", "357"},           {"buckshot", "buckshot"},
+                    {"argrenades", "argrenades"}, {"bolts", "bolts"},   {"rockets", "rockets"},
+                    {"uranium", "uranium"},   {"hand grenade", "grenades"}, {"trip mine", "tripmines"},
+                    {"satchel charge", "satchels"}, {"snarks", "snarks"}, {"hornets", "hornets"}};
+                std::string contents;
+                for (const auto &pair : entity.pairs)
+                {
+                    const std::string key = lowered(pair.first);
+                    for (const auto &ammo : kAmmo)
+                    {
+                        const int amount = std::atoi(pair.second.c_str());
+                        if (key == ammo[0] && amount > 0)
+                            contents += (contents.empty() ? "" : " ") + std::string(ammo[1]) + "=" + std::to_string(amount);
+                    }
+                }
+                actor.item = static_cast<std::uint32_t>(ItemKind::Weaponbox) |
+                             (stringOffset(contents) << kItemStringShift);
+            }
             if (info.item != ItemKind::None && !entity.value("target").empty())
             {
                 // What it fires when taken goes through a relay of its own:
@@ -2483,6 +2514,14 @@ namespace hlds
             use(CommonSound::SatchelBounce, CommonSound::SatchelBounce);
         if (holds("v_squeak", ItemKind::Snark))
             use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
+        if (holds("v_rpg", ItemKind::Rpg, ItemKind::RpgClip))
+            use(CommonSound::RocketFire, CommonSound::RocketFly);
+        if (holds("v_gauss", ItemKind::Gauss, ItemKind::GaussClip))
+            use(CommonSound::GaussFire, CommonSound::Electro6);
+        if (holds("v_egon", ItemKind::Egon))
+            use(CommonSound::EgonWindup, CommonSound::EgonOff);
+        if (holds("v_hgun", ItemKind::Hornetgun))
+            use(CommonSound::HornetFire1, CommonSound::HornetHit3);
         // (What comes apart is heard to: where the map has the pieces.)
         if (std::find(models.begin(), models.end(), "agibs") != models.end() ||
             std::find(models.begin(), models.end(), "hgibs") != models.end())

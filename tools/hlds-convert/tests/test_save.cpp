@@ -51,6 +51,25 @@ int main()
                   read.arsenal.bolts == 31 && read.arsenal.snarks == 7 && read.weapon == kWeaponCrossbow,
               "the later weapons are saved, after the rest, and read back");
     }
+    // ... the last four too, and the RPG's state, in the same fields: a save
+    // of the version before, which a build of then reads as it always did.
+    {
+        SaveData withLast = save;
+        withLast.arsenal.have = static_cast<std::uint16_t>((1u << (kWeaponRpg - kWeaponFirstMore)) |
+                                                           (1u << (kWeaponHornetgun - kWeaponFirstMore)) |
+                                                           kArsenalRpgLoaded | kArsenalLaserOff);
+        withLast.arsenal.rockets = 3;
+        withLast.arsenal.uranium = 77;
+        withLast.arsenal.hornets = 5;
+        withLast.weapon = kWeaponGauss;
+        const std::vector<std::uint8_t> last = writeSave(withLast);
+        SaveData read;
+        check(readSave(last.data(), last.size(), read) && read.arsenal.have == withLast.arsenal.have &&
+                  read.arsenal.rockets == 3 && read.arsenal.uranium == 77 && read.arsenal.hornets == 5 &&
+                  read.weapon == kWeaponGauss,
+              "the last four weapons, their ammunition and the RPG's state are saved and read back");
+        check((withLast.arsenal.have & 0xF) == 0, "(and a build of the round before keeps none of them: its bits are the four below)");
+    }
     // A save of version 7 -- before there was anything after the rest --
     // is read as it was written, with none of the later weapons.
     {

@@ -167,6 +167,12 @@ namespace hldata
     /// time is up. `sprite`: how many bites (low byte), and until its next
     /// bite (high byte, in twentieths of a second).
     inline constexpr std::uint8_t kShotSnark = 8;
+    /// The RPG's rocket: slow, then faster, steered at the laser's dot while
+    /// that is on (`sprite`: 1 once lit), and off at what it touches.
+    inline constexpr std::uint8_t kShotRocket = 9;
+    /// A hornet from the hornetgun: `sprite` is 1 for the fast straight
+    /// kind, else the homing one; it stings what it meets.
+    inline constexpr std::uint8_t kShotHornet = 10;
     /// How many may be in flight at once: all of these on a DSi, half on a
     /// DS (ActorWorld::shotLimit).
     inline constexpr int kMaxProjectiles = 16;
@@ -303,6 +309,9 @@ namespace hldata
     inline constexpr std::uint8_t kEffectMuzzle = 6; ///< the flash at a gun's end
     inline constexpr std::uint8_t kEffectBlood = 7;  ///< where a shot lands on what bleeds (`size`: 1 if it bleeds yellow)
     inline constexpr std::uint8_t kEffectSprite = 8; ///< a sprite of the map's, `size` units across
+    /// A beam from `a` to `b`, `size` units wide, in `colour` (the gauss's,
+    /// the egon's).
+    inline constexpr std::uint8_t kEffectBeam = 9;
     /// (All of these on a DSi, half on a DS: ActorWorld::effectLimit.)
     inline constexpr int kMaxEffects = 48;
 

@@ -297,6 +297,13 @@ namespace hlds
                 {"v_satchel_radio", from("c2a2b2"), {"idle1", "fidget1", "draw", "fire"}},
                 {"v_tripmine", from("c2a2b2"), {"idle1", "fidget", "draw", "ground"}},
                 {"v_squeak", from("c2a4e"), {"idle1", "fidgetfit", "fidgetnip", "up", "throw"}},
+                // (The gauss from c2a4f, the RPG from c2a5a, the hornetgun
+                // from c2a5d, the egon from c3a2.)
+                {"v_gauss", from("c2a4f"), {"idle", "idle2", "fidget", "spinup", "spin", "fire", "fire2", "draw"}},
+                {"v_rpg", from("c2a5a"), {"idle", "fidget", "reload", "fire", "draw1", "draw2", "idle2", "fidget2"}},
+                {"v_hgun", from("c2a5d"), {"idle1", "fidgetsway", "fidgetshake", "up", "shoot"}},
+                {"v_egon", from("c3a2"),
+                 {"idle1", "fidget1", "altfireon", "altfirecycle", "altfireoff", "draw"}},
             };
             auto hold = [&](const Held &one)
             {
@@ -332,6 +339,8 @@ namespace hlds
                 {"w_satchel", from("c2a2b2"), {}},
                 {"w_squeak", from("c2a4e"), {"run"}},
                 {"crossbow_bolt", from("c2a3"), {}},
+                {"rpgrocket", from("c2a5a"), {}},
+                {"hornet", from("c2a5d"), {}},
             };
             for (const Held &one : kThrown)
             {

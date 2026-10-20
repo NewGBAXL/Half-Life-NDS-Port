@@ -527,6 +527,23 @@ namespace hlrt
                 gibOrder_[gibFound_++] = static_cast<std::uint8_t>(i);
             }
         }
+        // The RPG's laser, where it falls (while it is in hand and on), and
+        // a lit rocket's flame.
+        if (player.state.inv.current == kWeaponRpg && (player.arsenal.have & kArsenalLaserOff) == 0 &&
+            player.state.health > 0 && !player.noclip)
+        {
+            fx dot[3];
+            laserDot(game.world, camera.pos, camera.forward, dot);
+            const fx at[3] = {dot[0] - camera.forward[0] * 2, dot[1] - camera.forward[1] * 2,
+                              dot[2] - camera.forward[2] * 2};
+            effectDraw.glow(at, 31, RGB15(31, 3, 3), 3);
+        }
+        for (int i = 0; i < kMaxProjectiles; ++i)
+        {
+            const Projectile &shot = actors.shots[i];
+            if (shot.active && shot.kind == kShotRocket && shot.sprite == 1)
+                effectDraw.glow(shot.pos, 26, RGB15(31, 20, 6), 8);
+        }
         // What the player has thrown or put down: few, small, and wanted
         // (a tripmine is a thing to see) -- in what room there is.
         shotFound_ = 0;

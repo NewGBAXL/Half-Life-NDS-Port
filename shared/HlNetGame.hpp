@@ -659,7 +659,8 @@ namespace hldata
             for (int s = 0; s < kMaxProjectiles; ++s)
             {
                 const Projectile &shot = a.shots[s];
-                const bool is = shot.active && (shot.kind == kShotGrenade || shot.kind == kShotContact);
+                const bool is = shot.active && (shot.kind == kShotGrenade || shot.kind == kShotContact ||
+                                                  shot.kind == kShotRocket || shot.kind == kShotSatchel);
                 if (match.shotWas[s] && !is)
                     netSay(match, netEvent(NetEventType::Burst, 0, match.shotAt[s][0] >> 10, match.shotAt[s][1] >> 10,
                                            match.shotAt[s][2] >> 10));

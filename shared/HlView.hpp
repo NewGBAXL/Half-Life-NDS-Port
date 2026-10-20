@@ -179,6 +179,9 @@ namespace hldata
         case 5:  return static_cast<fx>(static_cast<int>(chance % (4 * 4096 + 1)) - 2 * 4096); // the MP5: two either way
         case 6:  return 10 * kViewDegree; // the .357
         case 7:  return 2 * kViewDegree;  // the crossbow
+        case 11: return 5 * kViewDegree;  // the RPG
+        case 12: return 2 * kViewDegree;  // the gauss
+        case 14: return 1 * kViewDegree;  // the hornetgun
         default: return 0;
         }
     }
