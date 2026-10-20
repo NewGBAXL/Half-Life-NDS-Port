@@ -57,8 +57,20 @@ namespace hlrt
         /// ... and through the crossbow's sight: the game's 20 across, 15 high.
         static constexpr int kZoomFovDegrees = 15;
         /// The crossbow's sight is up: the picture and the cull planes are
-        /// the narrow ones (the caller hands NEA kZoomFovDegrees).
+        /// the narrow ones (refreshProjection hands NEA kZoomFovDegrees).
         bool zoomed = false;
+        /// The field of view (the COMMAND line's fov): across, as the game
+        /// gives it (90 by default), and the height that is on a 4:3 screen.
+        int fovAcross = 90;
+        int fovDegrees = kFovDegrees;
+        /// How many of the head-up display's units a pixel is, at the depth
+        /// it draws at (HudDraw.arm.cpp), for the picture as it is now.
+        int hudPixel = 24;
+        /// A field of view `across` degrees wide (60 to 110): the picture
+        /// and the cull planes.
+        void setFov(int across);
+        /// The picture handed to NEA again: narrow or not, at the FOV.
+        void refreshProjection();
         /// Clip planes in view units (128 Half-Life units each), 20.12.
         ///
         /// What is drawn ends at kFarUnits: that is the cull plane the walk

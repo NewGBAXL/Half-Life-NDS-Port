@@ -545,6 +545,7 @@ namespace hlrt
         player.arsenal.tripmines = within(save.arsenal.tripmines, 5);
         player.arsenal.snarks = within(save.arsenal.snarks, 15);
         player.state.arsenal = &player.arsenal;
+        player.state.cheats = &cheats;
         inv.clipGlock = within(save.clipGlock, 17);
         inv.clipShotgun = within(save.clipShotgun, 8);
         inv.ammo9mm = within(save.ammo9mm, 250);
@@ -583,6 +584,25 @@ namespace hlrt
 
     void Game::frame(int vblanks)
     {
+        // Time slowed or hurried (host_timescale): the sixtieths run are the
+        // scaled ones, a part left over carried to the next frame. A frame
+        // with none to run still turns the view.
+        if (cheats.timescale != 256 && !netGame.playing())
+        {
+            const int total = vblanks * cheats.timescale + slowCarry_;
+            slowCarry_ = total & 255;
+            vblanks = total >> 8;
+            if (vblanks < 1)
+            {
+                player.turn();
+                camera.update();
+                return;
+            }
+        }
+        else
+        {
+            slowCarry_ = 0;
+        }
         if (vblanks < 1)
             vblanks = 1;
         if (vblanks > kMaxVblanks)
@@ -727,7 +747,7 @@ namespace hlrt
                 if (zoom != camera.zoomed)
                 {
                     camera.zoomed = zoom;
-                    NEA_SetFov(zoom ? Camera::kZoomFovDegrees : Camera::kFovDegrees);
+                    camera.refreshProjection();
                 }
             }
             // (A slot touched -- the next of its kind of weapon -- or a step

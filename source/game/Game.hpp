@@ -48,6 +48,11 @@ namespace hlrt
         /// frame (`lampLit`: it has one).
         hldata::LampState lamp;
         hldata::LampBeam lampBeam;
+        /// The COMMAND line's cheats, for the session (not saved): the
+        /// player's state points here.
+        hldata::Cheats cheats;
+        /// Whether the crosshair is drawn (the COMMAND line's crosshair).
+        bool crosshair = true;
         /// The models of what the player's later weapons leave about, by the
         /// projectile's kind (kShotBolt..kShotSnark), found by name when the
         /// map is set up: -1 where the map has not got one (its mark is drawn
@@ -167,6 +172,7 @@ namespace hlrt
             std::uint32_t spare = 0;
         };
         std::uint64_t playMs_ = 0;
+        int slowCarry_ = 0; ///< host_timescale: the part of a sixtieth not yet run (Q8)
         char chapter_[44] = {};
         /// How the player came into this map (who came with them is in
         /// it): kept for a save of the map.

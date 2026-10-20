@@ -201,7 +201,7 @@ namespace hldata
         /// game has him see).
         inline bool gruntSees(const LogicWorld &w, const PlayerState &player, const ActorState &actor, bool cone)
         {
-            if (player.health <= 0)
+            if ((player.health <= 0 || unseen(player)))
                 return false;
             const fx eye[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + gruntGun(actor)};
             const fx d[3] = {player.origin[0] - eye[0], player.origin[1] - eye[1], player.origin[2] - eye[2]};
@@ -641,7 +641,7 @@ namespace hldata
             ActorWorld &a = *w.actors;
             ActorState &me = a.states[index];
             me.attack = 0;
-            if (player.health <= 0)
+            if ((player.health <= 0 || unseen(player)))
             {
                 // Nobody left to fight: whoever leads (or is alone) crows.
                 me.ai = kAiIdle;
@@ -907,7 +907,7 @@ namespace hldata
                 if ((me.lookMs -= ms) > 0)
                     break;
                 me.lookMs = 300;
-                if (player.health <= 0 || (me.flags & kActorPrisoner))
+                if ((player.health <= 0 || unseen(player)) || (me.flags & kActorPrisoner))
                     break;
                 if ((me.flags & kActorWaitScript) && !(me.mood & kMoodScripted))
                     break;
@@ -968,7 +968,7 @@ namespace hldata
                     // Broken off for a shot, a kick, or a grenade at his feet.
                     me.lookMs = 200;
                     fx danger[3];
-                    if (player.health <= 0 || gruntDanger(a, me, danger) ||
+                    if ((player.health <= 0 || unseen(player)) || gruntDanger(a, me, danger) ||
                         (fxLength(d) <= fxFromInt(kGruntKickRange)) || gruntSees(w, player, me, false))
                     {
                         gruntChoose(w, player, index);

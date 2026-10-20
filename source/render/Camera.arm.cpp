@@ -3,6 +3,10 @@
 #include "HlFog.hpp"
 #include "Settings.hpp"
 
+#include <cmath>
+
+#include <NEAMain.h>
+
 namespace hlrt
 {
     Camera camera;
@@ -13,10 +17,12 @@ namespace hlrt
         // degrees of half-angle against the 45.1 and 37 actually drawn): the
         // hardware clips exactly, so all a loose plane costs is a few polygons,
         // while a tight one drops geometry at the screen's edge.
-        constexpr std::int32_t kSinH = 2996; // sin 47, Q12
-        constexpr std::int32_t kCosH = 2793;
-        constexpr std::int32_t kSinV = 2578; // sin 39
-        constexpr std::int32_t kCosV = 3183;
+        // (At the field of view of 90 across; another works its own out:
+        // setFov.)
+        std::int32_t kSinH = 2996; // sin 47, Q12
+        std::int32_t kCosH = 2793;
+        std::int32_t kSinV = 2578; // sin 39
+        std::int32_t kCosV = 3183;
         // ... and through the crossbow's sight (10 and 7.5 drawn): 12, 9.5.
         constexpr std::int32_t kZoomSinH = 852;
         constexpr std::int32_t kZoomCosH = 4006;
@@ -98,6 +104,34 @@ namespace hlrt
         view.m[11] = dotPos(forward, pos) >> 7;
 
         buildPlanes();
+    }
+
+    void Camera::setFov(int across)
+    {
+        across = across < 60 ? 60 : (across > 110 ? 110 : across);
+        fovAcross = across;
+        // The height of it on a 4:3 screen; and the planes, two degrees
+        // looser than the picture each way, as above.
+        const double half = across * 3.14159265358979 / 360.0;
+        const double high = 2.0 * std::atan(std::tan(half) * 0.75) * 180.0 / 3.14159265358979;
+        fovDegrees = static_cast<int>(high + 0.5);
+        const double h = (across / 2.0 + 2.0) * 3.14159265358979 / 180.0;
+        const double v = (high / 2.0 + 2.0) * 3.14159265358979 / 180.0;
+        kSinH = static_cast<std::int32_t>(std::sin(h) * 4096.0 + 0.5);
+        kCosH = static_cast<std::int32_t>(std::cos(h) * 4096.0 + 0.5);
+        kSinV = static_cast<std::int32_t>(std::sin(v) * 4096.0 + 0.5);
+        kCosV = static_cast<std::int32_t>(std::cos(v) * 4096.0 + 0.5);
+        refreshProjection();
+        buildPlanes();
+    }
+
+    void Camera::refreshProjection()
+    {
+        const int high = zoomed ? kZoomFovDegrees : fovDegrees;
+        NEA_SetFov(high);
+        // A pixel at the display's depth (3058 of its units): 96 of them
+        // are the depth times the tangent of half the height.
+        hudPixel = static_cast<int>(3058.0 * std::tan(high * 3.14159265358979 / 360.0) / 96.0 + 0.5);
     }
 
     void Camera::buildPlanes()

@@ -121,6 +121,7 @@ if(HLDS_BUILD_TESTS)
             test_view
             test_drawplan
             test_controls
+            test_commands
             test_net
             test_people
             test_boxes

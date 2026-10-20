@@ -453,8 +453,10 @@ namespace hldata
             // (A new life carries nothing of the last: the later weapons
             // neither -- but they are still the game's to keep.)
             Arsenal *keep = player.arsenal;
+            const Cheats *cheats = player.cheats;
             player = PlayerState();
             player.arsenal = keep;
+            player.cheats = cheats;
             if (keep != nullptr)
                 *keep = Arsenal();
         }

@@ -22,10 +22,41 @@ public:
     std::uint8_t controlScheme = hldata::kControlsClassic;
     bool padTurns = false;
     bool padLooks = false;
-    /// The four of them, for whoever reads the buttons.
+    /// How far the stylus turns the view across and up and down (10 as it
+    /// always was; 1 to 20), and whether up is down.
+    std::uint8_t aimSpeed = hldata::kAimSpeedDefault;
+    std::uint8_t pitchSpeed = hldata::kAimSpeedDefault;
+    bool invertPitch = false;
+    /// The crouch button toggles (else it is held).
+    bool duckToggle = false;
+    /// How strict the stylus is about light touches, and what a firm press
+    /// does (HlControls.hpp).
+    std::uint8_t firmness = 4;
+    std::uint8_t firmPress = hldata::kFirmOff;
+    /// The CUSTOM layout's buttons, each action's.
+    std::uint16_t keys[hldata::kActionCount] = {};
+    /// All of it, for whoever reads the buttons.
     hldata::ControlSettings controls() const
     {
-        return hldata::ControlSettings{controlScheme, leftHanded, padTurns, padLooks};
+        hldata::ControlSettings set;
+        set.scheme = controlScheme;
+        set.leftHanded = leftHanded;
+        set.padTurns = padTurns;
+        set.padLooks = padLooks;
+        set.duckToggle = duckToggle;
+        set.firmness = firmness;
+        set.firmPress = firmPress;
+        for (int a = 0; a < hldata::kActionCount; ++a)
+            set.keys[a] = keys[a];
+        return set;
+    }
+    /// The layout made CUSTOM, starting from the buttons it has now.
+    void makeCustom()
+    {
+        if (controlScheme == hldata::kControlsCustom)
+            return;
+        hldata::keysOf(controls(), keys);
+        controlScheme = hldata::kControlsCustom;
     }
     /// The view bobs and leans with a walk (off unless asked for).
     bool viewBob = false;

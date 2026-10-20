@@ -13,7 +13,7 @@ void Settings::load()
     std::FILE *file = std::fopen(global.dataPath("settings.dat").c_str(), "rb");
     if (file == nullptr)
         return;
-    std::uint8_t bytes[64];
+    std::uint8_t bytes[hldata::kSettingsMostBytes];
     const std::size_t size = std::fread(bytes, 1, sizeof(bytes), file);
     std::fclose(file);
 
@@ -30,6 +30,14 @@ void Settings::load()
         controlScheme = data.controlScheme;
         padTurns = data.padTurns != 0;
         padLooks = data.padLooks != 0;
+        aimSpeed = data.aimSpeed;
+        pitchSpeed = data.pitchSpeed;
+        invertPitch = data.invertPitch != 0;
+        duckToggle = data.duckToggle != 0;
+        firmness = data.firmness;
+        firmPress = data.firmPress;
+        for (int a = 0; a < hldata::kActionCount; ++a)
+            keys[a] = data.keys[a];
     }
 }
 
@@ -48,6 +56,14 @@ bool Settings::save() const
     data.controlScheme = controlScheme;
     data.padTurns = padTurns ? 1 : 0;
     data.padLooks = padLooks ? 1 : 0;
+    data.aimSpeed = aimSpeed;
+    data.pitchSpeed = pitchSpeed;
+    data.invertPitch = invertPitch ? 1 : 0;
+    data.duckToggle = duckToggle ? 1 : 0;
+    data.firmness = firmness;
+    data.firmPress = firmPress;
+    for (int a = 0; a < hldata::kActionCount; ++a)
+        data.keys[a] = keys[a];
     const std::vector<std::uint8_t> bytes = hldata::writeSettings(data);
 
     std::FILE *file = std::fopen(global.dataPath("settings.dat").c_str(), "wb");

@@ -214,7 +214,7 @@ namespace hldata
             ActorWorld &a = *w.actors;
             ActorState &me = a.states[index];
             auto alive = [&](int i) { return i >= 0 && i < a.count && a.states[i].active && a.states[i].ai < kAiDying; };
-            const bool enemy = me.struck >= 2 && player.health > 0; // the player is one
+            const bool enemy = me.struck >= 2 && player.health > 0 && !unseen(player); // the player is one
             if (!alive(me.foe))
                 me.foe = -1;
 

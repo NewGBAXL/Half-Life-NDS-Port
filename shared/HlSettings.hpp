@@ -17,6 +17,7 @@
 
 #include "HlLevel.hpp"
 
+#include "HlControls.hpp"
 #include "HlFog.hpp"
 
 namespace hldata
@@ -48,6 +49,20 @@ namespace hldata
         std::uint8_t controlScheme = 0;
         std::uint8_t padTurns = 0;
         std::uint8_t padLooks = 0;
+        /// How far the stylus turns the view, across and up and down (10:
+        /// a pixel is 1/512 of a turn, 1 to 20), and whether up is down.
+        std::uint8_t aimSpeed = kAimSpeedDefault;
+        std::uint8_t pitchSpeed = kAimSpeedDefault;
+        std::uint8_t invertPitch = 0;
+        /// The crouch button toggles (else it is held).
+        std::uint8_t duckToggle = 0;
+        /// How strict the stylus is about light touches (0..10), and what a
+        /// firm press on the aim pad does (kFirm*): HlControls.hpp. Only
+        /// where the console can say how hard it is pressed.
+        std::uint8_t firmness = 4;
+        std::uint8_t firmPress = kFirmOff;
+        /// The CUSTOM layout: each action's buttons (kButton*).
+        std::uint16_t keys[kActionCount] = {};
 
         /// What a file of version 8 held: all but the controls.
         template <class Ar>
@@ -57,18 +72,31 @@ namespace hldata
             ar &graphics.fog &graphics.fogStrength &graphics.fogDistance &graphics.fogColour &graphics.modelDetail &
                 graphics.worldDetail &graphics.modelLimit &graphics.drawDistance;
         }
+        /// ... and of version 9: the layouts, and no more.
         template <class Ar>
-        void serialize(Ar &ar)
+        void serializeNine(Ar &ar)
         {
             serializeEight(ar);
             ar &controlScheme &padTurns &padLooks;
         }
+        template <class Ar>
+        void serialize(Ar &ar)
+        {
+            serializeNine(ar);
+            ar &aimSpeed &pitchSpeed &invertPitch &duckToggle &firmness &firmPress;
+            for (std::uint16_t &key : keys)
+                ar &key;
+        }
     };
 
     inline constexpr char kSettingsMagic[4] = {'H', 'L', 'S', 'T'};
-    inline constexpr std::uint16_t kSettingsVersion = 9;
-    /// The version before, which is still read: it had no controls to choose.
+    inline constexpr std::uint16_t kSettingsVersion = 10;
+    /// The versions before, which are still read: 9 had the layouts but no
+    /// aim speed, custom buttons or stylus pressure; 8 no controls to choose.
+    inline constexpr std::uint16_t kSettingsVersionNine = 9;
     inline constexpr std::uint16_t kSettingsVersionBefore = 8;
+    /// The most a settings file can be (what the console reads it into).
+    inline constexpr std::size_t kSettingsMostBytes = 128;
     inline constexpr int kVolumeMusic = 0;
     inline constexpr int kVolumeEffects = 1;
     inline constexpr int kVolumeVoices = 2;
@@ -114,7 +142,8 @@ namespace hldata
             return false;
         std::memcpy(&header, bytes, sizeof(header));
         if (std::memcmp(header.magic, kSettingsMagic, sizeof(header.magic)) != 0 ||
-            (header.version != kSettingsVersion && header.version != kSettingsVersionBefore) ||
+            (header.version != kSettingsVersion && header.version != kSettingsVersionNine &&
+             header.version != kSettingsVersionBefore) ||
             header.payloadBytes != size - sizeof(header) ||
             crc32(bytes + sizeof(header), header.payloadBytes) != header.crc32)
             return false;
@@ -124,10 +153,21 @@ namespace hldata
         yas::binary_iarchive<yas::mem_istream, flags> ia(is);
         if (header.version == kSettingsVersionBefore)
             read.serializeEight(ia);
+        else if (header.version == kSettingsVersionNine)
+            read.serializeNine(ia);
         else
             ia &read;
-        if (read.controlScheme > 1 || read.padTurns > 1 || read.padLooks > 1)
+        if (read.controlScheme >= kControlsSchemes || read.padTurns > 1 || read.padLooks > 1)
             return false;
+        if (read.aimSpeed < 1 || read.aimSpeed > kAimSpeedMost || read.pitchSpeed < 1 ||
+            read.pitchSpeed > kAimSpeedMost || read.invertPitch > 1 || read.duckToggle > 1 ||
+            read.firmness > kFirmnessMost || read.firmPress >= kFirmActions)
+            return false;
+        for (std::uint16_t key : read.keys)
+        {
+            if (key & ~kAssignable)
+                return false;
+        }
         if (read.dspAudio > 1 ||
             read.debugReadout > 1 || read.leftHanded > 1 || read.viewBob > 1 || !read.graphics.valid())
             return false;

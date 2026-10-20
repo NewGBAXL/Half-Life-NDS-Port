@@ -44,8 +44,11 @@ namespace hlrt
         /// Called by Game::frame, after the entity logic has run.
         void frame(int vblanks);
 
-    private:
+        /// The view turned by the stylus, and nothing else (a frame the
+        /// game's slowed time leaves no time in: host_timescale).
         void turn();
+
+    private:
         void fly(int vblanks);
     };
 

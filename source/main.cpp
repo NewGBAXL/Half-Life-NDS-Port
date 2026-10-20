@@ -5,6 +5,7 @@
 
 #include "DebugLog.hpp"
 #include "Global.hpp"
+#include "HlCommands.hpp"
 #include "Settings.hpp"
 #include "data/LevelFile.hpp"
 #include "data/ModelCache.hpp"
@@ -374,49 +375,94 @@ namespace
         return hldata::saveMostRecent(hlrt::SaveGame::index());
     }
 
-    /// The debug command line: a line typed on libnds's on-screen keyboard,
-    /// and done. Returns what there is to say about it (shown where the pad
-    /// is, until the next touch), or an empty string.
-    ///
-    ///   map <name>     go to a map (as a new arrival: at its own start)
-    ///   give           every weapon, full of ammunition, and the suit
-    ///   heal           health back to 100
-    ///   noclip         fly through walls, or stop
-    std::string runCommand(std::string line)
+    /// The COMMAND line: a line typed on the pause menu's keyboard, read as
+    /// the game's own console reads it (shared/HlCommands.hpp), and done.
+    /// Returns what there is to say about it (shown where the pad is, until
+    /// the next touch), or an empty string.
+    std::string runCommand(const std::string &typed)
     {
-        while (!line.empty() && line.front() == ' ')
-            line.erase(0, 1);
-        const std::size_t space = line.find(' ');
-        const std::string verb = line.substr(0, space);
-        std::string rest = space == std::string::npos ? "" : line.substr(space + 1);
-        while (!rest.empty() && rest.front() == ' ')
-            rest.erase(0, 1);
-        while (!rest.empty() && rest.back() == ' ')
-            rest.pop_back();
-        if (verb == "map" && !rest.empty())
+        using hldata::Command;
+        const hldata::CommandLine line = hldata::parseCommand(typed.c_str());
+        hldata::Cheats &cheats = hlrt::game.cheats;
+        hldata::PlayerState &state = hlrt::player.state;
+        char said[64];
+        auto number = [&](int arg, int &out) { return line.argc > arg && hldata::parseNumber(line.args[arg], out); };
+        auto onOff = [](bool on, const char *what)
         {
-            // A map's name becomes a file's: letters, digits and underscores.
-            for (const char c : rest)
+            static char text[48];
+            std::snprintf(text, sizeof(text), "%s %s", what, on ? "on" : "off");
+            return std::string(text);
+        };
+        // (Not in a game between consoles: nobody there may cheat.)
+        if (hlrt::netGame.playing())
+            return "not in a game between consoles";
+        switch (line.command)
+        {
+        case Command::Help:
+        {
+            // As many names a page as the screen is wide (about 26
+            // letters, and which page): "help 2" for the next.
+            constexpr std::size_t kWidth = 26;
+            int starts[hldata::kCommandNames + 1];
+            int pages = 0;
+            for (int i = 0, used = static_cast<int>(kWidth) + 1; i < hldata::kCommandNames; ++i)
             {
-                const bool plain = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
-                if (!plain)
+                const int length = static_cast<int>(std::strlen(hldata::kCommands[i].name));
+                if (used + 1 + length > static_cast<int>(kWidth))
+                {
+                    starts[pages++] = i;
+                    used = length;
+                }
+                else
+                {
+                    used += 1 + length;
+                }
+            }
+            starts[pages] = hldata::kCommandNames;
+            int page = 256;
+            number(0, page);
+            page = page >> 8;
+            page = page < 1 ? 1 : (page > pages ? pages : page);
+            std::string text;
+            for (int i = starts[page - 1]; i < starts[page]; ++i)
+                text += std::string(i > starts[page - 1] ? " " : "") + hldata::kCommands[i].name;
+            std::snprintf(said, sizeof(said), " %d/%d", page, pages);
+            return text + said;
+        }
+        case Command::Map:
+        {
+            const std::string name = line.args[0];
+            if (name.empty())
+                return "map <name>";
+            // A map's name becomes a file's: letters, digits and underscores.
+            for (const char ch : name)
+            {
+                if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_'))
                     return "not a map's name";
             }
             std::string error;
-            switch (loadLevel(rest, nullptr, error))
+            switch (loadLevel(name, nullptr, error))
             {
             case LoadResult::Ok:
                 return "";
             case LoadResult::NotOnCard:
                 return "no such map on the card";
             case LoadResult::Failed:
-                haltWith("Cannot go on:", error.c_str(), rest.c_str());
+                haltWith("Cannot go on:", error.c_str(), name.c_str());
             }
             return "";
         }
-        if (verb == "give")
+        case Command::Restart:
         {
-            hldata::Inventory &inv = hlrt::player.state.inv;
+            const std::string again = currentMap;
+            std::string error;
+            if (loadLevel(again, nullptr, error) == LoadResult::Failed)
+                haltWith("Cannot go on:", error.c_str(), again.c_str());
+            return "";
+        }
+        case Command::GiveAll:
+        {
+            hldata::Inventory &inv = state.inv;
             inv.have = static_cast<std::uint8_t>((1u << hldata::kWeaponFirstMore) - 1u);
             if (inv.current == hldata::kWeaponNone)
                 inv.current = hldata::kWeaponCrowbar;
@@ -432,7 +478,7 @@ namespace
             inv.armor = 100;
             // ... and the later weapons, with all they hold.
             for (int w = hldata::kWeaponFirstMore; w < hldata::kWeaponCount; ++w)
-                hldata::giveWeapon(hlrt::player.state, w);
+                hldata::giveWeapon(state, w);
             hldata::Arsenal &more = hlrt::player.arsenal;
             more.boltsClip = 5;
             more.bolts = 50;
@@ -441,17 +487,126 @@ namespace
             more.snarks = 15;
             return "given";
         }
-        if (verb == "heal")
+        case Command::Give:
         {
-            hlrt::player.state.health = 100;
+            // One thing, as picking it up would give it.
+            const hldata::ItemKind item = hldata::itemOfName(line.args[0]);
+            if (item == hldata::ItemKind::None)
+                return "no such thing to give";
+            std::uint32_t got = 0;
+            if (!hldata::detail::itemTake(state, static_cast<std::uint8_t>(item), got))
+                return "no use to you now";
+            return std::string("given ") + line.args[0];
+        }
+        case Command::Heal:
+            state.health = 100;
             return "healed";
-        }
-        if (verb == "noclip")
+        case Command::Health:
         {
-            hlrt::player.noclip = !hlrt::player.noclip;
-            return hlrt::player.noclip ? "flying" : "walking";
+            int value = 0;
+            if (!number(0, value) || (value >> 8) < 1)
+                return "health <1..999>";
+            state.health = (value >> 8) > 999 ? 999 : (value >> 8);
+            std::snprintf(said, sizeof(said), "health %d", static_cast<int>(state.health));
+            return said;
         }
-        return "map <name> / give / heal / noclip";
+        case Command::Kill:
+            // (Whatever god says.)
+            state.health = 0;
+            return "";
+        case Command::God:
+            cheats.god = !cheats.god;
+            return onOff(cheats.god, "god mode");
+        case Command::Notarget:
+            cheats.notarget = !cheats.notarget;
+            return onOff(cheats.notarget, "notarget");
+        case Command::Noclip:
+            hlrt::player.noclip = !hlrt::player.noclip;
+            return hlrt::player.noclip ? "noclip on: flying" : "noclip off: walking";
+        case Command::BarnacleKill:
+            cheats.barnacleKill = !cheats.barnacleKill;
+            return onOff(cheats.barnacleKill, "barnacles die when they grab");
+        case Command::KillAll:
+        {
+            // A kind of monster; or "monsters", every one that fights.
+            int killed = 0;
+            if (std::strcmp(line.args[0], "monsters") == 0 || std::strcmp(line.args[0], "all") == 0)
+            {
+                for (int kind = 0; kind < static_cast<int>(hldata::ActorKind::Count); ++kind)
+                {
+                    if (hldata::fights(static_cast<std::uint8_t>(kind)) &&
+                        kind != static_cast<int>(hldata::ActorKind::Player))
+                        killed += hldata::killAllOfKind(hlrt::game.logic, static_cast<hldata::ActorKind>(kind));
+                }
+            }
+            else
+            {
+                const hldata::ActorKind kind = hldata::kindOfName(line.args[0]);
+                if (kind == hldata::ActorKind::Count)
+                    return "killall <monster> (or monsters)";
+                killed = hldata::killAllOfKind(hlrt::game.logic, kind);
+            }
+            std::snprintf(said, sizeof(said), "%d killed", killed);
+            return said;
+        }
+        case Command::Save:
+            return saveNow(hldata::kSlotQuick) ? "saved" : "cannot save now";
+        case Command::Load:
+        {
+            std::string error;
+            return loadSave(error, hldata::kSlotQuick) ? "" : "no quick save";
+        }
+        case Command::Flashlight:
+            if ((state.inv.have & hldata::kHaveSuit) == 0)
+                return "no suit, no flashlight";
+            hlrt::game.lamp.on = !hlrt::game.lamp.on;
+            return onOff(hlrt::game.lamp.on, "flashlight");
+        case Command::Fov:
+        {
+            int value = 0;
+            if (!number(0, value))
+            {
+                std::snprintf(said, sizeof(said), "fov is %d (60..110)", hlrt::camera.fovAcross);
+                return said;
+            }
+            hlrt::camera.setFov(value >> 8);
+            std::snprintf(said, sizeof(said), "fov %d", hlrt::camera.fovAcross);
+            return said;
+        }
+        case Command::Crosshair:
+        {
+            int value = 0;
+            hlrt::game.crosshair = number(0, value) ? value != 0 : !hlrt::game.crosshair;
+            return onOff(hlrt::game.crosshair, "crosshair");
+        }
+        case Command::Gravity:
+        {
+            int value = 0;
+            if (!number(0, value))
+            {
+                std::snprintf(said, sizeof(said), "sv_gravity is %d", hldata::fxToInt(cheats.gravity));
+                return said;
+            }
+            value >>= 8;
+            value = value < 0 ? 0 : (value > 2000 ? 2000 : value);
+            cheats.gravity = hldata::fxFromInt(value);
+            std::snprintf(said, sizeof(said), "sv_gravity %d", value);
+            return said;
+        }
+        case Command::Timescale:
+        {
+            int value = 0;
+            if (!number(0, value))
+                return "host_timescale <0.25..2>";
+            cheats.timescale = value < 64 ? 64 : (value > 512 ? 512 : value);
+            std::snprintf(said, sizeof(said), "host_timescale %d.%02d", cheats.timescale >> 8,
+                          ((cheats.timescale & 255) * 100 + 128) >> 8);
+            return said;
+        }
+        default:
+            break;
+        }
+        return line.verb[0] == '\0' ? std::string() : std::string("unknown: ") + line.verb + " (try help)";
     }
 
     /// Show the keyboard, take a line, run it. The game stands still
@@ -575,6 +730,9 @@ int main(int argc, char *argv[])
     auto newGame = [&]()
     {
         hlrt::game.resetProgress();
+        // (A new game is played straight: the COMMAND line's cheats are off.)
+        hlrt::game.cheats = hldata::Cheats();
+        hlrt::game.crosshair = true;
         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
             haltWith("Cannot start:", error.c_str(), startMap.c_str());
         // (Somewhere to come back to from the first: the game's own save,

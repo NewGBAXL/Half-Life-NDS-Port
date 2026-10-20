@@ -62,7 +62,16 @@ namespace hlrt
             NetJoin,     ///< the games found
             NetLobby,    ///< a client waiting for the host to start
             NetPause,    ///< the pause menu of a game between consoles (which goes on)
+            TouchAim,    ///< how the stylus turns the view, and how hard it must press
+            Buttons,     ///< which button does what (a custom layout)
         };
+        /// The buttons page: which of its two screens; and the action whose
+        /// button is being asked for (-1: none), with what was held when it
+        /// was asked (so that only a new press counts).
+        int buttonsScreen_ = 0;
+        int capturing_ = -1;
+        std::uint32_t captureHeld_ = 0;
+        void showButtons(int screen);
         const hldata::SaveIndex *saves_ = nullptr;
         bool title_ = false;   ///< it is the title's menu, not the pause's
         bool saving_ = false;  ///< the list is shown to save into

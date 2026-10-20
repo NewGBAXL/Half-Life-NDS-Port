@@ -4,6 +4,7 @@
 
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
+#include "game/Input.hpp"
 #include "audio/Sound.hpp"
 #include "net/NetGame.hpp"
 #include "render/BottomScreen.hpp"
@@ -67,6 +68,17 @@ namespace hlrt
             kWorldDetail,
             kModelLimit,
             kDrawDistance,
+            kDuck,
+            kButtons,
+            kTouchAim,
+            kAimSpeed,
+            kPitchSpeed,
+            kInvert,
+            kFirmness,
+            kFirmPress,
+            kKey,     ///< an action's button (which, by its row: buttonActions)
+            kMore,    ///< the buttons' other screen
+            kResetKeys,
         };
         struct Row
         {
@@ -128,9 +140,27 @@ namespace hlrt
         // the rows, what each button then does.
         const Row kControlRows[] = {{Kind::Value, kScheme, "Layout"},
                                     {Kind::Value, kHand, "Stylus hand"},
+                                    {Kind::Value, kDuck, "Crouch"},
                                     {Kind::Value, kPadSide, "Pad left/right"},
                                     {Kind::Value, kPadUp, "Pad up/down"},
+                                    {Kind::Button, kButtons, "BUTTONS"},
+                                    {Kind::Button, kTouchAim, "TOUCH AIM"},
                                     {Kind::Button, kBack, "BACK"}};
+        // How the stylus turns the view, and how hard it must be pressed
+        // (where the console can tell).
+        const Row kTouchRows[] = {{Kind::Slider, kAimSpeed, "Aim speed"},
+                                  {Kind::Slider, kPitchSpeed, "Up/down"},
+                                  {Kind::Value, kInvert, "Invert up/down"},
+                                  {Kind::Slider, kFirmness, "Firmness"},
+                                  {Kind::Value, kFirmPress, "Firm press"},
+                                  {Kind::Button, kBack, "BACK"}};
+        // Which button does what: an action a row, on two screens; a row
+        // touched asks for its button.
+        constexpr int kKeysFirst = 7; ///< actions on the first screen
+        Row keyRows[kActionCount + 3];
+        int keyActions[kActionCount + 3];
+        int keyRowCount = 0;
+        const char *const kFirmName[kFirmActions] = {"off", "fire", "use", "jump", "alt fire"};
 
         // Where the rows are: the first page's are big and few, the
         // others' as many as the screen holds.
@@ -142,11 +172,15 @@ namespace hlrt
         constexpr Layout kOptionLayout = {8, 2, 240, 17, 19};
         constexpr int kTrackLeft = 100, kTrackWidth = 132;
 
-        /// What a slider slides (0..10, all of them).
+        /// What a slider slides, and between what (0..10, but the aim's
+        /// speeds: 1..20).
         std::uint8_t &slid(Id id)
         {
             switch (id)
             {
+            case kAimSpeed:    return settings.aimSpeed;
+            case kPitchSpeed:  return settings.pitchSpeed;
+            case kFirmness:    return settings.firmness;
             case kFogStrength: return settings.graphics.fogStrength;
             case kFogDistance: return settings.graphics.fogDistance;
             case kMusic:       return settings.volume[kVolumeMusic];
@@ -155,8 +189,21 @@ namespace hlrt
             default:           return settings.volume[kVolumeAmbience];
             }
         }
+        int slidLeast(Id id) { return id == kAimSpeed || id == kPitchSpeed ? 1 : 0; }
+        int slidMost(Id id) { return id == kAimSpeed || id == kPitchSpeed ? kAimSpeedMost : kVolumeMost; }
+        bool isVolume(Id id) { return id == kMusic || id == kEffects || id == kVoices || id == kAmbience; }
         const Row *rowsOf(int page, int &count)
         {
+            if (page == 12)
+            {
+                count = static_cast<int>(sizeof(kTouchRows) / sizeof(kTouchRows[0]));
+                return kTouchRows;
+            }
+            if (page == 13)
+            {
+                count = keyRowCount;
+                return keyRows;
+            }
             if (page == 0)
             {
                 count = static_cast<int>(sizeof(kMain) / sizeof(kMain[0]));
@@ -345,6 +392,33 @@ namespace hlrt
         draw();
     }
 
+    /// The buttons page: screen 0 the first actions, then MORE and BACK;
+    /// screen 1 the rest, RESET and BACK.
+    void Menu::showButtons(int screen)
+    {
+        buttonsScreen_ = screen;
+        capturing_ = -1;
+        keyRowCount = 0;
+        const int first = screen == 0 ? 0 : kKeysFirst, last = screen == 0 ? kKeysFirst : kActionCount;
+        for (int action = first; action < last; ++action)
+        {
+            keyActions[keyRowCount] = action;
+            keyRows[keyRowCount++] = Row{Kind::Value, kKey, actionName(action)};
+        }
+        keyActions[keyRowCount] = -1;
+        keyRows[keyRowCount++] = Row{Kind::Button, screen == 0 ? kMore : kResetKeys,
+                                     screen == 0 ? "MORE" : "RESET TO MODERN"};
+        if (screen == 1)
+        {
+            keyActions[keyRowCount] = -1;
+            keyRows[keyRowCount++] = Row{Kind::Button, kMore, "BACK TO FIRST"};
+        }
+        keyActions[keyRowCount] = -1;
+        keyRows[keyRowCount++] = Row{Kind::Button, kBack, "DONE"};
+        page_ = Page::Buttons;
+        draw();
+    }
+
     void Menu::open()
     {
         bottomScreen.release();
@@ -388,14 +462,35 @@ namespace hlrt
         }
         if (page_ == Page::NetPause)
             drawPlayers(kMainLayout.top + rowCount() * kMainLayout.pitch + 6, true);
+        if (page_ == Page::Buttons)
+        {
+            const FontView &small = touchCanvas.font(kFontSmall);
+            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
+            drawTextCentred(canvas, small, 128, top,
+                            capturing_ >= 0 ? "Press its button (START: cancel)"
+                                            : "Touch an action, then press its button",
+                            inkFor(small, kUiGrey));
+        }
+        if (page_ == Page::TouchAim && !Input::pressureSeen())
+        {
+            const FontView &small = touchCanvas.font(kFontSmall);
+            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
+            drawTextCentred(canvas, small, 128, top, "This console does not say how hard",
+                            inkFor(small, kUiGrey));
+            drawTextCentred(canvas, small, 128, top + small.height() + 3, "the stylus presses: firmness is unused",
+                            inkFor(small, kUiGrey));
+        }
         if (page_ == Page::Controls)
         {
             // What the buttons do, as they are now set.
             const FontView &small = touchCanvas.font(kFontSmall);
-            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 6;
-            for (int line = 0; controlsLegend(settings.controls(), line) != nullptr; ++line)
-                drawTextCentred(canvas, small, 128, top + line * (small.height() + 3),
-                                controlsLegend(settings.controls(), line), inkFor(small, kUiGrey));
+            const int top = kOptionLayout.top + rowCount() * kOptionLayout.pitch + 3;
+            const int pitch = small.height() + 1;
+            for (int line = 0; controlsLegend(settings.controls(), line) != nullptr &&
+                               top + line * pitch + small.height() <= 192;
+                 ++line)
+                drawTextCentred(canvas, small, 128, top + line * pitch, controlsLegend(settings.controls(), line),
+                                inkFor(small, kUiGrey));
         }
     }
 
@@ -419,8 +514,9 @@ namespace hlrt
         {
             canvas.fill(at.x, y, at.width, at.height, kUiBack);
             drawText(canvas, font, at.x + 4, textY, item.label, inkFor(font, kUiWhite));
-            const int level = slid(item.id);
-            const int knob = kTrackLeft + (kTrackWidth * level) / kVolumeMost;
+            const int least = slidLeast(item.id), most = slidMost(item.id);
+            const int level = slid(item.id) - least;
+            const int knob = kTrackLeft + (kTrackWidth * level) / (most - least);
             canvas.fill(kTrackLeft, y + at.height / 2 - 3, kTrackWidth, 6, kUiTrack);
             canvas.frame(kTrackLeft - 1, y + at.height / 2 - 4, kTrackWidth + 2, 8, kUiEdge);
             canvas.fill(kTrackLeft, y + at.height / 2 - 3, knob - kTrackLeft, 6, kUiOrange + (down ? 2 : 1));
@@ -485,8 +581,44 @@ namespace hlrt
             break;
         case kScheme:
             std::snprintf(text, sizeof(text), "%s: %s", item.label,
-                          settings.controlScheme == kControlsModern ? "modern" : "classic");
+                          settings.controlScheme == kControlsModern
+                              ? "modern"
+                              : (settings.controlScheme == kControlsCustom ? "custom" : "classic"));
             break;
+        case kDuck:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.duckToggle ? "toggle" : "hold");
+            break;
+        case kInvert:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.invertPitch ? "on" : "off");
+            break;
+        case kFirmPress:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label,
+                          Input::pressureSeen() ? kFirmName[settings.firmPress % kFirmActions] : "n/a here");
+            break;
+        case kKey:
+        {
+            // The action, and its buttons (or the question, while asked).
+            const int action = keyActions[row];
+            if (capturing_ == action)
+            {
+                std::snprintf(text, sizeof(text), "%s: press a button", actionName(action));
+                break;
+            }
+            std::uint16_t keys[kActionCount];
+            keysOf(settings.controls(), keys);
+            char names[24] = "";
+            int n = 0;
+            for (int bit = 0; bit < 12; ++bit)
+            {
+                if (keys[action] & (1u << bit))
+                    n += std::snprintf(names + n, sizeof(names) - static_cast<std::size_t>(n), "%s%s",
+                                       n > 0 ? "/" : "", buttonName(1u << bit));
+                if (n >= static_cast<int>(sizeof(names)) - 1)
+                    break;
+            }
+            std::snprintf(text, sizeof(text), "%s: %s", actionName(action), n > 0 ? names : "-");
+            break;
+        }
         case kPadSide:
             std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.padTurns ? "turn" : "sidestep");
             break;
@@ -516,13 +648,15 @@ namespace hlrt
     {
         int count = 0;
         const Row &item = rowsOf(static_cast<int>(page_), count)[row];
-        int level = ((x - kTrackLeft) * kVolumeMost + kTrackWidth / 2) / kTrackWidth;
-        level = x < kTrackLeft ? 0 : (level > kVolumeMost ? kVolumeMost : level);
+        const int least = slidLeast(item.id), most = slidMost(item.id);
+        int level = ((x - kTrackLeft) * (most - least) + kTrackWidth / 2) / kTrackWidth + least;
+        level = x < kTrackLeft ? least : (level > most ? most : level);
         std::uint8_t &value = slid(item.id);
         if (value == level)
             return false;
         value = static_cast<std::uint8_t>(level);
-        sound.applyVolumes();
+        if (isVolume(item.id))
+            sound.applyVolumes();
         sound.ui(kUiSoundTick);
         return true;
     }
@@ -608,7 +742,10 @@ namespace hlrt
             }
             // (From the graphics, back to the options they are among; from
             // the list, to where it was asked for.)
-            page_ = page_ == Page::Graphics || page_ == Page::Controls
+            capturing_ = -1;
+            page_ = page_ == Page::TouchAim || page_ == Page::Buttons
+                        ? Page::Controls
+                        : page_ == Page::Graphics || page_ == Page::Controls
                         ? Page::Options
                         : (page_ == Page::Saves
                                ? asker_
@@ -740,15 +877,64 @@ namespace hlrt
             draw();
             break;
         case kScheme:
-            settings.controlScheme = static_cast<std::uint8_t>((settings.controlScheme + 1) % kControlsSchemes);
+        {
+            // (Into CUSTOM with nothing made yet: it starts as the layout
+            // it came from.)
+            const std::uint8_t next = static_cast<std::uint8_t>((settings.controlScheme + 1) % kControlsSchemes);
+            bool none = true;
+            for (std::uint16_t key : settings.keys)
+                none = none && key == 0;
+            if (next == kControlsCustom && none)
+                settings.makeCustom();
+            settings.controlScheme = next;
             draw();
             break;
+        }
         case kPadSide:
             settings.padTurns = !settings.padTurns;
             draw();
             break;
         case kPadUp:
             settings.padLooks = !settings.padLooks;
+            draw();
+            break;
+        case kDuck:
+            settings.duckToggle = !settings.duckToggle;
+            draw();
+            break;
+        case kButtons:
+            showButtons(0);
+            break;
+        case kTouchAim:
+            page_ = Page::TouchAim;
+            draw();
+            break;
+        case kInvert:
+            settings.invertPitch = !settings.invertPitch;
+            drawRow(row, false);
+            break;
+        case kFirmPress:
+            if (Input::pressureSeen())
+                settings.firmPress = static_cast<std::uint8_t>((settings.firmPress + 1) % kFirmActions);
+            drawRow(row, false);
+            break;
+        case kKey:
+        {
+            // Asked for: the next button pressed is this action's.
+            capturing_ = keyActions[row];
+            captureHeld_ = keysHeld() & 0xFFFu;
+            draw();
+            break;
+        }
+        case kMore:
+            showButtons(buttonsScreen_ ^ 1);
+            break;
+        case kResetKeys:
+            // Back to the layout the custom one was made from: modern.
+            capturing_ = -1;
+            settings.controlScheme = kControlsModern;
+            for (std::uint16_t &key : settings.keys)
+                key = 0;
             draw();
             break;
         default:
@@ -789,6 +975,29 @@ namespace hlrt
             else if (netSignature() != netShown_ && active_ < 0)
                 draw();
         }
+        // A button asked for: the next one pressed (START never minds).
+        if (capturing_ >= 0)
+        {
+            const std::uint32_t held = keysHeld() & 0xFFFu;
+            const std::uint32_t pressed = held & ~captureHeld_;
+            captureHeld_ = held;
+            if (pressed & KEY_START)
+            {
+                capturing_ = -1;
+                draw();
+            }
+            else if (pressed & kAssignable)
+            {
+                std::uint32_t button = 1;
+                while (!(pressed & kAssignable & button))
+                    button <<= 1;
+                settings.makeCustom();
+                assignKey(settings.keys, capturing_, button);
+                capturing_ = -1;
+                sound.ui(kUiSoundTick);
+                draw();
+            }
+        }
         const bool down = (keysHeld() & KEY_TOUCH) != 0;
         if (down)
         {
@@ -796,6 +1005,7 @@ namespace hlrt
             touchRead(&touch);
             lastX_ = touch.px;
             lastY_ = touch.py;
+            Input::notePressure(touch.z1, touch.z2);
         }
         int rowTotal = 0;
         const Row *rows = rowsOf(static_cast<int>(page_), rowTotal);
@@ -835,7 +1045,26 @@ namespace hlrt
 
     bool Menu::typeLine(std::string &typed)
     {
-        static const char *const kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl_", "zxcvbnm  <"};
+        static const char *const kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl_", "zxcvbnm-.<"};
+        // The lines typed before, most recent last: up and down on the pad
+        // bring them back.
+        constexpr int kRemembered = 8;
+        constexpr std::size_t kLongest = 32;
+        static std::string earlier[kRemembered];
+        static int earlierCount = 0;
+        int recalled = earlierCount;
+        auto remember = [&]()
+        {
+            if (typed.empty() || (earlierCount > 0 && earlier[earlierCount - 1] == typed))
+                return;
+            if (earlierCount == kRemembered)
+            {
+                for (int i = 1; i < kRemembered; ++i)
+                    earlier[i - 1] = earlier[i];
+                --earlierCount;
+            }
+            earlier[earlierCount++] = typed;
+        };
         constexpr int kKey = 24, kLeft = 8, kTop = 58, kBottom = kTop + 4 * kKey + 4;
         bottomScreen.release();
         Canvas &canvas = touchCanvas.canvas();
@@ -845,8 +1074,11 @@ namespace hlrt
         {
             canvas.fill(0, 30, 256, 22, kUiBack);
             canvas.frame(6, 30, 244, 22, kUiEdge);
-            char line[40];
-            std::snprintf(line, sizeof(line), "> %s_", typed.c_str());
+            // (A long line: its end, which is where the typing is.)
+            char line[48];
+            const std::size_t shown = 26;
+            const char *from = typed.size() > shown ? typed.c_str() + (typed.size() - shown) : typed.c_str();
+            std::snprintf(line, sizeof(line), "%s%s_", typed.size() > shown ? "<" : "> ", from);
             drawText(canvas, font, 12, 30 + (22 - font.height()) / 2, line, inkFor(font, kUiWhite));
         };
         auto key = [&](int row, int col, bool down)
@@ -867,7 +1099,7 @@ namespace hlrt
         };
         canvas.clear();
         drawText(canvas, small, 8, 2, "COMMAND", inkFor(small, kUiOrange));
-        drawText(canvas, small, 8, 15, "map <name>    give    heal    noclip", inkFor(small, kUiGrey));
+        drawText(canvas, small, 8, 15, "help: what there is    up/down: lines before", inkFor(small, kUiGrey));
         prompt();
         for (int row = 0; row < 4; ++row)
         {
@@ -889,7 +1121,18 @@ namespace hlrt
             if (keysDown() & KEY_B)
                 return false;
             if (keysDown() & (KEY_START | KEY_A))
+            {
+                remember();
                 return true;
+            }
+            if ((keysDown() & (KEY_UP | KEY_DOWN)) && earlierCount > 0)
+            {
+                recalled += (keysDown() & KEY_UP) ? -1 : 1;
+                recalled = recalled < 0 ? 0 : (recalled > earlierCount ? earlierCount : recalled);
+                typed = recalled < earlierCount ? earlier[recalled] : std::string();
+                sound.ui(kUiSoundTick);
+                prompt();
+            }
             const bool down = (keysHeld() & KEY_TOUCH) != 0;
             if (down && !touching)
             {
@@ -901,10 +1144,13 @@ namespace hlrt
                     const int n = (touch.px - kLeft) / 80;
                     sound.ui(kUiSoundPress);
                     if (n == 1)
+                    {
+                        remember();
                         return true;
+                    }
                     if (n == 2)
                         return false;
-                    if (n == 0 && typed.size() < 24)
+                    if (n == 0 && typed.size() < kLongest)
                         typed.push_back(' ');
                     prompt();
                 }
@@ -917,7 +1163,7 @@ namespace hlrt
                         if (!typed.empty())
                             typed.pop_back();
                     }
-                    else if (typed.size() < 24)
+                    else if (typed.size() < kLongest)
                     {
                         typed.push_back(c);
                     }

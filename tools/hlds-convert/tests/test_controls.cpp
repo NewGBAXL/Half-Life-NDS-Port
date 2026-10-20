@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "HlControls.hpp"
 #include "HlMonsters.hpp"
@@ -183,15 +184,19 @@ namespace
         out = press(set, state, 0, blank);
 
         out = press(set, state, kButtonX, blank);
-        check(out.weaponStep == -1 && out.moveForward == 0, "modern: X is the weapon before, and no step forward");
+        check(out.weaponStep == 1 && out.moveForward == 0, "modern: X is the next weapon, and no step forward");
         out = press(set, state, kButtonX, blank);
         check(out.weaponStep == 0, "... once, however long it is held");
         out = press(set, state, kButtonY, blank);
-        check(out.weaponStep == 1 && out.moveSide == 0, "modern: Y is the weapon after");
-        out = press(set, state, kButtonB, blank);
-        check(out.reloadPressed && out.moveForward == 0, "modern: B reloads");
-        out = press(set, state, kButtonB, blank);
+        check(out.reloadPressed && out.moveSide == 0, "modern: Y reloads");
+        out = press(set, state, kButtonY, blank);
         check(!out.reloadPressed, "... once");
+        out = press(set, state, kButtonB, blank);
+        check(out.duck && out.moveForward == 0 && !out.reloadPressed, "modern: B crouches");
+        out = press(set, state, kButtonB | kButtonUp, blank);
+        check(out.duck && out.moveForward == 1, "... for as long as it is held, walking or not");
+        out = press(set, state, 0, blank);
+        check(!out.duck, "... and let go, stands");
         out = press(set, state, kButtonA, blank);
         check(out.jump && out.moveSide == 0, "modern: A jumps");
         out = press(set, state, kButtonA, blank);
@@ -306,13 +311,13 @@ namespace
         check(out.second && !out.attack, "... and L is the second trigger");
         press(set, state, 0, blank);
         out = press(set, state, kButtonUp, blank);
-        check(out.weaponStep == -1 && out.moveForward == 0, "left-handed: the D-pad has the face buttons' work");
+        check(out.weaponStep == 1 && out.moveForward == 0, "left-handed: the D-pad has the face buttons' work");
         out = press(set, state, kButtonLeft, blank);
-        check(out.weaponStep == 1, "... the weapon after");
-        out = press(set, state, kButtonDown, blank);
         check(out.reloadPressed, "... a reload");
+        out = press(set, state, kButtonDown, blank);
+        check(out.duck, "... a crouch");
         out = press(set, state, kButtonRight, blank);
-        check(out.jump, "... a jump");
+        check(out.jump && !out.duck, "... a jump");
         press(set, state, 0, blank);
         press(set, state, kButtonL, blank);
         out = press(set, state, kButtonL | kButtonB, blank);
@@ -427,14 +432,14 @@ namespace
         data.leftHanded = 1;
         std::vector<std::uint8_t> bytes = writeSettings(data);
         SettingsData back;
-        check(bytes.size() <= 64 && readSettings(bytes.data(), bytes.size(), back) &&
+        check(bytes.size() <= kSettingsMostBytes && readSettings(bytes.data(), bytes.size(), back) &&
                   back.controlScheme == kControlsModern && back.padTurns == 1 && back.padLooks == 0 &&
                   back.leftHanded == 1,
               "the layout and the swaps are kept with the other settings");
         check(SettingsData().controlScheme == kControlsClassic && SettingsData().padTurns == 0 &&
                   SettingsData().padLooks == 0,
               "... and are the classic layout, nothing swapped, unless it is said");
-        data.controlScheme = 2;
+        data.controlScheme = kControlsSchemes;
         bytes = writeSettings(data);
         SettingsData untouched;
         check(!readSettings(bytes.data(), bytes.size(), untouched) && untouched.controlScheme == kControlsClassic,
@@ -464,6 +469,204 @@ namespace
                   read.volume[kVolumeMusic] == 3 && read.renderMode == 3 &&
                   read.controlScheme == kControlsClassic && read.padTurns == 0 && read.padLooks == 0,
               "settings saved before there were layouts are read as they were, with the classic layout");
+
+        // A file of version 9: its layout kept, the rest as they come.
+        {
+            SettingsData nine;
+            nine.controlScheme = kControlsModern;
+            nine.padLooks = 1;
+            nine.viewBob = 1;
+            yas::mem_ostream os9;
+            yas::binary_oarchive<yas::mem_ostream, flags> oa9(os9);
+            nine.serializeNine(oa9);
+            const auto buf9 = os9.get_intrusive_buffer();
+            SettingsHeader h9{};
+            std::memcpy(h9.magic, kSettingsMagic, sizeof(h9.magic));
+            h9.version = kSettingsVersionNine;
+            h9.payloadBytes = static_cast<std::uint16_t>(buf9.size);
+            h9.crc32 = crc32(reinterpret_cast<const std::uint8_t *>(buf9.data), static_cast<std::uint32_t>(buf9.size));
+            std::vector<std::uint8_t> file9(sizeof(h9) + buf9.size);
+            std::memcpy(file9.data(), &h9, sizeof(h9));
+            std::memcpy(file9.data() + sizeof(h9), buf9.data, buf9.size);
+            SettingsData read9;
+            check(readSettings(file9.data(), file9.size(), read9) && read9.controlScheme == kControlsModern &&
+                      read9.padLooks == 1 && read9.viewBob == 1 && read9.aimSpeed == kAimSpeedDefault &&
+                      read9.pitchSpeed == kAimSpeedDefault && read9.invertPitch == 0 && read9.duckToggle == 0 &&
+                      read9.firmPress == kFirmOff,
+                  "settings of version 9 are read, with the aim and the new buttons at their defaults");
+        }
+        // Version 10: all of it kept; nonsense not believed.
+        {
+            SettingsData ten;
+            ten.controlScheme = kControlsCustom;
+            ten.aimSpeed = 17;
+            ten.pitchSpeed = 3;
+            ten.invertPitch = 1;
+            ten.duckToggle = 1;
+            ten.firmness = 9;
+            ten.firmPress = kFirmUse;
+            defaultKeys(kControlsModern, false, ten.keys);
+            assignKey(ten.keys, kActionJump, kButtonL);
+            std::vector<std::uint8_t> file10 = writeSettings(ten);
+            SettingsData read10;
+            check(file10.size() <= kSettingsMostBytes && readSettings(file10.data(), file10.size(), read10) &&
+                      read10.controlScheme == kControlsCustom && read10.aimSpeed == 17 && read10.pitchSpeed == 3 &&
+                      read10.invertPitch == 1 && read10.duckToggle == 1 && read10.firmness == 9 &&
+                      read10.firmPress == kFirmUse && read10.keys[kActionJump] == kButtonL,
+                  "the aim, the crouch, the stylus and a custom layout are kept");
+            for (int bad = 0; bad < 4; ++bad)
+            {
+                SettingsData wrong = ten;
+                if (bad == 0)
+                    wrong.aimSpeed = 0;
+                else if (bad == 1)
+                    wrong.firmness = kFirmnessMost + 1;
+                else if (bad == 2)
+                    wrong.firmPress = kFirmActions;
+                else
+                    wrong.keys[kActionUse] = static_cast<std::uint16_t>(kButtonStart);
+                const std::vector<std::uint8_t> written = writeSettings(wrong);
+                SettingsData readBad;
+                check(!readSettings(written.data(), written.size(), readBad), "a setting out of range is not believed");
+            }
+        }
+    }
+
+    void testCustom()
+    {
+        ControlSettings set;
+        set.scheme = kControlsCustom;
+        defaultKeys(kControlsModern, false, set.keys);
+        // Jump onto L: L was fire, which is given A (jump's old button).
+        assignKey(set.keys, kActionJump, kButtonL);
+        check(set.keys[kActionJump] == kButtonL && set.keys[kActionFire] == kButtonA,
+              "a button given to one action is taken from another, which has the first's instead");
+        ControlsState state;
+        std::uint32_t blank = 100;
+        ControlsOut out = press(set, state, kButtonL, blank);
+        check(out.jump && !out.attack, "custom: L jumps");
+        out = press(set, state, kButtonA, blank);
+        check(out.attack && !out.jump, "... and A fires");
+        assignKey(set.keys, kActionUse, kButtonStart);
+        check(set.keys[kActionUse] == 0, "Start is the menu, and nothing else");
+        out = press(set, state, kButtonStart, blank);
+        check(out.startPressed && !out.usePressed, "... and opens it whatever the layout");
+        // A crouch that toggles.
+        set.duckToggle = true;
+        press(set, state, 0, blank);
+        out = press(set, state, kButtonB, blank);
+        check(out.duck, "toggle: B crouches");
+        out = press(set, state, 0, blank);
+        check(out.duck, "... and let go, stays crouched");
+        out = press(set, state, kButtonB, blank);
+        check(!out.duck, "... until pressed again");
+        // The legend says what the table says.
+        bool saysL = false;
+        for (int line = 0; controlsLegend(set, line) != nullptr; ++line)
+        {
+            const char *text = controlsLegend(set, line);
+            saysL = saysL || (text[0] == 'L' && text[1] == ' ' && std::strstr(text, "jump") != nullptr);
+        }
+        check(saysL, "the options' lines say L jumps");
+    }
+
+    /// The stylus finely, and how hard it presses.
+    void testTouchFilter()
+    {
+        const TouchLayout at = touchLayout(false);
+        const int x = at.pad.x + 80, y = at.pad.y + 60;
+        auto fine = [&](const ControlSettings &set, ControlsState &state, int fx, int fy, int pressure,
+                        std::uint32_t &blank)
+        {
+            ControlsIn in;
+            in.touching = true;
+            in.touchX = fx >> kFineShift;
+            in.touchY = fy >> kFineShift;
+            in.fineX = fx;
+            in.fineY = fy;
+            in.pressure = pressure;
+            in.blank = ++blank;
+            return controlsStep(set, in, state);
+        };
+        // No pressure: each step as it comes, finely.
+        {
+            ControlSettings set;
+            set.firmness = 6;
+            ControlsState state;
+            std::uint32_t blank = 1;
+            fine(set, state, x * 16, y * 16, 0, blank);
+            ControlsOut out = fine(set, state, x * 16 + 37, y * 16 - 5, 0, blank);
+            check(out.lookFineX == 37 && out.lookFineY == -5, "no pressure: finer than a pixel, at once");
+            press(set, state, 0, blank);
+        }
+        // Pixels only, as ever: sixteen sixteenths a pixel.
+        {
+            ControlSettings set;
+            ControlsState state;
+            std::uint32_t blank = 1;
+            touch(set, state, x, y, blank);
+            ControlsOut out = touch(set, state, x + 3, y, blank);
+            check(out.lookFineX == 3 * 16 && out.lookDx == 3, "a pixel is sixteen sixteenths");
+        }
+        // With pressure: averaged with the reading before; a light reading
+        // (the stylus leaving, far off) left out.
+        {
+            ControlSettings set;
+            set.firmness = 6;
+            ControlsState state;
+            std::uint32_t blank = 1;
+            int sum = 0;
+            fine(set, state, x * 16, y * 16, 400, blank);
+            ControlsOut out = fine(set, state, x * 16 + 32, y * 16, 400, blank);
+            check(out.lookFineX == 16, "pressure: a step, averaged with the reading before");
+            sum += out.lookFineX;
+            out = fine(set, state, x * 16 + 64, y * 16, 400, blank);
+            check(out.lookFineX == 32, "... and the next");
+            sum += out.lookFineX;
+            out = fine(set, state, x * 16 + 64 + 800, y * 16, 4000, blank); // (lifting: light, and far)
+            check(out.lookFineX == 0, "a light reading is left out");
+            sum += out.lookFineX;
+            out = press(set, state, 0, blank);
+            check(out.lookFineX == 0 && sum == 48, "... and the view is not thrown by the stylus leaving");
+        }
+        // Averaged, the firmer counting for more.
+        {
+            ControlSettings set;
+            set.firmness = 1;
+            ControlsState state;
+            std::uint32_t blank = 1;
+            fine(set, state, x * 16, y * 16, 100, blank);
+            fine(set, state, x * 16 + 160, y * 16, 300, blank); // (a light one: counts for a third)
+            const ControlsOut out = fine(set, state, x * 16 + 160, y * 16, 300, blank);
+            check(out.lookFineX > 0 && out.lookFineX < 160, "two readings averaged, by how firm each was");
+        }
+        // The firm press: once a press for USE, held for fire.
+        {
+            ControlSettings set;
+            set.firmPress = kFirmUse;
+            ControlsState state;
+            std::uint32_t blank = 1;
+            for (int i = 0; i < 5; ++i)
+                fine(set, state, x * 16, y * 16, 800, blank);
+            ControlsOut out = fine(set, state, x * 16, y * 16, 300, blank);
+            check(out.firm && out.usePressed, "pressed hard: USE");
+            out = fine(set, state, x * 16, y * 16, 300, blank);
+            check(out.firm && !out.usePressed, "... once a press");
+            out = fine(set, state, x * 16, y * 16, 500, blank);
+            check(out.firm, "... still firm until it eases past two thirds");
+            out = fine(set, state, x * 16, y * 16, 700, blank);
+            check(!out.firm, "... and then not");
+            set.firmPress = kFirmFire;
+            out = fine(set, state, x * 16, y * 16, 200, blank);
+            check(out.attack, "a firm press can fire, for as long as it is held");
+        }
+    }
+
+    void testSensitivity()
+    {
+        check(turnOf(16, kAimSpeedDefault) == 128, "at the speed of 10, a pixel is 1/512 of a turn, as ever");
+        check(turnOf(16, 20) == 256 && turnOf(16, 5) == 64, "... twice that at 20, half at 5");
+        check(turnOf(-48, kAimSpeedDefault) == -384, "... either way");
     }
 } // namespace
 
@@ -476,6 +679,9 @@ int main()
     testSticks();
     testWeaponStep();
     testSettings();
+    testCustom();
+    testTouchFilter();
+    testSensitivity();
     if (g_failures == 0)
         std::printf("test_controls: ok\n");
     return g_failures == 0 ? 0 : 1;

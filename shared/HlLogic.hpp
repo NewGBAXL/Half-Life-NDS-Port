@@ -1212,6 +1212,8 @@ namespace hldata
     /// 100). Dying is the caller's to act on: it sees health at 0 or below.
     inline void logicHurt(PlayerState &player, std::int32_t amount)
     {
+        if (amount > 0 && godMode(player))
+            return;
         player.health -= amount;
         if (amount > 0)
         {

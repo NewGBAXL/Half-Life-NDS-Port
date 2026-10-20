@@ -11,6 +11,8 @@
 #include "HlUi.hpp"
 #include "data/TextureCache.hpp"
 #include "render/ScreenFade.hpp"
+#include "game/Game.hpp"
+#include "render/Camera.hpp"
 
 namespace hlrt
 {
@@ -26,7 +28,7 @@ namespace hlrt
         // of them, 96 * kPixel being kDepth * tan(37 degrees). The depth is
         // six of the game's units: past the near plane (four), nearer than
         // a wall can be.
-        constexpr int kPixel = 24;
+        // (kPixel is the camera's hudPixel: it follows the picture.)
         constexpr int kDepth = 3058;
 
         void beginFlat()
@@ -41,8 +43,8 @@ namespace hlrt
         void corner(int sx, int sy, int s, int t)
         {
             GFX_TEX_COORD = TEXTURE_PACK(s << 4, t << 4);
-            GFX_VERTEX16 = (static_cast<std::uint32_t>((96 - sy) * kPixel) << 16) |
-                           (static_cast<std::uint32_t>((sx - 128) * kPixel) & 0xFFFF);
+            GFX_VERTEX16 = (static_cast<std::uint32_t>((96 - sy) * camera.hudPixel) << 16) |
+                           (static_cast<std::uint32_t>((sx - 128) * camera.hudPixel) & 0xFFFF);
             GFX_VERTEX16 = static_cast<std::uint32_t>(-kDepth) & 0xFFFF;
         }
 
@@ -419,8 +421,9 @@ namespace hlrt
             const int bank = lampPercent_ < 20 ? kBankRed : (lampOn_ ? kBankHud : kBankDim);
             sprite(5, 256 - 8 - kHudLampBeam.w - kHudLampFull.w, 6, 1, 2, 32, 32, bank); // 32 by 16
         }
-        // The crosshair, for what is aimed.
-        if (gun)
+        // The crosshair, for what is aimed (unless the COMMAND line's
+        // crosshair 0 took it away).
+        if (gun && game.crosshair)
             sprite(6, 128 - 16, 96 - 16, 0, 2, 0, 32, kBankWhite);
     }
 

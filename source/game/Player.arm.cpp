@@ -44,6 +44,7 @@ namespace hlrt
         state = PlayerState();
         arsenal = Arsenal();
         state.arsenal = &arsenal;
+        state.cheats = &game.cheats;
         camera.yaw = 0;
         camera.pitch = 0;
         for (std::uint32_t i = 0; i < view.entityCount; ++i)
@@ -111,10 +112,16 @@ namespace hlrt
 
     void Player::turn()
     {
-        // One pixel of stylus travel is 1/512 of a turn: the width of the
-        // screen is half a turn.
-        camera.yaw = static_cast<std::uint16_t>(camera.yaw - input.lookDx * 128);
-        camera.pitch = static_cast<std::int16_t>(camera.pitch - input.lookDy * 128);
+        // At the aim speed of 10, one pixel of stylus travel is 1/512 of a
+        // turn: the width of the screen is half a turn. (Turned by the
+        // stylus's finer reading: sixteenths of a pixel.)
+        // (Looking down the crossbow's sight, slower by as much as the
+        // picture is narrower, as the game does.)
+        const int narrow = camera.zoomed ? Camera::kZoomFovDegrees : camera.fovDegrees;
+        const int pitch = hldata::turnOf(input.lookFineY, settings.pitchSpeed) * narrow / camera.fovDegrees;
+        const int yaw = hldata::turnOf(input.lookFineX, settings.aimSpeed) * narrow / camera.fovDegrees;
+        camera.yaw = static_cast<std::uint16_t>(camera.yaw - yaw);
+        camera.pitch = static_cast<std::int16_t>(camera.pitch + (settings.invertPitch ? pitch : -pitch));
         camera.clampPitch();
     }
 

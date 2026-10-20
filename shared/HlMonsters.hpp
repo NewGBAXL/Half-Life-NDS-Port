@@ -214,6 +214,8 @@ namespace hldata
     /// `from`: where it came from, if it came from somewhere.
     inline void playerHurt(PlayerState &player, int damage, const fx *from = nullptr)
     {
+        if (damage > 0 && godMode(player))
+            return;
         if (damage > 0)
         {
             player.hurt += damage;
@@ -615,6 +617,34 @@ namespace hldata
         }
     }
 
+    /// Every one of `kind` there is, dead of it at once -- each as it would
+    /// die shot, its own death, its own cry (the COMMAND line's killall).
+    /// How many there were.
+    inline int killAllOfKind(LogicWorld &w, ActorKind kind)
+    {
+        if (w.actors == nullptr)
+            return 0;
+        ActorWorld &a = *w.actors;
+        int killed = 0;
+        for (int i = 0; i < a.count; ++i)
+        {
+            const ActorState &actor = a.states[i];
+            if (!actor.active || actor.kind != static_cast<std::uint8_t>(kind) || actor.ai >= kAiDying ||
+                !canBeHurt(actor.kind))
+                continue;
+            // (Just enough each time, so that it dies and is not blown
+            // apart; one not yet given its health -- it has not had a first
+            // look -- may take another.)
+            for (int tries = 0; tries < 3 && a.states[i].active && a.states[i].ai < kAiDying; ++tries)
+            {
+                const int health = a.states[i].health > 0 ? a.states[i].health : monsterKind(actor.kind).health;
+                monsterHurt(w, i, (health > 0 ? health : 20) + 1, false);
+            }
+            ++killed;
+        }
+        return killed;
+    }
+
     namespace detail
     {
         inline void headcrabLeap(LogicWorld &w, const PlayerState &player, int index)
@@ -631,7 +661,7 @@ namespace hldata
             const fx up = fxFromInt(static_cast<int>(
                 isqrt64(static_cast<std::uint64_t>(2) * 800 * static_cast<std::uint64_t>(fxToInt(height)))));
             // The time to the top, in milliseconds.
-            const std::int64_t ms = (static_cast<std::int64_t>(up) * 1000) / kGravity;
+            const std::int64_t ms = (static_cast<std::int64_t>(up) * 1000) / (gravityOf(player) > 0 ? gravityOf(player) : 1);
             actor.velocity[0] = static_cast<fx>((static_cast<std::int64_t>(to[0]) * 1000) / (ms > 0 ? ms : 1));
             actor.velocity[1] = static_cast<fx>((static_cast<std::int64_t>(to[1]) * 1000) / (ms > 0 ? ms : 1));
             actor.velocity[2] = up;
@@ -659,7 +689,7 @@ namespace hldata
             fx to[3];
             for (int i = 0; i < 3; ++i)
                 to[i] = from[i] + static_cast<fx>((static_cast<std::int64_t>(actor.velocity[i]) * ms) / 1000);
-            actor.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity) * ms) / 1000);
+            actor.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player)) * ms) / 1000);
             const Trace t = walkerTrace(*w.world, &a, index, true, from, to);
             bool landed = false;
             if (!t.startSolid)
@@ -729,8 +759,16 @@ namespace hldata
                 if (actor.reach < actor.goal[2])
                     actor.reach += static_cast<fx>((static_cast<std::int64_t>(fxFromInt(60)) * ms) / 1000);
                 // Touched: anywhere between the mouth and the tip.
-                if (under && head > actor.pos[2] - actor.reach - fxFromInt(8) && head < actor.pos[2])
+                if (under && head > actor.pos[2] - actor.reach - fxFromInt(8) && head < actor.pos[2] &&
+                    player.health > 0 && !unseen(player))
                 {
+                    // (The COMMAND line's barnaclekill: it dies of it, as
+                    // shot, and lets nobody up.)
+                    if (player.cheats != nullptr && player.cheats->barnacleKill)
+                    {
+                        monsterHurt(w, index, (actor.health > 0 ? actor.health : monsterKind(actor.kind).health) + 1, false);
+                        return;
+                    }
                     actor.ai = kAiAttack;
                     actor.thinkMs = 0;
                     monsterSound(w, actor, CommonSound::BarnacleAlert);
@@ -739,7 +777,7 @@ namespace hldata
                 return;
             }
             // It has them: up they go, and at the top it bites.
-            if (!under || player.health <= 0)
+            if (!under || (player.health <= 0 || unseen(player)))
             {
                 actor.ai = kAiIdle;
                 monsterClip(a, actor, "idle1", false);
@@ -956,7 +994,7 @@ namespace hldata
                     break;
                 actor.thinkMs = 300;
                 // (A prisoner goes for nobody.)
-                if (player.health <= 0 || flat > kSightRange || dz > fxFromInt(512) ||
+                if ((player.health <= 0 || unseen(player)) || flat > kSightRange || dz > fxFromInt(512) ||
                     dz < -fxFromInt(512) || (actor.flags & kActorPrisoner))
                     break;
                 // In front of it, or near enough to be heard.
@@ -979,7 +1017,7 @@ namespace hldata
             }
             case kAiChase:
             {
-                if (player.health <= 0)
+                if ((player.health <= 0 || unseen(player)))
                 {
                     actor.ai = kAiIdle;
                     monsterClip(a, actor, kind.idle, false);
@@ -1467,7 +1505,7 @@ namespace hldata
                 }
                 if (gib.resting)
                     continue;
-                gib.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity) * ms) / 1000);
+                gib.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player)) * ms) / 1000);
                 fx to[3];
                 for (int i = 0; i < 3; ++i)
                     to[i] = gib.pos[i] + static_cast<fx>((static_cast<std::int64_t>(gib.velocity[i]) * ms) / 1000);
@@ -1653,7 +1691,7 @@ namespace hldata
                             goal[k] = at[k];
                     }
                     bool atPlayer = false;
-                    if (target < 0 && shot.leftMs < 13500 && player.health > 0)
+                    if (target < 0 && shot.leftMs < 13500 && player.health > 0 && !unseen(player))
                     {
                         const fx d[3] = {player.origin[0] - shot.pos[0], player.origin[1] - shot.pos[1],
                                          player.origin[2] - shot.pos[2]};
@@ -1710,7 +1748,7 @@ namespace hldata
                     shot.sprite = static_cast<std::uint16_t>(snarkBites(shot) | (wait << 8));
                     // It falls at half the world's pull, and where it lands it
                     // hops at what it is after.
-                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity / 2) * ms) / 1000);
+                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player) / 2) * ms) / 1000);
                     fx to[3];
                     for (int i = 0; i < 3; ++i)
                         to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
@@ -1769,7 +1807,7 @@ namespace hldata
                     // A launcher's grenade: an arc at half gravity, and off
                     // at the first thing it meets -- the world, or anything
                     // that fights, or (a soldier's) the player.
-                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity / 2) * ms) / 1000);
+                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player) / 2) * ms) / 1000);
                     fx to[3];
                     for (int i = 0; i < 3; ++i)
                         to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
@@ -1805,7 +1843,7 @@ namespace hldata
                 const bool satchel = shot.kind == kShotSatchel;
                 const bool grenade = shot.kind == kShotGrenade || gib || satchel;
                 if (grenade)
-                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(kGravity / 2) * ms) / 1000);
+                    shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player) / 2) * ms) / 1000);
                 fx to[3];
                 for (int i = 0; i < 3; ++i)
                     to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
@@ -2020,7 +2058,7 @@ namespace hldata
 
         inline bool turretSees(const LogicWorld &w, const PlayerState &player, const fx *eye)
         {
-            if (player.health <= 0)
+            if ((player.health <= 0 || unseen(player)))
                 return false;
             const fx d[3] = {player.origin[0] - eye[0], player.origin[1] - eye[1], player.origin[2] - eye[2]};
             if (fxLength(d) > fxFromInt(kTurretRange))

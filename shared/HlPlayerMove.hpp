@@ -121,6 +121,17 @@ namespace hldata
     /// every save and every level change as it is, so that a save made
     /// before these were is read as it was written. (It goes in a save after
     /// all the rest: HlSave.hpp.) Inventory::current may be any weapon.
+    /// The cheats of the COMMAND line (Half-Life's own): for the session,
+    /// never saved. Reached by a pointer from PlayerState, as the Arsenal is.
+    struct Cheats
+    {
+        bool god = false;          ///< nothing hurts the player
+        bool notarget = false;     ///< nothing goes for the player
+        bool barnacleKill = false; ///< a barnacle that grabs the player dies of it
+        fx gravity = fxFromInt(800); ///< sv_gravity
+        int timescale = 256;       ///< host_timescale, Q8
+    };
+
     struct Arsenal
     {
         std::uint16_t have = 0;       ///< a bit per weapon: 1 << (kWeapon* - kWeaponFirstMore)
@@ -182,6 +193,9 @@ namespace hldata
         /// The rest of what they carry (owned by the game, not saved with
         /// this: a pointer is no part of the state). Null: none of it.
         Arsenal *arsenal = nullptr;
+        /// The COMMAND line's cheats (owned by the game; not saved). Null:
+        /// none.
+        const Cheats *cheats = nullptr;
         /// How far there is still to walk before the next footstep is heard
         /// (playerFootsteps).
         fx stepLeft = 0;
@@ -195,6 +209,13 @@ namespace hldata
         int hurtMs = 0;        ///< until the liquid (or the lack of air) next hurts
         int drownStep = 2;     ///< what the next breath not taken costs
     };
+
+    /// Whether nothing may hurt the player (the god cheat).
+    inline bool godMode(const PlayerState &player) { return player.cheats != nullptr && player.cheats->god; }
+    /// How hard the world pulls (sv_gravity).
+    inline fx gravityOf(const PlayerState &player) { return player.cheats != nullptr ? player.cheats->gravity : kGravity; }
+    /// ... nor anything go for them (notarget).
+    inline bool unseen(const PlayerState &player) { return player.cheats != nullptr && player.cheats->notarget; }
 
     /// Whether the player has weapon `which`.
     inline bool hasWeapon(const PlayerState &player, int which)
@@ -361,7 +382,7 @@ namespace hldata
             /// which makes the position exact for constant acceleration.
             void halfGravity()
             {
-                s.velocity[2] -= scaleTime(kGravity, dt) / 2;
+                s.velocity[2] -= scaleTime(gravityOf(s), dt) / 2;
                 checkVelocity();
             }
 
@@ -418,7 +439,7 @@ namespace hldata
                     s.underMs += ms;
                     if (s.underMs > 12000 && s.hurtMs <= 0)
                     {
-                        s.health -= s.drownStep;
+                        s.health -= godMode(s) ? 0 : s.drownStep;
                         if (s.drownStep < 5)
                             ++s.drownStep;
                         s.hurtMs = 1000;
@@ -432,7 +453,7 @@ namespace hldata
                 if (s.waterLevel > 0 && s.hurtMs <= 0 &&
                     (s.waterType == kContentsLava || s.waterType == kContentsSlime))
                 {
-                    s.health -= (s.waterType == kContentsLava ? 10 : 4) * s.waterLevel;
+                    s.health -= godMode(s) ? 0 : (s.waterType == kContentsLava ? 10 : 4) * s.waterLevel;
                     s.hurtMs = 1000;
                 }
             }

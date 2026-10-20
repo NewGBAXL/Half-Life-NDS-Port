@@ -193,7 +193,7 @@ namespace
         data.renderMode = 3;
         std::vector<std::uint8_t> bytes = writeSettings(data);
         SettingsData back;
-        check(bytes.size() <= 64 && readSettings(bytes.data(), bytes.size(), back) && back.volume[kVolumeVoices] == 3 &&
+        check(bytes.size() <= kSettingsMostBytes && readSettings(bytes.data(), bytes.size(), back) && back.volume[kVolumeVoices] == 3 &&
                   back.volume[kVolumeAmbience] == 0 && back.volume[kVolumeMusic] == 8 && back.debugReadout == 1 &&
                   back.renderMode == 3,
               "settings read back as they were written, the volumes and the readout among them");
