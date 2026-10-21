@@ -447,6 +447,11 @@ namespace hldata
             }
             if (human && n == 0)
                 at[2] = maxs[2];
+            // (A piece is where a crouching person's middle would be -- its
+            // trace is theirs: from lower in the body it starts in the floor
+            // and is given up.)
+            if (at[2] < mins[2] + kCrouchedFeet + fxFromInt(1))
+                at[2] = mins[2] + kCrouchedFeet + fxFromInt(1);
             velocity[2] = fxFromInt(200 + static_cast<int>(detail::chance(a) % 101)) * scale / 10;
             for (int k = 0; k < 3; ++k)
                 velocity[k] = velocity[k] > fxFromInt(1500) ? fxFromInt(1500)

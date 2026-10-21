@@ -344,55 +344,15 @@ namespace hlrt
             slot = &visited_.back();
             slot->map = mapHash;
         }
-        slot->broken.assign((logic.recordCount + 7) / 8, 0);
-        for (int i = 0; i < logic.recordCount; ++i)
-        {
-            if (states_[i].dead && detail::isBreakable(logic.records[i]))
-                slot->broken[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        }
-        // Who is gone: what was picked up, and what was killed. (Not the
-        // places a monstermaker keeps: those start empty anyway.)
-        slot->gone.assign((actors.recordCount + 7) / 8, 0);
-        for (int i = 0; i < actors.recordCount; ++i)
-        {
-            const ActorState &actor = actorStates_[i];
-            if (actors.records[i].flags & kActorDormant)
-                continue;
-            if (!actor.active || (fights(actor.kind) && actor.ai >= kAiDying))
-                slot->gone[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        }
+        mapRemember(*slot, logic, actors);
     }
 
     void Game::restoreMap(std::uint32_t mapHash)
     {
         for (const SaveMapState &map : visited_)
         {
-            if (map.map != mapHash)
-                continue;
-            for (int i = 0; i < logic.recordCount && (i >> 3) < static_cast<int>(map.broken.size());
-                 ++i)
-            {
-                // Only what breaks, whatever the file says: a bit against
-                // anything else is ignored.
-                if (!(map.broken[i >> 3] & (1u << (i & 7))) ||
-                    !detail::isBreakable(logic.records[i]))
-                    continue;
-                states_[i].dead = true;
-                if (logic.records[i].brush != kNoBrush)
-                    logicSetBrushActive(logic, logic.records[i].brush, false);
-            }
-            for (int i = 0; i < actors.recordCount && (i >> 3) < static_cast<int>(map.gone.size());
-                 ++i)
-            {
-                // Only what can be killed or picked up, whatever the file
-                // says.
-                const std::uint8_t kind = actors.records[i].kind;
-                if (!(map.gone[i >> 3] & (1u << (i & 7))) ||
-                    !(fights(kind) || kind == static_cast<std::uint8_t>(ActorKind::Item)))
-                    continue;
-                actorStates_[i].active = false;
-                actorPlaceBox(actors, i);
-            }
+            if (map.map == mapHash)
+                mapRestore(map, logic, actors);
         }
     }
 

@@ -30,6 +30,10 @@ namespace hldata
     {
         // --------------------------------------------------------- lines
 
+#if !defined(__arm__)
+        inline std::uint32_t hostLineCount = 0; ///< (the host's count, as hostTraceCount)
+#endif
+
         /// A line through the world's own tree: false, with `hit` how far
         /// along it got (Q30), if it runs into something solid.
         /// `wall`, if it is asked for, is then what it ran into: the plane
@@ -39,6 +43,9 @@ namespace hldata
                                 std::int32_t f2, const fx *from, const fx *to, std::int32_t &hit,
                                 int depth, int crossed = -1, int *wall = nullptr)
         {
+#if !defined(__arm__)
+            hostLineCount += depth == 0 ? 1u : 0u;
+#endif
             fx p1[3] = {from[0], from[1], from[2]};
             while (true)
             {
@@ -107,6 +114,20 @@ namespace hldata
         std::int16_t mover = -1;              ///< the brush entity that stopped it, if one did
     };
 
+    namespace detail
+    {
+        /// Where a line from `start` to `end` stops `fraction` of the way:
+        /// the end of what is left of it for the movers to be looked for on.
+        inline void shotStop(const fx *start, const fx *end, std::int32_t fraction, fx *stop)
+        {
+            for (int i = 0; i < 3; ++i)
+                stop[i] = fraction >= kFractionOne
+                              ? end[i]
+                              : start[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - start[i]) * fraction) >>
+                                                           kFractionShift);
+        }
+    } // namespace detail
+
     inline Shot traceShot(const MoveWorld &world, const fx *start, const fx *end)
     {
         Shot shot;
@@ -122,13 +143,17 @@ namespace hldata
             const Trace t = traceHull(world.crouched, start, end);
             shot.fraction = t.startSolid ? 0 : t.fraction;
         }
-        const detail::SegmentReach reach = detail::segmentReach(true, start, end);
+        // (Only a brush the line reaches before the world stops it can stop
+        // it sooner: the others are passed over by their boxes.)
+        fx stop[3];
+        detail::shotStop(start, end, shot.fraction, stop);
+        const detail::SegmentReach reach = detail::segmentReach(true, start, stop);
         for (int m = 0; m < world.moverCount; ++m)
         {
             if (!detail::moverMayTouch(world, m, reach))
                 continue;
             const MoverHull &mover = world.movers[m];
-            if (!mover.solid || !detail::nearMover(mover, true, start, end))
+            if (!mover.solid || !detail::nearMover(mover, true, start, stop))
                 continue;
             fx a[3], b[3];
             detail::toMoverSpace(mover, start, a);
@@ -163,13 +188,15 @@ namespace hldata
             found = true;
         }
         fx back = 0;
-        const detail::SegmentReach reach = detail::segmentReach(true, start, end);
+        fx stop[3];
+        detail::shotStop(start, end, fraction, stop); // (as traceShot)
+        const detail::SegmentReach reach = detail::segmentReach(true, start, stop);
         for (int m = 0; m < world.moverCount; ++m)
         {
             if (!detail::moverMayTouch(world, m, reach))
                 continue;
             const MoverHull &mover = world.movers[m];
-            if (!mover.solid || !detail::nearMover(mover, true, start, end))
+            if (!mover.solid || !detail::nearMover(mover, true, start, stop))
                 continue;
             fx a[3], b[3];
             detail::toMoverSpace(mover, start, a);

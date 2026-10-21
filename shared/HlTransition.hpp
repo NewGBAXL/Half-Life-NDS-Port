@@ -183,7 +183,12 @@ namespace hldata
                                      actor.kind == static_cast<std::uint8_t>(ActorKind::Guard)) &&
                                     actor.ai < 5;
                 const bool follows = person && actor.ai == 1 && actor.script < 0;
-                if (!actor.active || (actor.nameHash == 0 && !follows) || actor.model >= w.actors->modelCount)
+                // (Never one dead or dying: on the other side it would be
+                // made again whole, and stand up -- the zombie by c1a1's
+                // landmark.)
+                const bool minded = actorThinks(actor.kind);
+                if (!actor.active || (actor.nameHash == 0 && !follows) || actor.model >= w.actors->modelCount ||
+                    (minded && actor.ai >= kAiDying))
                     continue;
                 const fx d[3] = {actor.pos[0] - here->origin[0], actor.pos[1] - here->origin[1],
                                  actor.pos[2] - here->origin[2]};
@@ -221,14 +226,19 @@ namespace hldata
                 visitor.kind = actor.kind;
                 visitor.flags = actor.flags;
                 visitor.light = static_cast<std::uint8_t>(actor.light > kVisitorLight ? kVisitorLight : actor.light);
-                if (person)
+                if (minded)
                 {
-                    // His health (absolute once he has thought: HlAiCore's
-                    // aiInit; before, what he has lost of it).
+                    // Its health (absolute once it has thought: HlAiCore's
+                    // aiInit; before, for one of the people what he has lost
+                    // of it, for a monster nothing yet -- whole).
                     int health = actor.health;
                     const AiMonster *mind = w.actors->ai != nullptr ? aiFind(*w.actors, i) : nullptr;
                     if (health <= 0 && (mind == nullptr || mind->maxHealth == 0))
-                        health += personHealth(actor.kind);
+                    {
+                        const AiKind *kind = aiKindOf(actor.kind);
+                        health = isPerson(actor.kind) ? health + personHealth(actor.kind)
+                                                      : (kind != nullptr ? kind->health : 1);
+                    }
                     health = health < 1 ? 1 : (health > kVisitorHealth ? kVisitorHealth : health);
                     visitor.yaw = static_cast<std::uint16_t>((actor.yaw & ~kVisitorHealth) | health);
                     visitor.light |= kVisitorMind;

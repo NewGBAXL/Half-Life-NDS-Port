@@ -4,6 +4,7 @@
 // its collision, its logic, its models and its actors.
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -156,17 +157,13 @@ namespace hldstest
             CookedModel cooked;
             ModelCookReport report;
             std::vector<std::uint8_t> bytes;
-            std::vector<std::string> clips;
+            std::vector<std::string> clips, clipsDsi;
             if (!mdl.load(std::string(dir) + "/" + need.file, error))
                 continue;
-            if (need.firstSequence && !mdl.sequences.empty())
-                clips.push_back(mdl.sequences[0].label);
-            clips.insert(clips.end(), need.clips.begin(), need.clips.end());
-            for (const MdlSequence &seq : mdl.sequences)
-            {
-                if (need.activities && seq.activity != 0)
-                    clips.push_back(seq.label);
-            }
+            // (The DS's clips; HLDS_TEST_DSI=1: a DSi's.)
+            modelClips(mdl, need, clips, clipsDsi);
+            if (std::getenv("HLDS_TEST_DSI") != nullptr)
+                clips = clipsDsi;
             if (!cookModel(mdl, clips, cooked, report, error) || !writeModel(cooked, bytes, error))
                 continue;
             g.modelBlocks.emplace_back((bytes.size() + 3) / 4);

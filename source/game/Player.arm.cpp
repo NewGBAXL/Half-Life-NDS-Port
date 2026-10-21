@@ -62,9 +62,14 @@ namespace hlrt
         // and degrees, starts there instead (tools/emu/play.sh writes it).
         if (std::FILE *file = std::fopen(global.dataPath("debug_start.txt").c_str(), "r"))
         {
-            int x, y, z, yaw, track = -1, die = 0, models = 0, weapon = 0;
-            if (std::fscanf(file, "%d %d %d %d %d %d %d %d", &x, &y, &z, &yaw, &track, &die, &models, &weapon) >= 4)
+            int x, y, z, yaw, track = -1, die = 0, models = 0, weapon = 0, god = 0;
+            if (std::fscanf(file, "%d %d %d %d %d %d %d %d %d", &x, &y, &z, &yaw, &track, &die, &models, &weapon,
+                            &god) >= 4)
             {
+                // (A ninth: god mode, for a measure the player must live
+                // through.)
+                if (god > 0)
+                    game.cheats.god = true;
                 // (A fifth number is a track of music to start with; a
                 // sixth, the seconds until the player dies -- once: not
                 // again when they are back.)

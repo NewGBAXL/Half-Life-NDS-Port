@@ -87,9 +87,23 @@ namespace hlds
         std::vector<std::string> clips; ///< sequence labels, lower-case
         bool firstSequence = false;     ///< ... and whichever its first sequence is
         /// ... and every sequence the game's code may choose by what it is for
-        /// (its activity): a monster that thinks as the game's do.
+        /// (its activity): a monster that thinks as the game's do. On a DSi
+        /// only (a .dsi.hmd) when `dsActivities` says what the DS keeps.
         bool activities = false;
+        /// What a DS keeps of those: for each of these activities the
+        /// heaviest clip, unless `clips` has one for it already. (What is left
+        /// out the game's code goes without: a plain death for one by where
+        /// the blow landed, the turn on the spot for a turn clip.)
+        std::vector<std::uint8_t> dsActivities;
     };
+
+    class MdlFile;
+
+    /// The clips of `mdl` that `need` asks for: what a DS's file has (`ds`),
+    /// and a DSi's (`dsi`) -- the DS's first, then the rest of those for an
+    /// activity. Equal when there is nothing more for a DSi.
+    void modelClips(const MdlFile &mdl, const ModelNeed &need, std::vector<std::string> &ds,
+                    std::vector<std::string> &dsi);
 
     /// What the map's entities need by way of models: every model some actor
     /// is made of, with the clips those actors stand in and are scripted to

@@ -1292,9 +1292,10 @@ namespace hldata
     inline bool aiBuildRoute(AiCtx &c, std::uint8_t goal, const fx *to)
     {
         const fx d[3] = {to[0] - c.me.pos[0], to[1] - c.me.pos[1], 0};
-        const bool straight = fxLength(d) < fxFromInt(1024) &&
-                              walkClear(*c.w.world, &c.a, c.index, aiHull(c), c.me.pos, to, 64);
-        if (!straight)
+        const fx far = fxLength(d);
+        auto straight = [&]()
+        { return far < fxFromInt(1024) && walkClear(*c.w.world, &c.a, c.index, aiHull(c), c.me.pos, to, 64); };
+        auto byNodes = [&]()
         {
             if (c.a.nodeCount == 0)
                 return false;
@@ -1303,10 +1304,14 @@ namespace hldata
             const int theirs = pathNearest(c.a, *c.w.world, to);
             if (mine < 0 || theirs < 0)
                 return false;
-            if (mine != theirs &&
-                pathStep(c.a, mine, theirs, pathSizeOf(hull), opensDoors(c.me.kind)) == kNoPathNode)
-                return false;
-        }
+            return mine == theirs || pathStep(c.a, mine, theirs, pathSizeOf(hull), opensDoors(c.me.kind)) != kNoPathNode;
+        };
+        // (Either way will do. A straight walk is tried a step at a time --
+        // up to sixty-four, each a trace, in the frame: a short one first,
+        // a long one only if the ways between the nodes say no.)
+        const bool ok = far < fxFromInt(256) ? (straight() || byNodes()) : (byNodes() || straight());
+        if (!ok)
+            return false;
         aiRouteNew(c, goal, to);
         return true;
     }

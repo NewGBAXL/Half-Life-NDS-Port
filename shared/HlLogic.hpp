@@ -1259,6 +1259,31 @@ namespace hldata
                    (record.kind == static_cast<std::uint8_t>(LogicKind::Pushable) &&
                     (record.flags & kLogicBreaks));
         }
+
+        /// Whether a record, once used up (LogicState::dead), stays used up
+        /// in a map that is come back to: a trigger that fires once, a
+        /// monstermaker that has made all it makes, a scene that has been
+        /// played, a line said once, a relay that removes itself. (The game
+        /// keeps every entity of a map left; this is what of it would
+        /// otherwise be seen to happen again -- the zombie of c1a1's maker.)
+        inline bool staysSpent(const LogicRecord &record)
+        {
+            switch (static_cast<LogicKind>(record.kind))
+            {
+            case LogicKind::TriggerOnce:
+            case LogicKind::Maker:
+            case LogicKind::Script:
+            case LogicKind::Sentence:
+                return true;
+            default:
+                // (A trigger_auto marked so in a map cooked since: one
+                // that is not fires again on every visit, as in the game.)
+                return (record.flags & kLogicFireOnce) != 0 &&
+                       (record.kind == static_cast<std::uint8_t>(LogicKind::TriggerRelay) ||
+                        record.kind == static_cast<std::uint8_t>(LogicKind::TriggerAuto) ||
+                        record.kind == static_cast<std::uint8_t>(LogicKind::Message));
+            }
+        }
     } // namespace detail
 
     /// A blow from the player: `damage` off what the thing can take, and it

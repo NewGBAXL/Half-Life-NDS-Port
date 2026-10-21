@@ -398,17 +398,8 @@ namespace hlds
                                               (why.empty() ? "" : ": " + why));
                 return false;
             }
-            std::vector<std::string> clips;
-            if (need.firstSequence && !mdl.sequences.empty())
-                clips.push_back(mdl.sequences[0].label);
-            clips.insert(clips.end(), need.clips.begin(), need.clips.end());
-            // (A monster that chooses by what clips are for: every one that
-            // is for something.)
-            for (const MdlSequence &seq : mdl.sequences)
-            {
-                if (need.activities && seq.activity != 0)
-                    clips.push_back(seq.label);
-            }
+            std::vector<std::string> clips, clipsDsi;
+            modelClips(mdl, need, clips, clipsDsi);
             CookedModel cooked;
             ModelCookReport modelReport;
             out = ModelOut();
@@ -433,15 +424,19 @@ namespace hlds
             out.triangles = modelReport.triangles;
             out.fullTriangles = modelReport.sourceTriangles;
             out.far = modelReport.levels.empty() ? modelReport.triangles : modelReport.levels.back().triangles;
-            // A DSi's file, where the game's own mesh is more than that.
-            if (modelReport.sourceTriangles > modelReport.triangles)
+            // A DSi's file, where the game's own mesh is more than that, or
+            // it has more clips.
+            if (modelReport.sourceTriangles > modelReport.triangles || clipsDsi.size() > clips.size())
             {
                 CookedModel whole;
                 ModelCookReport wholeReport;
                 std::string ignored;
-                if (!cookModel(mdl, clips, whole, wholeReport, ignored, skinTexels, true) ||
+                if (!cookModel(mdl, clipsDsi, whole, wholeReport, ignored, skinTexels, true) ||
                     !writeModel(whole, out.bytesDsi, ignored))
                     out.bytesDsi.clear();
+                // (The sounds of the clips a DS has not are not in the level:
+                // they would be in a DS's memory too. Those few steps are
+                // silent on a DSi.)
             }
             return true;
         };

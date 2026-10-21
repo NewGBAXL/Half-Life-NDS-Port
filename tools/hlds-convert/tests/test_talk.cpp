@@ -20,6 +20,8 @@
 #include <cstring>
 #include <memory>
 
+#include "HlSaveState.hpp"
+#include "HlThink.hpp"
 #include "TestGame.hpp"
 
 using namespace hlds;
@@ -582,6 +584,128 @@ namespace
         check(aiFind(n.actors, came) != nullptr && aiFind(n.actors, came)->targetEnt == kAiPlayer,
               "... following still");
     }
+
+    /// c1a1 left and come back to: the zombie killed by the way out does not
+    /// come along to c1a1a, and nothing used up happens again -- the trigger
+    /// that sends the maker's zombie, the maker, the zombie's scene -- nor
+    /// does the killed stand up again, scientist or zombie.
+    void testRevisit(const char *dir)
+    {
+        auto game = load(dir, "c1a1");
+        if (!game)
+            return;
+        Game &g = *game;
+        int change = -1;
+        for (int i = 0; i < g.logic.recordCount && change < 0; ++i)
+        {
+            if (g.logic.records[i].kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel))
+                change = i;
+        }
+        const std::uint16_t zombieName = nameIdOfHash(g.view.nameHashes, g.view.nameCount, nameHash("attacking_zombie"));
+        int zombie = -1;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            if (g.actors.states[i].active && g.actors.states[i].name == zombieName && zombieName != 0)
+                zombie = i;
+        }
+        const int sci = findPerson(g, ActorKind::Scientist, false);
+        const Landmark *mark = change < 0 ? nullptr
+                                          : findLandmark(g.view.landmarks, g.view.landmarkCount,
+                                                         g.logic.records[change].extra[1]);
+        if (mark == nullptr || zombie < 0 || sci < 0)
+        {
+            check(false, "c1a1 has its level change, attacking_zombie and a scientist");
+            return;
+        }
+        // The zombie by the landmark: alive, it comes; dead, it does not.
+        ActorState &z = g.actors.states[zombie];
+        for (int k = 0; k < 3; ++k)
+            z.pos[k] = mark->origin[k];
+        z.pos[0] += fxFromInt(40);
+        actorToFloor(g.move, z, fxFromInt(64), fxFromInt(128));
+        g.player.origin[0] = mark->origin[0];
+        g.player.origin[1] = mark->origin[1];
+        g.player.origin[2] = mark->origin[2];
+        auto zombiesIn = [&](const Arrival &arrival) {
+            int n = 0;
+            for (const Arrival::Visitor &v : arrival.visitors)
+                n += v.model != 0 && v.kind == static_cast<std::uint8_t>(ActorKind::Zombie);
+            return n;
+        };
+        const int alive = zombiesIn(makeArrival(g.logic, g.view.landmarks, g.view.landmarkCount, g.player, change,
+                                                g.view.modelRefs));
+        z.ai = kAiDead;
+        z.health = 0;
+        const int dead = zombiesIn(makeArrival(g.logic, g.view.landmarks, g.view.landmarkCount, g.player, change,
+                                               g.view.modelRefs));
+        std::printf("test_talk: c1a1 -> c1a1a: %d zombies cross alive, %d dead\n", alive, dead);
+        check(alive == dead + 1, "a dead zombie does not cross a level change");
+
+        // Everything once-only spent, the scientist killed; left, and come
+        // back to.
+        g.actors.states[sci].ai = kAiDying;
+        int spent = 0;
+        for (int i = 0; i < g.logic.recordCount; ++i)
+        {
+            if (hldata::detail::staysSpent(g.logic.records[i]))
+            {
+                g.logic.states[i].dead = true;
+                ++spent;
+            }
+        }
+        SaveMapState slot;
+        slot.map = nameHash("c1a1");
+        mapRemember(slot, g.logic, g.actors);
+        auto again = load(dir, "c1a1");
+        if (!again)
+            return;
+        Game &b = *again;
+        mapRestore(slot, b.logic, b.actors);
+        int kept = 0, makers = 0;
+        for (int i = 0; i < b.logic.recordCount; ++i)
+        {
+            const LogicRecord &r = b.logic.records[i];
+            if (hldata::detail::staysSpent(r))
+                kept += b.logic.states[i].dead ? 1 : 0;
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Maker))
+                makers += b.logic.states[i].dead && !b.logic.states[i].running ? 1 : 0;
+        }
+        std::printf("test_talk: c1a1 again: %d of %d used up stay so, %d makers spent\n", kept, spent, makers);
+        check(spent > 0 && kept == spent, "what was used up in c1a1 stays so");
+        check(makers >= 1, "... the zombie's maker among them");
+        check(!b.actors.states[zombie].active, "the killed zombie is not back");
+        check(!b.actors.states[sci].active, "nor the killed scientist");
+        // ... and played on, no zombie stands up anywhere.
+        b.player.origin[0] = mark->origin[0];
+        b.player.origin[1] = mark->origin[1];
+        b.player.origin[2] = mark->origin[2];
+        int before = 0, after = 0;
+        for (int i = 0; i < b.actors.count; ++i)
+            before += b.actors.states[i].active && b.actors.states[i].kind == static_cast<std::uint8_t>(ActorKind::Zombie);
+        for (int t = 0; t < 30 * 5; ++t)
+            tick(b);
+        for (int i = 0; i < b.actors.count; ++i)
+            after += b.actors.states[i].active && b.actors.states[i].kind == static_cast<std::uint8_t>(ActorKind::Zombie);
+        check(after <= before, "no new zombie in c1a1 come back to");
+
+        // A save from before (bits on breakables only) still reads the same.
+        SaveMapState old;
+        old.map = slot.map;
+        old.broken.assign(slot.broken.size(), 0);
+        for (int i = 0; i < g.logic.recordCount; ++i)
+        {
+            if (hldata::detail::isBreakable(g.logic.records[i]) && (slot.broken[i >> 3] & (1u << (i & 7))))
+                old.broken[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        }
+        auto third = load(dir, "c1a1");
+        if (!third)
+            return;
+        mapRestore(old, third->logic, third->actors);
+        int stale = 0;
+        for (int i = 0; i < third->logic.recordCount; ++i)
+            stale += hldata::detail::staysSpent(third->logic.records[i]) && third->logic.states[i].dead ? 1 : 0;
+        check(stale == 0, "an old save's map memory spends nothing");
+    }
 } // namespace
 
 namespace
@@ -602,10 +726,39 @@ namespace
         g.player.origin[0] = fxFromInt(x);
         g.player.origin[1] = fxFromInt(y);
         g.player.origin[2] = fxFromInt(z);
+        // HLDS_BENCH_DEFER=1: the long questions worked out between frames,
+        // as the console's worker does -- only what is in the frame timed.
+        std::vector<ThinkSlot> slots;
+        ThinkQueue queue;
+        const bool defer = std::getenv("HLDS_BENCH_DEFER") != nullptr;
+        if (defer)
+        {
+            slots.resize(g.actors.count);
+            queue.slots = slots.data();
+            queue.count = g.actors.count;
+            thinkClear(queue);
+            queue.deferred = true;
+            g.actors.think = &queue;
+        }
         const auto start = std::chrono::steady_clock::now();
         double byKind[static_cast<int>(ActorKind::Count)] = {};
         std::vector<double> byActor(g.actors.count, 0.0);
         double logic = 0;
+        struct Worst
+        {
+            double ms;
+            int frame, actor, task;
+            const char *before, *after;
+            double part[3]; // look, hear, move (AiSpentScope), ms
+            int traces, lines; // hull traces and lines through the world it made
+        };
+        aiClock = []() -> std::uint32_t
+        {
+            return static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                  std::chrono::steady_clock::now().time_since_epoch())
+                                                  .count());
+        };
+        std::vector<Worst> worst;
         const int frames = std::getenv("HLDS_BENCH_FRAMES") != nullptr ? std::atoi(std::getenv("HLDS_BENCH_FRAMES")) : 600;
         for (int t = 0; t < frames; ++t)
         {
@@ -618,14 +771,36 @@ namespace
             {
                 if (!g.actors.states[i].active || !actorThinks(g.actors.states[i].kind))
                     continue;
+                const AiMonster *was = aiFind(g.actors, i);
+                const char *before = was != nullptr && was->schedule != nullptr ? was->schedule->name : "-";
+                const int task = was != nullptr && was->schedule != nullptr && was->scheduleIndex < was->schedule->count
+                                     ? was->schedule->tasks[was->scheduleIndex].task
+                                     : -1;
+                const std::uint32_t parts[3] = {aiSpent[0], aiSpent[1], aiSpent[2]};
+                const std::uint32_t traces = hostTraceCount, lines = hldata::detail::hostLineCount;
                 t0 = std::chrono::steady_clock::now();
                 aiTick(g.logic, g.player, i, 33);
                 const double spent = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 byKind[g.actors.states[i].kind] += spent;
                 byActor[i] += spent;
+                // (The dearest single thinks, and what they were doing.)
+                const AiMonster *now = aiFind(g.actors, i);
+                Worst one{spent, t, i, task, before,
+                          now != nullptr && now->schedule != nullptr ? now->schedule->name : "-",
+                          {(aiSpent[0] - parts[0]) / 1e6, (aiSpent[1] - parts[1]) / 1e6, (aiSpent[2] - parts[2]) / 1e6},
+                          static_cast<int>(hostTraceCount - traces), static_cast<int>(hldata::detail::hostLineCount - lines)};
+                worst.push_back(one);
+                std::sort(worst.begin(), worst.end(),
+                          [](const Worst &a, const Worst &b) { return a.ms > b.ms; });
+                if (worst.size() > 12)
+                    worst.pop_back();
             }
             g.drain();
+            while (defer && thinkRunOne(g.logic))
+            {
+            }
         }
+        g.actors.think = nullptr;
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::printf("bench: logic %.3f ms a frame\n", logic / frames);
         for (int i = 0; i < g.actors.count; ++i)
@@ -642,6 +817,11 @@ namespace
             if (byKind[k] > 0)
                 std::printf("bench: kind %d %.3f ms a frame\n", k, byKind[k] / frames);
         }
+        for (const Worst &w : worst)
+            std::printf("bench: worst %d traces %d lines, %.3f ms (look %.3f hear %.3f move %.3f) frame %d actor %d kind %d "
+                        "task %d: %s -> %s\n",
+                        w.traces, w.lines, w.ms, w.part[0], w.part[1], w.part[2], w.frame, w.actor, g.actors.states[w.actor].kind, w.task,
+                        w.before, w.after);
         int thinkers = 0;
         for (int i = 0; i < g.actors.count; ++i)
             thinkers += g.actors.states[i].active && aiFind(g.actors, i) != nullptr;
@@ -718,6 +898,7 @@ int main()
         testScriptInterrupt(valve);
         testSentence(valve);
         testFollowerCrosses(valve);
+        testRevisit(valve);
     }
     if (g_failures == 0)
         std::printf("test_talk: ok\n");

@@ -36,6 +36,7 @@
 #include "HlFields.hpp"
 #include "HlLamp.hpp"
 #include "HlMonsters.hpp"
+#include "HlSave.hpp"
 #include "HlTransition.hpp"
 #include "HlView.hpp"
 
@@ -364,3 +365,67 @@ namespace hldata
 } // namespace hldata
 
 #include "HlAiSave.hpp"
+
+namespace hldata
+{
+    /// What of a map that is left is kept for when it is come back to
+    /// (SaveMapState): what is broken -- and, on the same bits, what is used
+    /// up: a trigger that fires once, a maker that has made all it makes, a
+    /// scene played (a save from before has only the broken; a build from
+    /// before reads only those); and who is gone, picked up or killed, the
+    /// people too. (Not the places a monstermaker keeps: those start empty
+    /// anyway, and a spent maker makes nobody again.)
+    inline void mapRemember(SaveMapState &slot, const LogicWorld &logic, const ActorWorld &actors)
+    {
+        slot.broken.assign((logic.recordCount + 7) / 8, 0);
+        for (int i = 0; i < logic.recordCount; ++i)
+        {
+            if (logic.states[i].dead &&
+                (detail::isBreakable(logic.records[i]) || detail::staysSpent(logic.records[i])))
+                slot.broken[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        }
+        slot.gone.assign((actors.recordCount + 7) / 8, 0);
+        for (int i = 0; i < actors.recordCount; ++i)
+        {
+            const ActorState &actor = actors.states[i];
+            if (actors.records[i].flags & kActorDormant)
+                continue;
+            if (!actor.active || ((fights(actor.kind) || isPerson(actor.kind)) && actor.ai >= kAiDying))
+                slot.gone[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        }
+    }
+
+    /// ... and laid over the map as it starts, come back to.
+    inline void mapRestore(const SaveMapState &map, LogicWorld &logic, ActorWorld &actors)
+    {
+        for (int i = 0; i < logic.recordCount && (i >> 3) < static_cast<int>(map.broken.size()); ++i)
+        {
+            if (!(map.broken[i >> 3] & (1u << (i & 7))))
+                continue;
+            if (detail::staysSpent(logic.records[i]))
+            {
+                // Used up: it does not happen again.
+                logic.states[i].dead = true;
+                logic.states[i].running = false;
+                continue;
+            }
+            // Only what breaks, whatever the file says: a bit against
+            // anything else is ignored.
+            if (!detail::isBreakable(logic.records[i]))
+                continue;
+            logic.states[i].dead = true;
+            if (logic.records[i].brush != kNoBrush)
+                logicSetBrushActive(logic, logic.records[i].brush, false);
+        }
+        for (int i = 0; i < actors.recordCount && (i >> 3) < static_cast<int>(map.gone.size()); ++i)
+        {
+            // Only what can be killed or picked up, whatever the file says.
+            const std::uint8_t kind = actors.records[i].kind;
+            if (!(map.gone[i >> 3] & (1u << (i & 7))) ||
+                !(fights(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Item)))
+                continue;
+            actors.states[i].active = false;
+            actorPlaceBox(actors, i);
+        }
+    }
+} // namespace hldata

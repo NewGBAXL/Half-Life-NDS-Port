@@ -1,7 +1,9 @@
 #include "HlSound.hpp"
 #include "HlSprite.hpp"
 #include "hlds/EntityCook.hpp"
+#include "hlds/MdlFile.hpp"
 
+#include "HlMonsters.hpp"
 #include "HlUi.hpp"
 
 #include <algorithm>
@@ -93,6 +95,7 @@ namespace hlds
             std::string startClip;         ///< the clip it starts in; empty: the model's first
             bool firstSequence = false;
             bool activities = false; ///< every sequence with an activity (HlAi.hpp chooses by them)
+            std::vector<std::uint8_t> dsActivities; ///< ... of which a DS keeps these (ModelNeed)
             bool solid = true;
             ItemKind item = ItemKind::None;
             /// For what a monstermaker makes: how many places are kept for
@@ -333,10 +336,24 @@ namespace hlds
                                (static_cast<int>(numberKey(entity, "spawnflags")) & 4));
             }
             // (The monsters that think as the game's do choose their clips by
-            // what they are for: all of those.)
-            // (People are given the clips their schedules ask for, above.)
-            if (info.is && actorThinks(static_cast<std::uint8_t>(info.kind)) && !isPersonKind(info.kind))
+            // what they are for: on a DSi all of those; on a DS what their
+            // fights need -- not the hound's sleep or the squid's meal, nor
+            // a death or a flinch for each place a blow lands.)
+            // (People are given the clips their schedules ask for, above: the
+            // DS has those; a DSi has every one with an activity besides.)
+            static const std::uint8_t kDsActivities[] = {
+                kActIdle,          kActWalk,          kActRun,           kActRangeAttack1, kActRangeAttack2,
+                kActMeleeAttack1,  kActMeleeAttack2,  kActSpecialAttack1, kActSpecialAttack2, kActSmallFlinch,
+                kActDieSimple,     kActHop,           kActLeap,          kActIdleAngry,    kActSignal1,
+                kActSignal2,       kActSignal3,       kActCower,         kActWalkHurt,     kActRunHurt,
+                kActBarnacleHit,   kActBarnaclePull,  kActBarnacleChomp, kActBarnacleChew, kActArm,
+                kActDisarm};
+            if (info.is && actorThinks(static_cast<std::uint8_t>(info.kind)) && info.kind != ActorKind::Generic)
+            {
                 info.activities = true;
+                if (!isPersonKind(info.kind))
+                    info.dsActivities.assign(std::begin(kDsActivities), std::end(kDsActivities));
+            }
             // Only models, not sprites or brush models given by name.
             if (info.is && (info.file.size() < 5 || info.file.substr(info.file.size() - 4) != ".mdl"))
                 info.is = false;
@@ -386,6 +403,15 @@ namespace hlds
         {
             return cls == "scripted_sequence" || cls == "aiscripted_sequence";
         }
+
+        void addActivities(ModelNeed &need, const std::vector<std::uint8_t> &activities)
+        {
+            for (std::uint8_t activity : activities)
+            {
+                if (std::find(need.dsActivities.begin(), need.dsActivities.end(), activity) == need.dsActivities.end())
+                    need.dsActivities.push_back(activity);
+            }
+        }
     } // namespace
 
     namespace
@@ -402,6 +428,45 @@ namespace hlds
             return file;
         }
     } // namespace
+
+    void modelClips(const MdlFile &mdl, const ModelNeed &need, std::vector<std::string> &ds,
+                    std::vector<std::string> &dsi)
+    {
+        ds.clear();
+        if (need.firstSequence && !mdl.sequences.empty())
+            ds.push_back(mdl.sequences[0].label);
+        ds.insert(ds.end(), need.clips.begin(), need.clips.end());
+        // (A monster that chooses by what clips are for: on a DSi every one
+        // that is for something; on a DS, for what it keeps of those, the
+        // heaviest -- where none of its own clips is for that already.
+        // People keep their own on a DS.)
+        auto held = [&](const std::vector<std::string> &list, const std::string &label)
+        {
+            return std::find_if(list.begin(), list.end(), [&](const std::string &clip)
+                                { return lowered(clip) == lowered(label); }) != list.end();
+        };
+        for (std::uint8_t activity : need.dsActivities)
+        {
+            const MdlSequence *heaviest = nullptr;
+            bool has = false;
+            for (const MdlSequence &seq : mdl.sequences)
+            {
+                if (seq.activity != activity)
+                    continue;
+                has = has || held(ds, seq.label);
+                if (heaviest == nullptr || seq.actWeight > heaviest->actWeight)
+                    heaviest = &seq;
+            }
+            if (heaviest != nullptr && !has)
+                ds.push_back(heaviest->label);
+        }
+        dsi = ds;
+        for (const MdlSequence &seq : mdl.sequences)
+        {
+            if (need.activities && seq.activity != 0 && !held(dsi, seq.label))
+                dsi.push_back(seq.label);
+        }
+    }
 
     bool isMultiplayerMap(const std::vector<Entity> &entities)
     {
@@ -488,6 +553,7 @@ namespace hlds
             ModelNeed &need = needOf(info.file);
             need.firstSequence = need.firstSequence || info.firstSequence;
             need.activities = need.activities || info.activities;
+            addActivities(need, info.dsActivities);
             for (const std::string &clip : info.clips)
                 add(need, clip);
         }
@@ -610,6 +676,7 @@ namespace hlds
             };
             need->firstSequence = need->firstSequence || info.firstSequence;
             need->activities = need->activities || info.activities;
+            addActivities(*need, info.dsActivities);
             for (const std::string &clip : info.clips)
                 add(clip);
             add("walk");
@@ -1597,7 +1664,9 @@ namespace hlds
                 // "triggerstate": 0 off, 1 on, 2 toggle.
                 const int state = static_cast<int>(numberKey(entity, "triggerstate"));
                 record.useType = state == 0 ? kUseOff : (state == 1 ? kUseOn : kUseToggle);
-                if (!automatic && (spawnflags & kRelayFireOnce))
+                // (Both remove themselves on "1": for a trigger_auto that
+                // is only what a map come back to remembers.)
+                if (spawnflags & kRelayFireOnce)
                     record.flags |= kLogicFireOnce;
             }
             else if (isScript(cls))

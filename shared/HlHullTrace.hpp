@@ -194,9 +194,17 @@ namespace hldata
         }
     } // namespace detail
 
+#if !defined(__arm__)
+    /// (The host's count of traces, for the tests' measures of a think.)
+    inline std::uint32_t hostTraceCount = 0;
+#endif
+
     /// Move a point from `start` towards `end` through `hull`.
     HL_HOT Trace traceHull(const Hull &hull, const fx *start, const fx *end)
     {
+#if !defined(__arm__)
+        ++hostTraceCount;
+#endif
         Trace trace;
         for (int i = 0; i < 3; ++i)
             trace.endPos[i] = end[i];
