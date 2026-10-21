@@ -2980,9 +2980,16 @@ namespace hldata
             c.me.ai = kAiLeap;
     }
 
+    inline void aiFlyTick(AiCtx &c, int ms); // (HlAliens.hpp: what flies)
+
     /// Its route walked, a frame of it (Move).
     inline void aiMoveTick(AiCtx &c, int ms)
     {
+        if (c.m.capability & kCapFly)
+        {
+            aiFlyTick(c, ms);
+            return;
+        }
         if (c.m.movementGoal == kMoveGoalNone || c.m.moveWaitFinished > c.ai.now || c.m.inAir)
             return;
         // (MoveExecute: the clip of going.)

@@ -59,6 +59,11 @@ namespace hlrt
         /// instead).
         int thrownModel(int kind) const
         {
+            // (The monsters' snarks and hornets are the player's to look at.)
+            if (kind == hldata::kShotSnarkFoe)
+                kind = hldata::kShotSnark;
+            else if (kind == hldata::kShotHornetFoe)
+                kind = hldata::kShotHornet;
             return kind >= hldata::kShotBolt && kind <= hldata::kShotHornet ? thrown_[kind - hldata::kShotBolt] : -1;
         }
         bool lampLit = false;

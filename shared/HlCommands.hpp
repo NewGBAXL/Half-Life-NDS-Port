@@ -225,6 +225,11 @@ namespace hldata
         {"tripmine", ActorKind::Tripmine},              {"monster_scientist", ActorKind::Scientist},
         {"scientist", ActorKind::Scientist},            {"monster_barney", ActorKind::Guard},
         {"barney", ActorKind::Guard},                   {"guard", ActorKind::Guard},
+        {"monster_cockroach", ActorKind::Cockroach},    {"roach", ActorKind::Cockroach},
+        {"monster_leech", ActorKind::Leech},            {"leech", ActorKind::Leech},
+        {"monster_alien_grunt", ActorKind::AlienGrunt}, {"agrunt", ActorKind::AlienGrunt},
+        {"monster_alien_controller", ActorKind::Controller}, {"controller", ActorKind::Controller},
+        {"monster_snark", ActorKind::Snark},            {"snark", ActorKind::Snark},
     };
     /// ActorKind::Count if there is no such monster.
     inline ActorKind kindOfName(const char *name)

@@ -684,7 +684,8 @@ namespace hlrt
             thing.body = shot.kind == kShotMine ? 3 : 0;
             thing.light = 22;
             thing.clip = model.header->clipCount != 0 ? 0 : -1;
-            if (shot.kind == kShotSnark && thing.clip == 0 && model.clips[0].frameCount > 1)
+            const bool snark = shot.kind == kShotSnark || shot.kind == kShotSnarkFoe;
+            if (snark && thing.clip == 0 && model.clips[0].frameCount > 1)
             {
                 // (Its legs going, at the clip's own rate.)
                 const std::uint32_t whole = static_cast<std::uint32_t>(model.clips[0].frameCount - 1) << 8;
@@ -693,10 +694,11 @@ namespace hlrt
             fx dir[3] = {shot.velocity[0], shot.velocity[1], shot.velocity[2]};
             for (int k = 0; k < 3; ++k)
                 thing.pos[k] = shot.pos[k];
-            if (shot.kind == kShotSatchel || shot.kind == kShotSnark)
+            if (shot.kind == kShotSatchel || snark)
             {
                 dir[2] = 0;
-                thing.pos[2] -= kCrouchedFeet;
+                // (A monstermaker's snark is where its feet are: HlMonsters.hpp.)
+                thing.pos[2] -= shot.kind == kShotSnarkFoe ? fxFromInt(4) : kCrouchedFeet;
             }
             else if (shot.kind == kShotMine)
             {

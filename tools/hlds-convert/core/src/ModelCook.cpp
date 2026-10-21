@@ -2,6 +2,7 @@
 #include "hlds/ModelMesh.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -706,23 +707,37 @@ namespace hlds
             lo[0] = lo[1] = lo[2] = hi[0] = hi[1] = hi[2] = 0;
 
         // ---- the clips
-        std::vector<std::string> wanted;
+        // (By its label; or "@n", the model's n-th sequence, for one whose
+        // label another has too -- both of a roach's are "run".)
+        std::vector<int> wanted;
         for (const std::string &name : clipNames)
         {
             const std::string label = lower(name);
-            if (!label.empty() && std::find(wanted.begin(), wanted.end(), label) == wanted.end())
-                wanted.push_back(label);
-        }
-        std::vector<std::vector<double>> clipFirstZ;
-        for (const std::string &label : wanted)
-        {
-            const int index = mdl.sequenceByName(label);
+            int index = -1;
+            if (label.size() > 1 && label[0] == '@')
+            {
+                index = std::atoi(label.c_str() + 1);
+                if (index < 0 || index >= static_cast<int>(mdl.sequences.size()))
+                    index = -1;
+            }
+            else if (!label.empty())
+            {
+                index = mdl.sequenceByName(label);
+            }
             if (index < 0)
             {
-                report.missingClips.push_back(label);
+                if (!label.empty())
+                    report.missingClips.push_back(label);
                 continue;
             }
+            if (std::find(wanted.begin(), wanted.end(), index) == wanted.end())
+                wanted.push_back(index);
+        }
+        std::vector<std::vector<double>> clipFirstZ;
+        for (const int index : wanted)
+        {
             const MdlSequence &seq = mdl.sequences[index];
+            const std::string label = lower(seq.label);
             std::vector<MdlPose> poses;
             if (!mdl.decode(index, poses, error))
                 return false;

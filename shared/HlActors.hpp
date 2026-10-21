@@ -178,6 +178,20 @@ namespace hldata
     /// A hornet from the hornetgun: `sprite` is 1 for the fast straight
     /// kind, else the homing one; it stings what it meets.
     inline constexpr std::uint8_t kShotHornet = 10;
+    // ... and the monsters' own (HlAliens.hpp): after the player's, on the
+    // player and those on their side.
+    /// A snark a monstermaker made: as the player's, but after the player
+    /// and the people, from the first.
+    inline constexpr std::uint8_t kShotSnarkFoe = 11;
+    /// An alien grunt's hornet: always homing, after the player and the
+    /// people (not the aliens).
+    inline constexpr std::uint8_t kShotHornetFoe = 12;
+    /// A controller's head ball (CControllerHeadBall): slow, homing, a jolt
+    /// when it reaches what it is after.
+    inline constexpr std::uint8_t kShotHeadBall = 13;
+    /// ... and its zap ball (CControllerZapBall): straight, and a jolt where
+    /// it lands.
+    inline constexpr std::uint8_t kShotZapBall = 14;
     /// How many may be in flight at once: all of these on a DSi, half on a
     /// DS (ActorWorld::shotLimit).
     inline constexpr int kMaxProjectiles = 16;
@@ -662,6 +676,9 @@ namespace hldata
         const bool stays = record.kind == static_cast<std::uint8_t>(ActorKind::Cycler) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Tripmine) ||
+                           // (What flies, and what swims, is where it is put.)
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
                            isTurret(record.kind);
         if (stays)
         {

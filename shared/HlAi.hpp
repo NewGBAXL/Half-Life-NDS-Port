@@ -139,6 +139,7 @@ namespace hldata
     inline constexpr std::uint8_t kActWalk = 3;
     inline constexpr std::uint8_t kActRun = 4;
     inline constexpr std::uint8_t kActFly = 5;
+    inline constexpr std::uint8_t kActSwim = 6;
     inline constexpr std::uint8_t kActHop = 7;
     inline constexpr std::uint8_t kActLeap = 8;
     inline constexpr std::uint8_t kActFall = 9;
@@ -148,6 +149,7 @@ namespace hldata
     inline constexpr std::uint8_t kActTurnLeft = 15;
     inline constexpr std::uint8_t kActTurnRight = 16;
     inline constexpr std::uint8_t kActCrouch = 17;
+    inline constexpr std::uint8_t kActThreatDisplay = 57;
     inline constexpr std::uint8_t kActCrouchIdle = 18;
     inline constexpr std::uint8_t kActStand = 19;
     inline constexpr std::uint8_t kActSignal1 = 21;
@@ -369,6 +371,10 @@ namespace hldata
     inline constexpr std::uint16_t kSlotHoundAttack2 = 1u << 8;
     inline constexpr std::uint16_t kSlotHoundAttack3 = 1u << 9;
     inline constexpr std::uint16_t kSlotsHoundAttack = kSlotHoundAttack1 | kSlotHoundAttack2 | kSlotHoundAttack3;
+    inline constexpr std::uint16_t kSlotAgruntHornet1 = 1u << 4;
+    inline constexpr std::uint16_t kSlotAgruntHornet2 = 1u << 5;
+    inline constexpr std::uint16_t kSlotsAgruntHornet = kSlotAgruntHornet1 | kSlotAgruntHornet2;
+    inline constexpr std::uint16_t kSlotAgruntChase = 1u << 6;
     inline constexpr std::uint16_t kSlotSquadSplit = 1u << 10;
     inline constexpr int kSquadSlotCount = 11;
     inline constexpr int kMaxSquadMembers = 5;

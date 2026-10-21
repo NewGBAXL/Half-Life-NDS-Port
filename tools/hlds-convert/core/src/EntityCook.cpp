@@ -65,7 +65,8 @@ namespace hlds
                 "ammo_mp5grenades", "ammo_357", "monster_human_grunt", "monster_hgrunt_dead",
                 "monster_tripmine", "weapon_crossbow", "ammo_crossbow", "weapon_satchel", "weapon_tripmine",
                 "weapon_snark", "weapon_rpg", "ammo_rpgclip", "weapon_gauss", "ammo_gaussclip", "ammo_egonclip",
-                "weapon_egon", "weapon_hornetgun", "weaponbox"};
+                "weapon_egon", "weapon_hornetgun", "weaponbox", "monster_cockroach", "monster_leech",
+                "monster_alien_grunt", "monster_alien_controller", "monster_snark"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -226,6 +227,34 @@ namespace hlds
             {
                 info = {true, ActorKind::Houndeye, "models/houndeye.mdl",
                         {"idle1", "run", "attack", "flinch_small", "die", "madidle"}, "idle1"};
+            }
+            // Round 3 (HlAliens.hpp): what they play by name, besides what
+            // their activities give them (kDsActivities, below).
+            else if (cls == "monster_cockroach")
+            {
+                info = {true, ActorKind::Cockroach, "models/roach.mdl", {}, ""};
+                info.firstSequence = true;
+                info.solid = false; // (stepped on, not walked into)
+            }
+            else if (cls == "monster_leech")
+            {
+                info = {true, ActorKind::Leech, "models/leech.mdl", {"swim", "attack", "death"}, "swim"};
+                info.solid = false;
+            }
+            else if (cls == "monster_alien_grunt")
+            {
+                info = {true, ActorKind::AlienGrunt, "models/agrunt.mdl", {"idle1", "walk", "run", "diesimple"},
+                        "idle1"};
+            }
+            else if (cls == "monster_alien_controller")
+            {
+                info = {true, ActorKind::Controller, "models/controller.mdl",
+                        {"float", "forward", "backward", "up", "down", "fall", "die1"}, "float"};
+            }
+            else if (cls == "monster_snark")
+            {
+                info = {true, ActorKind::Snark, "models/w_squeak.mdl", {"run", "jump"}, "run"};
+                info.solid = false;
             }
             else if (cls == "monster_miniturret" || cls == "monster_sentry" || cls == "monster_turret")
             {
@@ -445,6 +474,15 @@ namespace hlds
             return std::find_if(list.begin(), list.end(), [&](const std::string &clip)
                                 { return lowered(clip) == lowered(label); }) != list.end();
         };
+        // (A sequence asked for by its place, "@n", where another has its
+        // label: a roach's two are both "run" -- ModelCook.cpp.)
+        auto nameOf = [&](const MdlSequence &seq)
+        {
+            int same = 0;
+            for (const MdlSequence &other : mdl.sequences)
+                same += lowered(other.label) == lowered(seq.label) ? 1 : 0;
+            return same > 1 ? "@" + std::to_string(&seq - mdl.sequences.data()) : seq.label;
+        };
         for (std::uint8_t activity : need.dsActivities)
         {
             const MdlSequence *heaviest = nullptr;
@@ -453,18 +491,18 @@ namespace hlds
             {
                 if (seq.activity != activity)
                     continue;
-                has = has || held(ds, seq.label);
+                has = has || held(ds, nameOf(seq));
                 if (heaviest == nullptr || seq.actWeight > heaviest->actWeight)
                     heaviest = &seq;
             }
             if (heaviest != nullptr && !has)
-                ds.push_back(heaviest->label);
+                ds.push_back(nameOf(*heaviest));
         }
         dsi = ds;
         for (const MdlSequence &seq : mdl.sequences)
         {
-            if (need.activities && seq.activity != 0 && !held(dsi, seq.label))
-                dsi.push_back(seq.label);
+            if (need.activities && seq.activity != 0 && !held(dsi, nameOf(seq)))
+                dsi.push_back(nameOf(seq));
         }
     }
 
@@ -569,7 +607,8 @@ namespace hlds
                 people = true;
             else if (info.is && (info.kind == ActorKind::Headcrab || info.kind == ActorKind::Zombie ||
                                  info.kind == ActorKind::Barnacle || info.kind == ActorKind::Slave ||
-                                 info.kind == ActorKind::Bullsquid || info.kind == ActorKind::Houndeye))
+                                 info.kind == ActorKind::Bullsquid || info.kind == ActorKind::Houndeye ||
+                                 info.kind == ActorKind::AlienGrunt || info.kind == ActorKind::Controller))
                 aliens = true;
             const std::string cls(entity.className());
             const std::string thrown = cls == "gibshooter" ? "models/hgibs.mdl"
@@ -595,6 +634,16 @@ namespace hlds
         }
         if (aliens)
             needOf("models/agibs.mdl").firstSequence = true;
+        // (What an alien grunt's gun sends, and a monstermaker's snark --
+        // the player's to look at: HlAliens.hpp.)
+        for (const Entity &entity : entities)
+        {
+            const ActorInfo info = actorOf(entity);
+            if (info.is && info.kind == ActorKind::AlienGrunt)
+                needOf("models/hornet.mdl").firstSequence = true;
+            if (info.is && info.kind == ActorKind::Snark)
+                add(needOf("models/w_squeak.mdl"), "run");
+        }
         if (people)
             needOf("models/hgibs.mdl").firstSequence = true;
         // What the scripts have their actors do: an actor by name, or every
@@ -2368,14 +2417,19 @@ namespace hlds
         // all the rest, and those of the last ones after even those, so that
         // every other actor is where a save made before they were says it
         // is.)
-        for (int round = 0; round < 3; ++round)
+        // (In rounds, each after all of the one before: what each version of
+        // the format added comes after everything that was there before it,
+        // so an actor a save points at keeps its place -- the later items,
+        // then the last ones, then round 3's monsters.)
+        for (int round = 0; round < 4; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
             const ActorInfo info = actorOf(entity);
             if (!info.is)
                 continue;
-            const int itemRound = info.item == ItemKind::None ? 0
+            const int itemRound = info.item == ItemKind::None
+                                      ? (static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Cockroach) ? 3 : 0)
                                   : static_cast<int>(info.item) >= static_cast<int>(kItemFirstLast) ? 2
                                   : static_cast<int>(info.item) >= static_cast<int>(kItemFirstMore) ? 1
                                                                                                      : 0;
@@ -2809,6 +2863,23 @@ namespace hlds
                     use(CommonSound::Launcher, CommonSound::Launcher);
                 soldiers = true;
             }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cockroach))
+                use(CommonSound::RoachWalk, CommonSound::RoachDie);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Leech))
+                use(CommonSound::LeechBite, CommonSound::LeechAlert);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt))
+            {
+                use(CommonSound::AgruntIdle1, CommonSound::AgruntDie2);
+                use(CommonSound::HornetFire1, CommonSound::HornetHit3);
+                use(CommonSound::ClawStrike, CommonSound::ClawMiss);
+            }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Controller))
+            {
+                use(CommonSound::ControllerIdle, CommonSound::ControllerDie);
+                use(CommonSound::Electro4, CommonSound::Electro4);
+            }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Snark))
+                use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
         }
         // What the people say (the game's talkmonster groups): for each voice
         // whose model the map has (its own people, and those who may come in

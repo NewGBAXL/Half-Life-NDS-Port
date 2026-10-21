@@ -52,13 +52,14 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 32;
+    inline constexpr std::uint16_t kLevelVersion = 33;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
     /// say, after the soldiers' table in Section::Speech, which a build
-    /// before would refuse.)
-    inline constexpr std::uint16_t kLevelMinReader = 32;
+    /// before would refuse; 33: the round 3 monsters, kinds a build before
+    /// has not got.)
+    inline constexpr std::uint16_t kLevelMinReader = 33;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -67,6 +68,9 @@ namespace hldata
     /// the last four weapons and the weaponbox (items cooked after even
     /// those, sounds after theirs: commonsOf), 31 -> 32 what the people say
     /// and a guard's pistol to drop (an item cooked after all of those),
+    /// 32 -> 33 the cockroach, leech, alien grunt, controller and snark
+    /// (cooked after every other actor; their sounds after the others) and
+    /// the nodes in the air (after those on the ground and in the water),
     /// none that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
@@ -761,6 +765,13 @@ namespace hldata
         /// Another player, in a game between consoles (HlNetGame.hpp): not
         /// in any map; put where their own console says they are.
         Player,
+        // Round 3 of the monsters (HlAliens.hpp). (After all the others: a
+        // kind's number is in the levels.)
+        Cockroach,  ///< runs from light and feet, eats what lies about
+        Leech,      ///< swims its water and bites what comes into it
+        AlienGrunt, ///< the hornet gun, and big fists
+        Controller, ///< flies; throws balls of energy
+        Snark,      ///< a monstermaker's: hunts, bites, bursts
         Count
     };
 
@@ -788,6 +799,11 @@ namespace hldata
         case ActorKind::Sitter:
         case ActorKind::Gman:
         case ActorKind::Generic:
+        case ActorKind::Cockroach:
+        case ActorKind::Leech:
+        case ActorKind::AlienGrunt:
+        case ActorKind::Controller:
+        case ActorKind::Snark:
             return true;
         default:
             return false;
@@ -1109,6 +1125,8 @@ namespace hldata
     };
     static_assert(sizeof(PathNode) == 16);
     inline constexpr std::uint8_t kPathNodeWater = 1; ///< under water
+    /// In the air: for what flies only (a map with an alien controller).
+    inline constexpr std::uint8_t kPathNodeAir = 2;
     inline constexpr std::uint8_t kNoPathNode = 255;
     inline constexpr int kMaxPathNodes = 254;
     /// A way from one node to another: who can take it (by size), how long
@@ -1135,6 +1153,8 @@ namespace hldata
     inline constexpr std::uint8_t kPathLinkLarge = 4; ///< for what is 64 across (a bullsquid)
     /// One way only: off a ledge, down to the node below.
     inline constexpr std::uint8_t kPathLinkDrop = 8;
+    /// For what flies (on a map that has something that does).
+    inline constexpr std::uint8_t kPathLinkFly = 16;
 
     /// A person or a prop that is a model: where it starts and as what.
     struct ActorRecord

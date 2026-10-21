@@ -35,6 +35,11 @@ namespace hldata
     inline int drawClass(const ActorState &actor)
     {
         const bool dead = actor.ai == kAiDead;
+        // (A roach or a leech is a few pixels: the first to go, not an
+        // enemy that never is.)
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cockroach) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Leech))
+            return kDrawProp;
         if (fights(actor.kind))
             return dead ? kDrawProp : kDrawEnemy;
         // (Another player is never left out either: they shoot back.)

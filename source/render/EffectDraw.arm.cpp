@@ -917,6 +917,21 @@ namespace hlrt
                     beam(*ref, 0, tail, shot.pos, 2);
             }
         }
+        else if (shot.kind == kShotHeadBall || shot.kind == kShotZapBall)
+        {
+            // A controller's ball of energy: a glow, the head ball the
+            // larger (HlAliens.hpp).
+            const int size = shot.kind == kShotHeadBall ? 12 : 8;
+            if (const SpriteRef *ref = sprite(CommonSprite::Glow, 31, RGB15(31, 24, 12)))
+                picture(*ref, static_cast<int>(Global::vblanks() / 4 % ref->frames), shot.pos, camera.right,
+                        camera.up, size, size);
+            else
+            {
+                GFX_TEX_FORMAT = 0;
+                look(31, 0, RGB15(31, 24, 12));
+                square(shot.pos, camera.right, camera.up, size / 2);
+            }
+        }
         else if (shot.kind == kShotMine)
         {
             // A tripmine the player put on a wall, and its beam once it is on.
@@ -945,10 +960,11 @@ namespace hlrt
             GFX_TEX_FORMAT = 0;
             const std::uint16_t colour = shot.kind == kShotGib       ? RGB15(7, 6, 5)
                                          : shot.kind == kShotSatchel ? RGB15(9, 7, 4)
-                                         : shot.kind == kShotSnark   ? RGB15(16, 6, 4)
+                                         : shot.kind == kShotSnark || shot.kind == kShotSnarkFoe ? RGB15(16, 6, 4)
                                                                      : RGB15(6, 9, 5);
             look(31, 0, colour);
-            square(shot.pos, camera.right, camera.up, shot.kind == kShotSatchel || shot.kind == kShotSnark ? 4 : 3);
+            square(shot.pos, camera.right, camera.up,
+                   shot.kind == kShotSatchel || shot.kind == kShotSnark || shot.kind == kShotSnarkFoe ? 4 : 3);
         }
     
     }

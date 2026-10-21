@@ -62,7 +62,12 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
                kind == static_cast<std::uint8_t>(ActorKind::Slave) ||
                kind == static_cast<std::uint8_t>(ActorKind::Bullsquid) ||
-               kind == static_cast<std::uint8_t>(ActorKind::Houndeye);
+               kind == static_cast<std::uint8_t>(ActorKind::Houndeye) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Cockroach) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
+               kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Snark);
     }
 
     inline bool isGrunt(std::uint8_t kind)
@@ -137,6 +142,30 @@ namespace hldata
         // (The people, and whatever stands as one: the human hull.)
         static const MonsterKind kPerson = {20, false, fxFromInt(16), fxFromInt(72), fxFromInt(150),
                                             "idle1", "run", "flinch", "diesimple"};
+        // Round 3 (HlAliens.hpp). (The roach, the leech and the snark are a
+        // few units across in the game -- too small to be shot at all on a
+        // console's screen: a little more here.)
+        // (Both of the roach's clips are called "run" in its model: it plays
+        // them by what they are for, idle and walk.)
+        static const MonsterKind kCockroach = {1, true, fxFromInt(4), fxFromInt(4), fxFromInt(60),
+                                               "run", "run", "run", "run"};
+        static const MonsterKind kLeech = {2, true, fxFromInt(6), fxFromInt(6), fxFromInt(100),
+                                           "swim", "swim", "swim", "death"};
+        static const MonsterKind kAlienGrunt = {90, false, fxFromInt(32), fxFromInt(64), fxFromInt(150),
+                                                "idle1", "run", "smallflinch", "diesimple"};
+        static const MonsterKind kController = {60, false, fxFromInt(32), fxFromInt(64), fxFromInt(150),
+                                                "float", "run", "flinch1", "die1"};
+        static const MonsterKind kSnark = {2, true, fxFromInt(6), fxFromInt(8), fxFromInt(300),
+                                           "run", "run", "run", "run"};
+        switch (static_cast<ActorKind>(kind))
+        {
+        case ActorKind::Cockroach:  return kCockroach;
+        case ActorKind::Leech:      return kLeech;
+        case ActorKind::AlienGrunt: return kAlienGrunt;
+        case ActorKind::Controller: return kController;
+        case ActorKind::Snark:      return kSnark;
+        default:                    break;
+        }
         if (kind == static_cast<std::uint8_t>(ActorKind::Grunt))
             return kGrunt;
         if (isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Gman) ||
@@ -182,7 +211,11 @@ namespace hldata
     /// The size a kind walks about as (HlWalk.hpp kWalk*).
     inline int monsterHull(std::uint8_t kind)
     {
-        if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid))
+        // (The alien grunt and the controller are as wide as the squid, the
+        // game's 64.)
+        if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid) ||
+            kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt) ||
+            kind == static_cast<std::uint8_t>(ActorKind::Controller))
             return kWalkLarge;
         return monsterKind(kind).small ? kWalkCrouched : kWalkStanding;
     }
@@ -248,6 +281,33 @@ namespace hldata
             default:                   row = 0; break;
             }
             monsterSound(w, actor, kVoices[row][which]);
+        }
+
+        /// A line through the world and its brushes as a Trace: where it got
+        /// to (a sixteenth of a unit short of what it met), and which way
+        /// that faces.
+        inline Trace pointTrace(const MoveWorld &world, const fx *from, const fx *to)
+        {
+            Trace t;
+            t.allSolid = false;
+            const Shot shot = traceShot(world, from, to);
+            t.fraction = shot.fraction;
+            const fx d[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
+            const fx far = fxLength(d);
+            for (int i = 0; i < 3; ++i)
+            {
+                t.endPos[i] = from[i] + static_cast<fx>((static_cast<std::int64_t>(d[i]) * shot.fraction) >> kFractionShift);
+                if (shot.fraction < kFractionOne && far > 0)
+                    t.endPos[i] -= static_cast<fx>((static_cast<std::int64_t>(d[i]) * (kFxOne / 16)) / far);
+            }
+            if (shot.fraction < kFractionOne)
+            {
+                fx at[3], normal[3];
+                t.hit = traceShotWall(world, from, to, at, normal);
+                for (int i = 0; t.hit && i < 3; ++i)
+                    t.normal[i] = normal[i] << (kNormalShift - kFxShift);
+            }
+            return t;
         }
 
         inline std::uint32_t chance(ActorWorld &a)
@@ -1156,8 +1216,11 @@ namespace hldata
                     }
                     continue;
                 }
-                if (shot.kind == kShotSnark)
+                if (shot.kind == kShotSnark || shot.kind == kShotSnarkFoe)
                 {
+                    // (A monstermaker's is after the player and their side
+                    // from the first; the player's, after what fights.)
+                    const bool foe = shot.kind == kShotSnarkFoe;
                     // Its time is up: it bursts, the harder for each bite.
                     if (shot.leftMs <= 0)
                     {
@@ -1181,8 +1244,9 @@ namespace hldata
                     for (int i = 0; i < a.count; ++i)
                     {
                         const ActorState &actor = a.states[i];
-                        if (!actor.active || !fights(actor.kind) || isMine(actor.kind) || isTurret(actor.kind) ||
-                            actor.ai >= kAiDying)
+                        if (!actor.active || actor.ai >= kAiDying ||
+                            (foe ? !(isPerson(actor.kind) || isGrunt(actor.kind))
+                                 : (!fights(actor.kind) || isMine(actor.kind) || isTurret(actor.kind))))
                             continue;
                         const fx d[3] = {actor.pos[0] - shot.pos[0], actor.pos[1] - shot.pos[1],
                                          actor.pos[2] + fxFromInt(16) - shot.pos[2]};
@@ -1198,7 +1262,7 @@ namespace hldata
                             goal[k] = at[k];
                     }
                     bool atPlayer = false;
-                    if (target < 0 && shot.leftMs < 13500 && player.health > 0 && !unseen(player))
+                    if ((target < 0 || foe) && (foe || shot.leftMs < 13500) && player.health > 0 && !unseen(player))
                     {
                         const fx d[3] = {player.origin[0] - shot.pos[0], player.origin[1] - shot.pos[1],
                                          player.origin[2] - shot.pos[2]};
@@ -1206,6 +1270,7 @@ namespace hldata
                             traceShot(*w.world, shot.pos, player.origin).fraction >= kFractionOne)
                         {
                             atPlayer = true;
+                            target = -1; // (the nearer of the two)
                             for (int k = 0; k < 3; ++k)
                                 goal[k] = player.origin[k];
                         }
@@ -1259,7 +1324,10 @@ namespace hldata
                     fx to[3];
                     for (int i = 0; i < 3; ++i)
                         to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
-                    const Trace t = traceAll(*w.world, true, shot.pos, to);
+                    // (A monstermaker's goes as the game's does: a few units
+                    // across, a point -- out of the vents a person's box never
+                    // fits; the player's, as a crouching person's box.)
+                    const Trace t = foe ? detail::pointTrace(*w.world, shot.pos, to) : traceAll(*w.world, true, shot.pos, to);
                     if (!t.startSolid && t.fraction < kFractionOne)
                     {
                         for (int i = 0; i < 3; ++i)
@@ -1309,9 +1377,19 @@ namespace hldata
                         shot.pos[i] = t.startSolid ? shot.pos[i] : to[i];
                     continue;
                 }
-                if (shot.kind == kShotRocket || shot.kind == kShotHornet)
+                if (shot.kind == kShotRocket || shot.kind == kShotHornet || shot.kind == kShotHornetFoe)
                 {
                     const bool rocket = shot.kind == kShotRocket;
+                    // (An alien grunt's: always homing, at 600 -- 800 for
+                    // the orange kind, `sprite` 2 -- after the player and
+                    // their side, never the aliens.)
+                    const bool foe = shot.kind == kShotHornetFoe;
+                    auto prey = [&](const ActorState &actor)
+                    {
+                        return actor.active && actor.ai < kAiDying &&
+                               (foe ? (isPerson(actor.kind) || isGrunt(actor.kind))
+                                    : (fights(actor.kind) && !isTurret(actor.kind) && !isMine(actor.kind)));
+                    };
                     // The rocket: a moment at half the world's pull, then lit
                     // -- and faster, up to 2000, along where it goes. (Its
                     // steering is the RPG's, while it is in hand: weaponsTick.)
@@ -1339,18 +1417,31 @@ namespace hldata
                             }
                         }
                     }
-                    else if (shot.sprite == 0)
+                    else if (shot.sprite == 0 || foe)
                     {
                         // A homing hornet: after the nearest that fights within
                         // 512 that it can see, at 600; and buzzing.
                         int best = -1;
-                        std::int64_t nearest = static_cast<std::int64_t>(fxFromInt(512)) * fxFromInt(512);
+                        const fx sight = fxFromInt(foe ? 1024 : 512);
+                        std::int64_t nearest = static_cast<std::int64_t>(sight) * sight;
                         fx goal[3] = {0, 0, 0};
+                        if (foe && player.health > 0 && !unseen(player))
+                        {
+                            const fx d[3] = {player.origin[0] - shot.pos[0], player.origin[1] - shot.pos[1],
+                                             player.origin[2] - shot.pos[2]};
+                            const std::int64_t far = static_cast<std::int64_t>(fxLength(d)) * fxLength(d);
+                            if (far < nearest && traceShot(*w.world, shot.pos, player.origin).fraction >= kFractionOne)
+                            {
+                                nearest = far;
+                                best = a.count; // (the player)
+                                for (int k = 0; k < 3; ++k)
+                                    goal[k] = player.origin[k];
+                            }
+                        }
                         for (int i = 0; i < a.count; ++i)
                         {
                             const ActorState &actor = a.states[i];
-                            if (!actor.active || !fights(actor.kind) || isTurret(actor.kind) || isMine(actor.kind) ||
-                                actor.ai >= kAiDying)
+                            if (!prey(actor))
                                 continue;
                             const fx at[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(24)};
                             const fx d[3] = {at[0] - shot.pos[0], at[1] - shot.pos[1], at[2] - shot.pos[2]};
@@ -1368,9 +1459,10 @@ namespace hldata
                             const fx far = fxLength(d);
                             // (Turned most of the way a tenth of a second.)
                             const int keep = ms >= 100 ? 0 : 1024 - (ms * 819) / 100;
+                            const int speed = foe && shot.sprite == 2 ? 800 : 600;
                             for (int i = 0; far > 0 && i < 3; ++i)
                             {
-                                const fx want = static_cast<fx>((static_cast<std::int64_t>(d[i]) * 600) / (far >> kFxShift > 0 ? far >> kFxShift : 1));
+                                const fx want = static_cast<fx>((static_cast<std::int64_t>(d[i]) * speed) / (far >> kFxShift > 0 ? far >> kFxShift : 1));
                                 shot.velocity[i] = static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * keep +
                                                                     static_cast<std::int64_t>(want) * (1024 - keep)) >> 10);
                             }
@@ -1388,7 +1480,8 @@ namespace hldata
                     for (int i = 0; i < a.count; ++i)
                     {
                         const ActorState &actor = a.states[i];
-                        if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying)
+                        if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying ||
+                            (foe && !(isPerson(actor.kind) || isGrunt(actor.kind))))
                             continue;
                         fx mins[3], maxs[3];
                         targetBox(actor, mins, maxs);
@@ -1398,6 +1491,17 @@ namespace hldata
                             reach = enter;
                             struck = i;
                         }
+                    }
+                    if (foe && player.health > 0 && playerTouchesBox(player, to, to, fxFromInt(4)))
+                    {
+                        // (The player stung: hornet.cpp's monDmgHornet.)
+                        shot.active = false;
+                        playerHurt(player, 5, shot.pos);
+                        a.got |= kGotHurt;
+                        if (w.heard != nullptr)
+                            w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
+                                         shot.pos, 100, kRadiusSmall);
+                        continue;
                     }
                     for (int i = 0; i < 3; ++i)
                         shot.pos[i] += static_cast<fx>((static_cast<std::int64_t>(to[i] - shot.pos[i]) * reach) >> kFractionShift);
@@ -1413,7 +1517,7 @@ namespace hldata
                     {
                         // A sting.
                         shot.active = false;
-                        monsterHurt(w, struck, 7, false);
+                        monsterHurt(w, struck, foe ? 5 : 7, false);
                         if (w.heard != nullptr)
                             w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
                                          shot.pos, 100, kRadiusSmall);
@@ -1421,6 +1525,140 @@ namespace hldata
                     }
                     if (!rocket && (line.fraction < kFractionOne || shot.leftMs <= 0))
                         shot.active = false; // (into a wall, or its time up)
+                    continue;
+                }
+                if (shot.kind == kShotHeadBall || shot.kind == kShotZapBall)
+                {
+                    // A controller's (HlAliens.hpp): after the player and
+                    // their side -- the nearest, within 1024, that it can see.
+                    const bool head = shot.kind == kShotHeadBall;
+                    int target = -1; // (a.count: the player)
+                    fx goal[3] = {0, 0, 0};
+                    std::int64_t nearest = static_cast<std::int64_t>(fxFromInt(1024)) * fxFromInt(1024);
+                    if (player.health > 0 && !unseen(player))
+                    {
+                        const fx d[3] = {player.origin[0] - shot.pos[0], player.origin[1] - shot.pos[1],
+                                         player.origin[2] - shot.pos[2]};
+                        const std::int64_t far = static_cast<std::int64_t>(fxLength(d)) * fxLength(d);
+                        if (far < nearest)
+                        {
+                            nearest = far;
+                            target = a.count;
+                            for (int k = 0; k < 3; ++k)
+                                goal[k] = player.origin[k];
+                        }
+                    }
+                    for (int i = 0; head && i < a.count; ++i)
+                    {
+                        const ActorState &actor = a.states[i];
+                        if (!actor.active || actor.ai >= kAiDying || !(isPerson(actor.kind) || isGrunt(actor.kind)))
+                            continue;
+                        const fx at[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36)};
+                        const fx d[3] = {at[0] - shot.pos[0], at[1] - shot.pos[1], at[2] - shot.pos[2]};
+                        const std::int64_t far = static_cast<std::int64_t>(fxLength(d)) * fxLength(d);
+                        if (far >= nearest)
+                            continue;
+                        nearest = far;
+                        target = i;
+                        for (int k = 0; k < 3; ++k)
+                            goal[k] = at[k];
+                    }
+                    auto jolt = [&](int whom, int damage, std::uint32_t type)
+                    {
+                        if (whom == a.count)
+                        {
+                            playerHurt(player, damage, shot.pos);
+                            a.got |= kGotHurt;
+                        }
+                        else if (whom >= 0)
+                        {
+                            monsterHurt(w, whom, damage, false, kHitGeneric, type, kAiNone, shot.pos);
+                        }
+                        if (w.heard != nullptr)
+                            w.heard->add(CommonSound::Electro4, shot.pos, head ? 64 : 40, kRadiusSmall);
+                    };
+                    if (head)
+                    {
+                        // MovetoTarget: what it had, at most 400, and a
+                        // hundred more towards what it is after, ten times a
+                        // second; within 64, a jolt, and it is done.
+                        if (target >= 0)
+                        {
+                            const fx d[3] = {goal[0] - shot.pos[0], goal[1] - shot.pos[1], goal[2] - shot.pos[2]};
+                            const fx far = fxLength(d);
+                            if (far < fxFromInt(64))
+                            {
+                                effectAdd(a, kEffectBolt, shot.pos, goal, 0, 300);
+                                jolt(target, 25, kDmgShock); // (sk_controller_dmgzap)
+                                shot.active = false;
+                                continue;
+                            }
+                            const fx speed = fxLength(shot.velocity);
+                            if (speed > fxFromInt(400))
+                                for (int k = 0; k < 3; ++k)
+                                    shot.velocity[k] = static_cast<fx>((static_cast<std::int64_t>(shot.velocity[k]) * fxFromInt(400)) / speed);
+                            for (int k = 0; far > 0 && k < 3; ++k)
+                                shot.velocity[k] += static_cast<fx>((static_cast<std::int64_t>(d[k]) * 100 * ms) / (100 * (far >> kFxShift > 0 ? far >> kFxShift : 1)));
+                        }
+                        else if (shot.leftMs > 300)
+                        {
+                            shot.leftMs = 300; // (nothing to go for: it fades)
+                        }
+                    }
+                    if (shot.leftMs <= 0)
+                    {
+                        shot.active = false;
+                        continue;
+                    }
+                    fx to[3];
+                    for (int i = 0; i < 3; ++i)
+                        to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
+                    if (!head)
+                    {
+                        // ExplodeTouch: what it runs into, a little hurt.
+                        int struck = -1;
+                        const Shot line = traceShot(*w.world, shot.pos, to);
+                        std::int64_t reach = line.fraction;
+                        for (int i = 0; i < a.count; ++i)
+                        {
+                            const ActorState &actor = a.states[i];
+                            if (!actor.active || actor.ai >= kAiDying || !(isPerson(actor.kind) || isGrunt(actor.kind)))
+                                continue;
+                            fx mins[3], maxs[3];
+                            targetBox(actor, mins, maxs);
+                            std::int64_t enter;
+                            if (lineEntersBox(shot.pos, to, mins, maxs, enter) && enter < reach)
+                            {
+                                reach = enter;
+                                struck = i;
+                            }
+                        }
+                        if (player.health > 0 && playerTouchesBox(player, to, to, fxFromInt(2)))
+                            struck = a.count;
+                        if (struck >= 0 || line.fraction < kFractionOne)
+                        {
+                            if (struck >= 0)
+                                jolt(struck, 4, kDmgEnergyBeam); // (sk_controller_dmgball)
+                            shot.active = false;
+                            continue;
+                        }
+                        for (int i = 0; i < 3; ++i)
+                            shot.pos[i] = to[i];
+                        continue;
+                    }
+                    // (The head ball off a wall: BounceTouch.)
+                    const Trace t = detail::pointTrace(*w.world, shot.pos, to);
+                    if (t.fraction < kFractionOne && t.hit)
+                    {
+                        std::int64_t into = 0;
+                        for (int i = 0; i < 3; ++i)
+                            into += static_cast<std::int64_t>(shot.velocity[i]) * t.normal[i];
+                        into >>= kNormalShift;
+                        for (int i = 0; i < 3; ++i)
+                            shot.velocity[i] -= static_cast<fx>((into * t.normal[i] * 2) >> kNormalShift);
+                    }
+                    for (int i = 0; i < 3; ++i)
+                        shot.pos[i] = t.endPos[i];
                     continue;
                 }
                 if (shot.kind == kShotContact)
@@ -4243,4 +4481,5 @@ namespace hldata
 #include "HlGrunt.hpp"
 #include "HlAiTalk.hpp"
 #include "HlAiPeople.hpp"
+#include "HlAliens.hpp"
 #include "HlPeople.hpp"

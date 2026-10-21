@@ -536,12 +536,15 @@ namespace hldata
     /// The path node to make for from `feet`: the nearest that can be seen
     /// from there, of the three nearest; -1 if there is none.
     inline int pathNearest(const ActorWorld &a, const MoveWorld &world, const fx *feet, int hull = -1,
-                           int index = -1)
+                           int index = -1, bool air = false)
     {
         int best[3] = {-1, -1, -1};
         fx bestD[3] = {0, 0, 0};
         for (int n = 0; n < a.nodeCount; ++n)
         {
+            // (The nodes in the air are for what flies: `air`.)
+            if ((a.nodes[n].flags & kPathNodeAir) && !air)
+                continue;
             const fx d[3] = {a.nodes[n].pos[0] - feet[0], a.nodes[n].pos[1] - feet[1],
                              a.nodes[n].pos[2] - feet[2]};
             // (Height counts double: the node on the floor above is not near.)

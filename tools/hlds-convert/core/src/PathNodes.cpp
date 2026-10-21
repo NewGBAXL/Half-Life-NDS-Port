@@ -59,11 +59,21 @@ namespace hlds
         for (std::size_t b = 0; b < level.brushes.size(); ++b)
             brushOfModel[level.brushes[b].model] = static_cast<std::uint16_t>(b);
 
+        // A map with something that flies (an alien controller, placed or
+        // made) has the nodes in the air too, and the ways that only what
+        // flies takes -- after all the rest, where there is still room.
+        bool fliers = false;
+        for (const Entity &entity : entities)
+        {
+            const std::string cls(entity.className());
+            fliers = fliers || cls == "monster_alien_controller" ||
+                     (cls == "monstermaker" && std::string(entity.value("monstertype")) == "monster_alien_controller");
+        }
         if (graph != nullptr && !graph->nodes.empty())
         {
-            // The game's own: its nodes on the ground and in the water (what
-            // is in the air is for what flies, and nothing here does), in its
-            // order; and its links for what walks.
+            // The game's own: its nodes on the ground and in the water (and
+            // in the air, for what flies: above), in its order; and its links
+            // for what walks (and flies).
             report.fromGraph = true;
             std::vector<int> ours(graph->nodes.size(), -1);
             // (More than the format holds: those nothing walks to or from
@@ -74,20 +84,23 @@ namespace hlds
                 if (link.info & (kNodSmall | kNodHuman | kNodLarge))
                     walked[link.from] = walked[link.to] = 1;
             }
-            for (int pass = 0; pass < 2; ++pass)
+            for (int pass = 0; pass < 3; ++pass)
             {
                 for (std::size_t n = 0; n < graph->nodes.size(); ++n)
                 {
                     const NodNode &src = graph->nodes[n];
-                    if (ours[n] >= 0 || (src.info & kNodAir) || !(src.info & (kNodLand | kNodWater)) ||
-                        (pass == 0) != (walked[n] != 0))
+                    const bool air = (src.info & kNodAir) != 0;
+                    if (ours[n] >= 0)
+                        continue;
+                    if (pass == 2 ? !(air && fliers)
+                                  : (air || !(src.info & (kNodLand | kNodWater)) || (pass == 0) != (walked[n] != 0)))
                         continue;
                     if (level.pathNodes.size() >= static_cast<std::size_t>(kMaxPathNodes))
                         continue;
                     PathNode node{};
                     for (int a = 0; a < 3; ++a)
                         node.pos[a] = fxFromDouble(src.origin[a]);
-                    node.flags = (src.info & kNodWater) ? kPathNodeWater : 0;
+                    node.flags = (src.info & kNodWater) ? kPathNodeWater : (air ? kPathNodeAir : 0);
                     ours[n] = static_cast<int>(level.pathNodes.size());
                     level.pathNodes.push_back(node);
                 }
@@ -109,8 +122,10 @@ namespace hlds
                     way.flags |= kPathLinkHuman;
                 if (link.info & kNodLarge)
                     way.flags |= kPathLinkLarge;
+                if ((link.info & kNodFly) && fliers)
+                    way.flags |= kPathLinkFly;
                 if (way.flags == 0)
-                    continue; // (for what flies only)
+                    continue; // (for what flies only, and nothing here does)
                 if (link.model != 0)
                 {
                     const auto found = brushOfModel.find(link.model);
@@ -129,7 +144,8 @@ namespace hlds
                 const PathNode &a = level.pathNodes[way.from];
                 const PathNode &b = level.pathNodes[way.to];
                 const bool wet = (a.flags | b.flags) & kPathNodeWater;
-                if (!wet && !walks(world, (way.flags & kPathLinkHuman) ? kWalkStanding : kWalkCrouched, a, b))
+                const bool walked = way.flags & (kPathLinkSmall | kPathLinkHuman | kPathLinkLarge);
+                if (!wet && walked && !walks(world, (way.flags & kPathLinkHuman) ? kWalkStanding : kWalkCrouched, a, b))
                     ++report.refused;
                 ways.push_back(way);
             }

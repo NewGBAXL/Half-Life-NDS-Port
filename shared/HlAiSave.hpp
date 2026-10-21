@@ -51,6 +51,10 @@ namespace hldata
             &scientist::slIdleSciStand, &scientist::slScientistCover, &scientist::slScientistHide,
             &scientist::slScientistStartle, &scientist::slFear, &barney::slBaFollow, &barney::slBarneyEnemyDraw,
             &barney::slBaFaceTarget, &barney::slIdleBaStand,
+            // round 3's (HlAliens.hpp: agrunt.cpp, controller.cpp)
+            &agrunt::slAGruntFail, &agrunt::slAGruntCombatFail, &agrunt::slAGruntStandoff,
+            &agrunt::slAGruntRangeAttack1, &agrunt::slAGruntTakeCoverFromEnemy, &agrunt::slAGruntVictoryDance,
+            &agrunt::slAGruntThreatDisplay,
         };
         count = static_cast<int>(sizeof(kAll) / sizeof(kAll[0]));
         return kAll;

@@ -2014,6 +2014,7 @@ namespace hldata
     {
         inline const AiKind &kind();
     }
+    inline const AiKind *aiAlienKindOf(std::uint8_t kind); // (HlAliens.hpp)
 
     inline const AiKind *aiKindOf(std::uint8_t kind)
     {
@@ -2031,7 +2032,7 @@ namespace hldata
         case ActorKind::Sitter:    return &sitter::kind();
         case ActorKind::Gman:      return &gman::kind();
         case ActorKind::Generic:   return &generic::kind();
-        default:                   return nullptr;
+        default:                   return aiAlienKindOf(kind);
         }
     }
 } // namespace hldata
