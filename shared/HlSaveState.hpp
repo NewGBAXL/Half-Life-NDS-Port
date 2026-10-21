@@ -31,7 +31,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <yas/serialize.hpp>
+#include "HlYas.hpp"
 
 #include "HlFields.hpp"
 #include "HlLamp.hpp"

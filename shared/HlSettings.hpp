@@ -12,8 +12,7 @@
 #include <cstring>
 #include <vector>
 
-#include <yas/serialize.hpp>
-#include <yas/std_types.hpp>
+#include "HlYas.hpp"
 
 #include "HlLevel.hpp"
 
