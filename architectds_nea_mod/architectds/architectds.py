@@ -587,6 +587,12 @@ class GenericArmBinary(GenericCpuBinary):
 
         in_out_files.extend(gen_out_file_list(assets_c_files, '', out_dir + '/', '', '.o'))
 
+        # The ARM sources first on the link line: an inline function of a
+        # header that ARM and Thumb sources both use is in each of their
+        # objects, and the linker keeps the first it meets -- which then is
+        # the ARM one (the game's shared headers: HlMonsters.hpp and the rest).
+        in_out_files.sort(key=lambda f: 0 if f.in_path.endswith('.arm.cpp') else 1)
+
         for in_out_file in in_out_files:
             obj_out_path = in_out_file.out_path
             dep_out_path = replace_ext(obj_out_path, '.o', '.d')

@@ -86,6 +86,9 @@ namespace hlds
         std::string file; ///< as the game names it: "models/scientist.mdl"
         std::vector<std::string> clips; ///< sequence labels, lower-case
         bool firstSequence = false;     ///< ... and whichever its first sequence is
+        /// ... and every sequence the game's code may choose by what it is for
+        /// (its activity): a monster that thinks as the game's do.
+        bool activities = false;
     };
 
     /// What the map's entities need by way of models: every model some actor

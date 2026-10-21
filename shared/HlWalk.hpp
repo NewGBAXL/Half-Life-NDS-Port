@@ -365,7 +365,37 @@ namespace hldata
 
     inline bool lineClear(const MoveWorld &world, const fx *start, const fx *end)
     {
-        return traceShot(world, start, end).fraction >= kFractionOne;
+        // (traceShot's answer, without its search for the nearest: the
+        // first thing in the way will do -- the world first, which is the
+        // cheapest and most often it.)
+        if (world.nodes != nullptr)
+        {
+            std::int32_t hit = kFractionOne;
+            if (!detail::lineThrough(world, world.headNode, 0, kFractionOne, start, end, hit, 0) && hit < kFractionOne)
+                return false;
+        }
+        else
+        {
+            const Trace t = traceHull(world.crouched, start, end);
+            if (t.startSolid || t.fraction < kFractionOne)
+                return false;
+        }
+        const detail::SegmentReach reach = detail::segmentReach(true, start, end);
+        for (int m = 0; m < world.moverCount; ++m)
+        {
+            if (!detail::moverMayTouch(world, m, reach))
+                continue;
+            const MoverHull &mover = world.movers[m];
+            if (!mover.solid || !detail::nearMover(mover, true, start, end))
+                continue;
+            fx a[3], b[3];
+            detail::toMoverSpace(mover, start, a);
+            detail::toMoverSpace(mover, end, b);
+            const Trace t = traceHull(mover.crouched, a, b);
+            if (!t.startSolid && !t.allSolid && t.fraction < kFractionOne)
+                return false;
+        }
+        return true;
     }
 
     inline bool pointToFloor(const MoveWorld &world, fx *pos, fx down)
@@ -869,9 +899,21 @@ namespace hldata
             moved = false;
         if (moved)
         {
+            // (Sliding along a wall, hardly getting on: held up all the same,
+            // and after a second it plans again from where it has got to.)
+            const fx went[3] = {feet[0] - actor.pos[0], feet[1] - actor.pos[1], 0};
             for (int i = 0; i < 3; ++i)
                 actor.pos[i] = feet[i];
-            actor.stuckMs = 0;
+            if (fxLength(went) * 4 >= step)
+            {
+                actor.stuckMs = 0;
+            }
+            else if ((actor.stuckMs += ms) > 1000)
+            {
+                actor.stuckMs = 0;
+                actor.goalNode = actor.fromNode = -1;
+                actor.thinkMs = 0;
+            }
             return kWalkMoved;
         }
         // Getting nowhere: after a second it starts again from where it is.

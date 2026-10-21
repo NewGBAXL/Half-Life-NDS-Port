@@ -93,6 +93,7 @@ namespace hlds
         int frameCount = 0;
         int blendCount = 0;
         int activity = 0;
+        int actWeight = 0; ///< how often it is chosen among those for its activity
         /// How far the whole sequence carries the model, in its own space:
         /// what a walk covers in one cycle.
         float linearMovement[3] = {0, 0, 0};

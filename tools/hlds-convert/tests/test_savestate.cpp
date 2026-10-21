@@ -159,6 +159,8 @@ namespace
             play(*a, t, weaponA);
         std::vector<std::uint8_t> saved = takeMapState(a->logic, a->player, level);
         appendState(saved, weaponA);
+        const std::size_t withoutMinds = saved.size();
+        aiAppendState(saved, a->actors); // (what the monsters think: HlAiSave.hpp)
 
         // Begun afresh, and the state laid over it.
         std::unique_ptr<Game> b = load(dir, map, &globalsB);
@@ -166,15 +168,17 @@ namespace
         if (b == nullptr)
             return;
         globalsB = globalsA; // (the switches that span maps are the save's own business: HlSave.hpp)
-        const std::size_t mapBytes = saved.size() - stateBytes(weaponB);
+        const std::size_t mapBytes = withoutMinds - stateBytes(weaponB);
         const bool laid = layMapState(saved.data(), mapBytes, b->logic, b->player, level);
         std::size_t at = mapBytes;
-        const bool rest = readState(saved.data(), saved.size(), at, weaponB) && at == saved.size();
+        const bool rest = readState(saved.data(), saved.size(), at, weaponB) && at == withoutMinds &&
+                          aiLayState(saved.data() + at, saved.size() - at, b->actors);
         check(laid && rest, (map + ": its state can be laid over the map begun afresh").c_str());
         if (!laid)
             return;
         std::vector<std::uint8_t> again = takeMapState(b->logic, b->player, level);
         appendState(again, weaponB);
+        aiAppendState(again, b->actors);
         check(again == saved, (map + ": laid back, it is what was taken").c_str());
 
         // Both played on, the same way.
@@ -184,7 +188,10 @@ namespace
             play(*a, t, weaponA);
             play(*b, t, weaponB);
             {
-                if (takeMapState(a->logic, a->player, level) != takeMapState(b->logic, b->player, level))
+                std::vector<std::uint8_t> x = takeMapState(a->logic, a->player, level), y = takeMapState(b->logic, b->player, level);
+                aiAppendState(x, a->actors);
+                aiAppendState(y, b->actors);
+                if (x != y)
                     parted = t;
             }
         }

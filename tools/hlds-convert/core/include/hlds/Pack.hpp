@@ -17,6 +17,11 @@
 #include <string>
 #include <vector>
 
+namespace hldata
+{
+    struct LevelView;
+}
+
 namespace hlds
 {
     struct PackReport
@@ -34,6 +39,10 @@ namespace hlds
                  const std::string &map, bool compress, PackReport &report, std::string &error);
 
     /// <stage>/ui/* and the menu's sounds -> <card>/common.npac.
+    /// Which of a level's sounds are only words of what its people say
+    /// (its talk table): those are in the common archive, not the map's.
+    void talkWords(const hldata::LevelView &view, std::vector<char> &word);
+
     bool packCommon(const std::filesystem::path &stage, const std::filesystem::path &card,
                     bool compress, PackReport &report, std::string &error);
 

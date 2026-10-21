@@ -384,6 +384,8 @@ namespace hldata
         }
     }
 
+    struct AiWorld; // (HlAi.hpp)
+
     /// The actors of the loaded map and the models they are made of.
     struct ActorWorld
     {
@@ -410,6 +412,9 @@ namespace hldata
         /// What is being thought out for them outside the frame (not saved:
         /// a pointer). Null: everything is worked out as it is asked.
         ThinkQueue *think = nullptr;
+        /// What the monsters think, hear and remember (HlAi.hpp; not saved: a
+        /// pointer). Null: they do not think.
+        AiWorld *ai = nullptr;
         /// The doors those who walk have asked to have opened since the
         /// logic last looked (brush indices): it opens them.
         std::uint16_t doorWanted[4] = {};
@@ -489,6 +494,15 @@ namespace hldata
     inline bool actorControls(const ActorState &actor, std::int32_t *controls)
     {
         controls[0] = controls[1] = controls[2] = controls[3] = 0;
+        // One of the people's head, turned to whom he talks to (HlAiTalk.hpp).
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Guard) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Gman))
+        {
+            controls[0] = static_cast<std::int16_t>(actor.aimYaw);
+            return controls[0] != 0;
+        }
         if (isTurret(actor.kind))
         {
             const bool ceiling = (actor.flags & kActorCeiling) != 0;
@@ -622,8 +636,10 @@ namespace hldata
         actor.kind = record.kind;
         actor.flags = record.flags;
         actor.light = record.light;
+        // (An item's kind; a soldier's weapons; and for a soldier or a monster
+        // that thinks, when it sets off what it sets off.)
         actor.item = record.kind == static_cast<std::uint8_t>(ActorKind::Item) ||
-                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt)
+                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) || actorThinks(record.kind)
                          ? static_cast<std::uint8_t>(record.item)
                          : std::uint8_t(0);
         if (record.kind == static_cast<std::uint8_t>(ActorKind::Tripmine))
@@ -755,8 +771,9 @@ namespace hldata
         actor.finished = finished;
         // Someone sitting, left to himself, has done with one way of
         // sitting: another.
+        // (With minds about -- HlAi.hpp -- his own sees to that: SittingThink.)
         if (finished && actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter) &&
-            actor.scriptPhase == kActorFree && actor.ai == 0)
+            actor.scriptPhase == kActorFree && actor.ai == 0 && a.ai == nullptr)
         {
             const int next = model->findClip(sittingClip(sittingNext(actor)));
             if (next >= 0)

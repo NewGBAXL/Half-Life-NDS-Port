@@ -158,6 +158,13 @@ namespace hlrt
         int startMessagesMs_ = -1;
         std::uint32_t stepCount_ = 0;
         std::uint8_t *linkShut_ = nullptr; ///< ActorWorld::linkShut
+        /// What the monsters think and hear (HlAi.hpp; ActorWorld::ai): a
+        /// monster's worth for each actor that thinks, and a place for each
+        /// actor.
+        hldata::AiWorld ai_;
+        hldata::AiMonster *aiMonsters_ = nullptr;
+        std::int16_t *aiSlots_ = nullptr;
+        std::uint8_t *aiHeld_ = nullptr;
         bool wasDeep_ = false; ///< the player was in water to the waist a frame ago
         std::vector<hldata::SaveMapState> visited_;
         /// What a save keeps of the game beside the map's own state: how

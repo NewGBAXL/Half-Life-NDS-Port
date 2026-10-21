@@ -43,6 +43,13 @@ namespace hlrt
     void Game::destroy()
     {
         hlrt::think.detach(); // (before what the worker reads goes)
+        actors.ai = nullptr;
+        std::free(aiMonsters_);
+        std::free(aiSlots_);
+        std::free(aiHeld_);
+        aiMonsters_ = nullptr;
+        aiSlots_ = nullptr;
+        aiHeld_ = nullptr;
         std::free(linkShut_);
         linkShut_ = nullptr;
         actors.linkShut = nullptr;
@@ -221,6 +228,19 @@ namespace hlrt
         weapon_ = WeaponState();
         held = ActorState();
         inHand_ = -1;
+        // (What the monsters think and hear: HlAi.hpp.)
+        {
+            const int thinkers = aiNeeded(actors);
+            std::free(aiMonsters_);
+            std::free(aiSlots_);
+            std::free(aiHeld_);
+            aiMonsters_ = static_cast<AiMonster *>(std::malloc(sizeof(AiMonster) * (thinkers > 0 ? thinkers : 1)));
+            aiSlots_ = static_cast<std::int16_t *>(std::malloc(sizeof(std::int16_t) * (actors.count > 0 ? actors.count : 1)));
+            aiHeld_ = static_cast<std::uint8_t *>(std::malloc(actors.count > 0 ? actors.count : 1));
+            if (aiMonsters_ != nullptr && aiSlots_ != nullptr && aiHeld_ != nullptr)
+                aiAttach(actors, ai_, aiMonsters_, thinkers, aiSlots_, aiHeld_, actors.count);
+            ai_.speechCount = static_cast<int>(view.speechCount);
+        }
         // (Their long thinking, outside the frame: game/Think.cpp.)
         hlrt::think.attach(logic);
         return true;
@@ -442,6 +462,9 @@ namespace hlrt
         std::memcpy(kept.chapter, chapter_, sizeof(kept.chapter));
         save.state.insert(save.state.end(), reinterpret_cast<const std::uint8_t *>(&kept),
                           reinterpret_cast<const std::uint8_t *>(&kept) + sizeof(kept));
+        // ... and what the monsters think (HlAiSave.hpp): a save without it
+        // is read all the same.
+        aiAppendState(save.state, actors);
         return save;
     }
 
@@ -478,7 +501,14 @@ namespace hlrt
         // the last byte.)
         WeaponState weapon;
         ViewState view;
-        if (length == 0 || size - at - length != hldata::stateBytes(weapon) + hldata::stateBytes(view) + sizeof(Kept) ||
+        const std::size_t own = hldata::stateBytes(weapon) + hldata::stateBytes(view) + sizeof(Kept);
+        // (What the monsters think may follow, in a block of its own: a save
+        // written before, or by another build, has none, or one not read.)
+        const std::size_t minds = length != 0 && size - at >= length + own
+                                      ? size - at - length - own
+                                      : 0;
+        // (A block that is not this build's is left: they think afresh.)
+        if (length == 0 || size - at < length + own ||
             !layMapState(bytes + at, length, logic, player.state, level.view.header->crc32))
             return false;
         at += length;
@@ -490,6 +520,9 @@ namespace hlrt
         playMs_ = kept.playMs;
         std::memcpy(chapter_, kept.chapter, sizeof(chapter_));
         chapter_[sizeof(chapter_) - 1] = 0;
+        at += sizeof(kept);
+        if (minds != 0)
+            hldata::aiLayState(bytes + at, minds, actors);
         came_ = came;
         // What the map did as it began afresh is not what is to be heard
         // or shown now: what was going on when it was saved is.
@@ -655,7 +688,7 @@ namespace hlrt
                     netGame.used(target); // (a game between consoles: they are told)
                 }
                 else
-                    personUse(logic, eye, camera.forward); // (a scientist or a guard: follow, or stay)
+                    personUse(logic, player.state, eye, camera.forward); // (a scientist or a guard: follow, or stay)
             }
         }
         // What fights, what lies about, and what is in hand.
@@ -747,7 +780,26 @@ namespace hlrt
         if (!player.noclip)
         {
             const DebugLog::Perf::Scope scope(DebugLog::Section::Logic);
-            monstersTick(logic, player.state, ms);
+            {
+                const DebugLog::Perf::Scope monsters(DebugLog::Section::Monsters);
+#ifdef HLDS_PROFILE
+                hldata::aiClock = DebugLog::Perf::now;
+#endif
+                monstersTick(logic, player.state, ms);
+#ifdef HLDS_PROFILE
+                DebugLog::Perf::add(DebugLog::Section::AiLook, hldata::aiSpent[0]);
+                DebugLog::Perf::add(DebugLog::Section::AiSched, hldata::aiSpent[1]);
+                DebugLog::Perf::add(DebugLog::Section::AiMove, hldata::aiSpent[2]);
+                hldata::aiSpent[0] = hldata::aiSpent[1] = hldata::aiSpent[2] = 0;
+#endif
+            }
+            // A monster's blow to the player's view (its punchangle: the
+            // game's pitch is down, the view's up).
+            if (ai_.punch[0] != 0 || ai_.punch[1] != 0 || ai_.punch[2] != 0)
+            {
+                viewKick(player.view, -ai_.punch[0], ai_.punch[1], ai_.punch[2]);
+                ai_.punch[0] = ai_.punch[1] = ai_.punch[2] = 0;
+            }
             const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                player.state.origin[2] + player.state.viewHeight};
             const bool alive = player.state.health > 0;

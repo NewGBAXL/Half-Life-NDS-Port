@@ -45,6 +45,19 @@ namespace hldstest
         std::vector<ActorState> actorStates;
         std::vector<SolidBox> actorBoxes;
         std::vector<std::uint8_t> linkShut; ///< ActorWorld::linkShut
+        /// What the monsters think and hear (HlAi.hpp), as the DS keeps it.
+        AiWorld ai;
+        std::vector<AiMonster> aiMonsters;
+        std::vector<std::int16_t> aiSlots;
+        std::vector<std::uint8_t> aiHeld;
+        void attachAi()
+        {
+            const int thinkers = aiNeeded(actors);
+            aiMonsters.assign(thinkers > 0 ? thinkers : 1, AiMonster());
+            aiSlots.assign(actors.count > 0 ? actors.count : 1, -1);
+            aiHeld.assign(actors.count > 0 ? actors.count : 1, 0);
+            aiAttach(actors, ai, aiMonsters.data(), thinkers, aiSlots.data(), aiHeld.data(), actors.count);
+        }
         /// The game's own graph of the map's nodes, if the test read one
         /// before finish(): the ways between them are then taken from it.
         hlds::NodGraph nodGraph;
@@ -58,13 +71,18 @@ namespace hldstest
         SoundQueue heard;
         std::vector<int> timesHeard;
         int sentencesHeard = 0;
+        /// Every line said (its index in the level's Sentences), in order.
+        std::vector<std::uint16_t> said;
         void drain()
         {
             for (int i = 0; i < heard.count; ++i)
             {
                 const SoundEvent &event = heard.events[i];
                 if (event.flags & kSoundSentence)
+                {
                     ++sentencesHeard;
+                    said.push_back(event.sound);
+                }
                 else if (event.sound < timesHeard.size())
                     ++timesHeard[event.sound];
             }
@@ -144,6 +162,11 @@ namespace hldstest
             if (need.firstSequence && !mdl.sequences.empty())
                 clips.push_back(mdl.sequences[0].label);
             clips.insert(clips.end(), need.clips.begin(), need.clips.end());
+            for (const MdlSequence &seq : mdl.sequences)
+            {
+                if (need.activities && seq.activity != 0)
+                    clips.push_back(seq.label);
+            }
             if (!cookModel(mdl, clips, cooked, report, error) || !writeModel(cooked, bytes, error))
                 continue;
             g.modelBlocks.emplace_back((bytes.size() + 3) / 4);
@@ -270,6 +293,8 @@ namespace hldstest
         logicInit(g.logic);
         moverReachAll(g.move);
         actorsInit(g.actors, v.actors, static_cast<int>(v.actorCount), v.nameHashes, g.move);
+        g.attachAi();
+        g.ai.speechCount = static_cast<int>(v.speechCount);
 
         g.player = PlayerState();
         for (std::uint32_t i = 0; i < v.entityCount; ++i)

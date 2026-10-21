@@ -125,6 +125,12 @@ namespace hldata
     /// The clip has the game's "dead" event (1000): whoever plays it to its
     /// end in a script is a body, held on its last frame where it lies.
     inline constexpr std::uint16_t kClipDies = 2;
+    /// What the clip is for (the game's activity: idle, run, a melee
+    /// attack...) in bits 8..15, and how often it is the one chosen among
+    /// those for it (its weight) in bits 2..7. 0: a model cooked before
+    /// these were kept, or a clip that is for nothing in particular.
+    inline constexpr int kClipActivityShift = 8;
+    inline constexpr int kClipWeightShift = 2;
 
     struct ModelClip
     {
@@ -151,6 +157,14 @@ namespace hldata
         /// enough the same.)
         fx endOffset[2];
     };
+    inline std::uint8_t clipActivity(const ModelClip &clip)
+    {
+        return static_cast<std::uint8_t>(clip.flags >> kClipActivityShift);
+    }
+    inline int clipWeight(const ModelClip &clip)
+    {
+        return (clip.flags >> kClipWeightShift) & 63;
+    }
 
     /// One bone's part of a clip: its turning and its place, each as keys at
     /// frames 0, step, 2 * step, ... and a last one at the clip's last frame.
@@ -186,6 +200,14 @@ namespace hldata
     inline constexpr std::uint16_t kEventFire = 0;  ///< the game's 1003: only in a scripted scene
     inline constexpr std::uint16_t kEventSound = 1; ///< 1004, 5004: a sound from where the actor is
     inline constexpr std::uint16_t kEventVoice = 2; ///< 1008: ... from its mouth
+    /// One for the monster's own code (its HandleAnimEvent, HlAi.hpp): the
+    /// game's event number (below 1000) is in `target` -- a claw landing, a
+    /// zap let go. A model cooked before has none.
+    inline constexpr std::uint16_t kEventMonster = 3;
+    /// The game's 1001 (`target` 0: the scene playing may no longer be
+    /// interrupted) and 1002 (1: it may again). A model cooked before has
+    /// none: a build before skips it (no sound has its "name").
+    inline constexpr std::uint16_t kEventInterrupt = 4;
 
     /// A bone controller: something about a bone that the game sets, on top
     /// of what the clip being played has -- which way a turret's gun points,

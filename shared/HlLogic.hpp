@@ -202,7 +202,9 @@ namespace hldata
         std::int32_t marksDueMs = 0;
         /// ... and the ways between the nodes (detail::linksTick).
         std::int32_t linksDueMs = 0;
-        /// What soldiers call out (Section::Speech), if the map has it.
+        /// What soldiers call out (Section::Speech), if the map has it; and
+        /// after it, what the people say (kTalkTableAt: AiWorld::speechCount
+        /// says if it is that long).
         const std::uint16_t *speech = nullptr;
         /// Set when the map starts a track of music: its number. The caller
         /// plays it, and sets this back to -1.
@@ -549,12 +551,12 @@ namespace hldata
             if (w.records[i].name == name && !w.states[i].dead)
                 logicUse(w, player, i, caller, useType, depth + 1);
         }
-        // A turret by that name is switched: it finds out when it next
-        // thinks (HlMonsters.hpp).
+        // A turret or a monster by that name is switched: it finds out when
+        // it next thinks (HlMonsters.hpp, HlAi.hpp).
         for (int i = 0; w.actors != nullptr && i < w.actors->count; ++i)
         {
             ActorState &actor = w.actors->states[i];
-            if (actor.active && actor.name == name && isTurret(actor.kind))
+            if (actor.active && actor.name == name && (isTurret(actor.kind) || actorThinks(actor.kind)))
                 actor.switched = static_cast<std::uint8_t>(1 + useType);
         }
     }
@@ -2150,13 +2152,61 @@ namespace hldata
         inline constexpr std::int32_t kScriptMoving = 2;
         inline constexpr std::int32_t kScriptPlaying = 3;
 
+        // How hard a script may take its actor (SS_INTERRUPT_*): one that
+        // is idle; one it names, alert as well; an aiscripted_sequence's.
+        inline constexpr int kInterruptIdle = 0;
+        inline constexpr int kInterruptByName = 1;
+        inline constexpr int kInterruptAi = 2;
+
+        /// Whether a script may have actor `actor` now (CanPlaySequence: its
+        /// state, as its mind has it -- HlAiPeople.hpp).
+        inline bool actorCanPlaySequence(LogicWorld &w, int actor, bool overrideState, int interruptLevel);
+        /// A monster's mind, when its script lets it go: idle, or (an
+        /// aiscripted_sequence's, `ambush`) lying in wait -- HlMonsters.hpp.
+        inline void scriptRouse(LogicWorld &w, int actorIndex, bool ambush);
+
+        // A script's own (LogicState), besides `phase`, `bits` (its actor)
+        // and `travel` (the walk's tries and time): base[0] is the game's
+        // m_iDelay -- how many of the scripts of its name have an actor
+        // still on the way to its mark; base[1] that they have all got
+        // there, which starts it; base[2] that it may not be broken off now
+        // (event 1001).
+        inline bool scriptIsAi(const LogicRecord &record) { return (record.pad & kScriptAi) != 0; }
+
+        /// DelayStart: each scripted_sequence of the script's name (and the
+        /// script itself, with none) has one more on its way (`more`), or
+        /// one fewer -- none left, and they all start.
+        inline void scriptDelayStart(LogicWorld &w, int index, bool more)
+        {
+            const std::uint16_t name = w.records[index].name;
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                const LogicRecord &other = w.records[i];
+                if (other.kind != static_cast<std::uint8_t>(LogicKind::Script) || scriptIsAi(other) ||
+                    (i != index && (name == 0 || other.name != name)))
+                    continue;
+                LogicState &state = w.states[i];
+                if (more)
+                {
+                    ++state.base[0];
+                }
+                else if (--state.base[0] <= 0)
+                {
+                    state.base[0] = 0;
+                    state.base[1] = 1;
+                }
+            }
+        }
+
         /// The actor a script is for: by name, or the nearest free one of a
-        /// kind within its radius. -1 if there is none it can have now.
-        inline int scriptFindActor(const LogicWorld &w, int index)
+        /// kind within its radius -- one that may be taken now. -1 if there
+        /// is none it can have.
+        inline int scriptFindActor(LogicWorld &w, int index)
         {
             if (w.actors == nullptr)
                 return -1;
             const LogicRecord &record = w.records[index];
+            const bool overrideState = (record.pad & kScriptOverrideState) != 0 || scriptIsAi(record);
             int best = -1;
             fx bestDistance = fxFromInt(record.waitMs > 0 ? record.waitMs : 512);
             for (int i = 0; i < w.actors->count; ++i)
@@ -2172,11 +2222,13 @@ namespace hldata
                     continue;
                 if (record.extra[0] != 0)
                 {
-                    if (actor.name == record.extra[0])
+                    if (actor.name == record.extra[0] &&
+                        actorCanPlaySequence(w, i, overrideState, scriptIsAi(record) ? kInterruptAi : kInterruptByName))
                         return i;
                     continue;
                 }
-                if (record.damage == 0 || actor.kind != record.damage - 1)
+                if (record.damage == 0 || actor.kind != record.damage - 1 ||
+                    !actorCanPlaySequence(w, i, overrideState, scriptIsAi(record) ? kInterruptAi : kInterruptIdle))
                     continue;
                 const fx d[3] = {actor.pos[0] - record.move[0], actor.pos[1] - record.move[1],
                                  actor.pos[2] - record.move[2]};
@@ -2219,16 +2271,18 @@ namespace hldata
             ActorState &actor = w.actors->states[state.bits];
             // One with an idle clip waits to be told even if it has no name
             // (nothing can tell it, then: that is how the map sits someone
-            // down for good).
+            // down for good). And none plays while another of its name has
+            // an actor still on the way (DelayStart): all of them at once.
             const bool waits = (record.flags & kLogicUseOnly) || record.extra[1] != 0;
-            if (state.running || !waits)
+            if ((state.running || state.base[1] != 0 || !waits) && state.base[0] <= 0)
             {
                 scriptPlay(w, player, index);
                 return;
             }
             state.phase = kScriptHolding;
             actor.scriptPhase = kActorHeld;
-            if (actorPlay(*w.actors, actor, record.extra[1], false))
+            // (An aiscripted_sequence has no idle clip of its own.)
+            if (!scriptIsAi(record) && actorPlay(*w.actors, actor, record.extra[1], false))
             {
                 // Waiting on the first frame of what it will do, if that is
                 // what its idle is.
@@ -2284,6 +2338,8 @@ namespace hldata
                 actorPlay(*w.actors, actor, clip, false);
                 actor.scriptPhase = kActorMoving;
                 state.phase = kScriptMoving;
+                if (!scriptIsAi(record))
+                    scriptDelayStart(w, index, true);
                 return;
             }
             case kScriptMoveInstant:
@@ -2317,12 +2373,11 @@ namespace hldata
             actor.script = static_cast<std::int16_t>(index);
             actor.scriptPhase = kActorHeld;
             state.bits = static_cast<std::uint32_t>(found);
+            state.base[2] = 0; // (interruptible, until its clip says not)
             scriptApproach(w, player, index);
             return true;
         }
 
-        /// A monster whose scene is over wakes (HlMonsters.hpp).
-        inline void scriptRouse(LogicWorld &w, int actorIndex);
 
         inline void scriptDone(LogicWorld &w, PlayerState &player, int index)
         {
@@ -2341,7 +2396,7 @@ namespace hldata
             const bool dies = played && (model->clips[actor.clip].flags & kClipDies) != 0;
             fx endUp = 0;
             const fx was[3] = {actor.pos[0], actor.pos[1], actor.pos[2]};
-            if (played && !dies)
+            if (played && !dies && !(record.pad & kScriptNoScriptMovement))
             {
                 const ModelClip &clip = model->clips[actor.clip];
                 fx sine, cosine;
@@ -2397,14 +2452,16 @@ namespace hldata
                     actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
                     actor.groundMover = -1;
                 }
-                // A monster comes out of its scene looking for a fight (the
-                // zombie through the wall).
-                scriptRouse(w, static_cast<int>(state.bits));
             }
             actor.script = -1;
             actor.scriptPhase = kActorFree;
+            // Its mind takes it back: idle, or (an aiscripted_sequence that
+            // says so) lying in wait.
+            if (!dies)
+                scriptRouse(w, static_cast<int>(state.bits), scriptIsAi(record) && (record.pad & kScriptAmbush));
             state.phase = kScriptIdle;
             state.running = false;
+            state.base[1] = 0;
             if (!(record.flags & kLogicToggle))
                 state.dead = true;
             logicUseTargets(w, player, index, kUseToggle, 0);
@@ -2446,6 +2503,12 @@ namespace hldata
                 return;
             }
             ActorState &actor = w.actors->states[state.bits];
+            // Held, and the last of its name has got to its mark: it plays.
+            if (state.phase == kScriptHolding && state.base[1] != 0 && state.base[0] <= 0)
+            {
+                scriptPlay(w, player, index);
+                return;
+            }
             if (state.phase == kScriptMoving)
             {
                 const fx d[3] = {actor.target[0] - actor.pos[0], actor.target[1] - actor.pos[1], 0};
@@ -2461,6 +2524,8 @@ namespace hldata
                     // means.
                     actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(36));
                     actor.yaw = static_cast<std::uint16_t>(record.speed);
+                    if (!scriptIsAi(record))
+                        scriptDelayStart(w, index, false);
                     scriptArrived(w, player, index);
                     return;
                 }
@@ -2499,6 +2564,107 @@ namespace hldata
                 scriptDone(w, player, index);
         }
 
+        /// CanInterrupt: the map lets it be broken off, its clip has not
+        /// said otherwise, and its actor is alive.
+        inline bool scriptCanInterrupt(const LogicWorld &w, int index)
+        {
+            if (index < 0 || index >= w.recordCount ||
+                w.records[index].kind != static_cast<std::uint8_t>(LogicKind::Script))
+                return false;
+            const LogicState &state = w.states[index];
+            if ((w.records[index].pad & kScriptNoInterrupt) || state.base[2] != 0)
+                return false;
+            if (w.actors != nullptr && state.phase != kScriptIdle && state.bits < static_cast<std::uint32_t>(w.actors->count))
+                return w.actors->states[state.bits].ai < 5; // (kAiDying: HlActors.hpp)
+            return true;
+        }
+
+        /// ScriptEntityCancel: a scripted_sequence (not an aiscripted one)
+        /// lets its actor go where it stands, its scene unplayed; the
+        /// script itself is ready again.
+        inline void scriptEntityCancel(LogicWorld &w, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (scriptIsAi(record) || state.phase == kScriptIdle || w.actors == nullptr ||
+                state.bits >= static_cast<std::uint32_t>(w.actors->count))
+                return;
+            ActorState &actor = w.actors->states[state.bits];
+            if (actor.script == index)
+            {
+                if (actor.scriptPhase == kActorMoving)
+                    scriptDelayStart(w, index, false);
+                actor.script = -1;
+                actor.scriptPhase = kActorFree;
+                if (actor.ai < 5)
+                    actorRest(actor);
+                scriptRouse(w, static_cast<int>(state.bits), false);
+            }
+            state.phase = kScriptIdle;
+            state.running = false;
+            state.base[1] = 0;
+            state.timer = -1;
+        }
+
+        /// CancelScript: every script of its name lets go (or it alone, with
+        /// none).
+        inline void scriptCancel(LogicWorld &w, PlayerState &player, int index)
+        {
+            (void)player;
+            if (index < 0 || index >= w.recordCount)
+                return;
+            const std::uint16_t name = w.records[index].name;
+            if (name == 0)
+            {
+                scriptEntityCancel(w, index);
+                return;
+            }
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::Script) && w.records[i].name == name)
+                    scriptEntityCancel(w, i);
+            }
+        }
+
+        /// Someone able to say the line of the scripted_sentence at
+        /// `index` says it, and its targets fire; false if there is nobody
+        /// (HlAiTalk.hpp).
+        inline bool sentenceSpeak(LogicWorld &w, PlayerState &player, int index);
+
+        /// A scripted_sentence's thinking (FindThink, DelayThink): it looks
+        /// for its speaker when told, or by itself if it has no name; said,
+        /// it waits out the line and its refire before it may be again.
+        inline void sentenceTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (state.dead || state.phase < 0)
+                return;
+            state.phase -= ms;
+            if (state.phase > 0)
+                return;
+            if (!state.running)
+            {
+                // DelayThink: ready again.
+                state.running = true;
+                state.phase = (record.flags & kLogicStartOpen) ? 100 : -1;
+                return;
+            }
+            if (sentenceSpeak(w, player, index))
+            {
+                if (record.maxs[0] & kSentenceOnce)
+                    state.dead = true;
+                state.running = false;
+                state.phase = static_cast<std::int32_t>(record.extra[1] + record.extra[3]);
+                if (state.phase <= 0)
+                    state.phase = 1;
+            }
+            else
+            {
+                state.phase = static_cast<std::int32_t>(record.extra[3]) + 500;
+            }
+        }
+
         /// Every actor's clip moved on, and the targets its clip's events
         /// name fired as they are passed.
         inline void actorsTick(LogicWorld &w, PlayerState &player, int ms)
@@ -2528,10 +2694,23 @@ namespace hldata
                                                        (at == 0 && before == 0 && actor.frame > 0));
                         if (!passed)
                             continue;
+                        // (The monster's own: its AI sees to those.)
+                        if (event.kind == kEventMonster)
+                            continue;
+                        // The scene may (no longer) be broken off -- unless
+                        // the map says it never may (AllowInterrupt).
+                        if (event.kind == kEventInterrupt)
+                        {
+                            if (actor.script >= 0 && actor.script < w.recordCount &&
+                                !(w.records[actor.script].pad & kScriptNoInterrupt))
+                                w.states[actor.script].base[2] = event.target == 0 ? 1 : 0;
+                            continue;
+                        }
                         if (event.kind == kEventFire)
                         {
-                            // (Only in a scene: it is the scene's target.)
-                            if (actor.scriptPhase != kActorPlaying || w.nameHashes == nullptr)
+                            // (Whatever it is doing: the game's
+                            // SCRIPT_EVENT_FIREEVENT is any clip's.)
+                            if (w.nameHashes == nullptr)
                                 continue;
                             for (int n = 1; n < w.nameCount; ++n)
                             {
@@ -2837,6 +3016,12 @@ namespace hldata
             }
             break;
 
+        case LogicKind::Sentence:
+            // (Not while it is being said, or waiting to be said again.)
+            if (state.running)
+                state.phase = 0;
+            break;
+
         case LogicKind::Script:
             // Told to start. Holding its actor already: off it goes. Without
             // one: it asks for it now, and keeps asking.
@@ -3125,6 +3310,14 @@ namespace hldata
                 record.kind == static_cast<std::uint8_t>(LogicKind::Beam) ||
                 record.kind == static_cast<std::uint8_t>(LogicKind::Spark))
                 state.running = (record.flags & kLogicStartOpen) != 0;
+            // A scripted_sentence is ready to be said; with no name it
+            // looks for its speaker a second in (and in `phase`, the ms to
+            // its next look).
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Sentence))
+            {
+                state.running = true;
+                state.phase = (record.flags & kLogicStartOpen) ? 1000 : -1;
+            }
 
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Ladder) && w.ladders != nullptr)
             {
@@ -3459,6 +3652,8 @@ namespace hldata
                 detail::pushableTick(w, player, i, ms);
             else if (kind == LogicKind::Script)
                 detail::scriptTick(w, player, i, ms);
+            else if (kind == LogicKind::Sentence)
+                detail::sentenceTick(w, player, i, ms);
             else if (kind == LogicKind::TrackTrain)
                 detail::trackTrainTick(w, player, i, ms);
             else if (kind == LogicKind::TrackChange)

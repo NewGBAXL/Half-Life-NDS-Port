@@ -297,8 +297,13 @@ namespace
             logicTick(g.logic, g.player, 33);
             monstersTick(g.logic, g.player, 33);
             g.drain();
+            // (Shot at, it may look about -- the game's alert -- but it has
+            // nobody to fight.)
             for (int i : slaves)
-                roused = roused || g.actors.states[i].ai == kAiChase || g.actors.states[i].ai == kAiAttack;
+            {
+                const AiMonster *m = aiFind(g.actors, i);
+                roused = roused || (m != nullptr && (m->state == kStateCombat || m->enemy != kAiNone));
+            }
         }
         check(!roused && g.player.health == 100 && g.times(CommonSound::SlaveZap) == 0,
               "a prisoner goes for nobody, in plain view or shot at");

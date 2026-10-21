@@ -438,6 +438,10 @@ namespace hlrt
             one.kind = seenClass[n];
             one.levels = static_cast<std::uint8_t>(levels);
             one.want = static_cast<std::uint8_t>(level);
+            // (Close to the eye: within five times its own size, where it
+            // fills much of the picture and a coarse mesh shows.)
+            one.far = reach[n];
+            one.close = reach[n] <= static_cast<std::int32_t>(model.header->radius) * kDrawClose;
             for (int l = 0; l < levels; ++l)
             {
                 int p = 0, v = 0;
@@ -478,8 +482,24 @@ namespace hlrt
                 lastLevel_[seen[n] & 255] = 0;
                 continue;
             }
-            lastLevel_[seen[n] & 255] = static_cast<std::uint8_t>(chosen.level[n] + 1);
-            level_[kept] = chosen.level[n];
+            // A step at a time: one drawn a frame ago goes no more than a
+            // level finer or coarser in a frame -- what the frame's pressure
+            // asks of it is seen as a softening, not as a jump from the
+            // finest mesh to the coarsest. (What that costs over the plan
+            // is counted below.)
+            int level = chosen.level[n];
+            const int last = lastLevel_[seen[n] & 255] - 1;
+            if (last >= 0 && level > last + 1)
+                level = last + 1;
+            else if (last >= 0 && level < last - 1)
+                level = last - 1;
+            if (level != chosen.level[n])
+            {
+                polygons += candidates[n].polygons[level] - candidates[n].polygons[chosen.level[n]];
+                vertices += candidates[n].vertices[level] - candidates[n].vertices[chosen.level[n]];
+            }
+            lastLevel_[seen[n] & 255] = static_cast<std::uint8_t>(level + 1);
+            level_[kept] = static_cast<std::uint8_t>(level);
             order[kept++] = seen[n];
         }
         for (int c = 0; c < kDrawClasses; ++c)

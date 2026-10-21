@@ -512,7 +512,19 @@ namespace
         {
             g->frame();
             g->player.health = 100; // (not the point here)
+            // (The player firing now and then: the game's monsters come out
+            // of a scene idle, and go for what they see or hear.)
+            if (f % 30 == 0)
+                aiWeaponVolume(g->logic, kNormalGunVolume);
             rose = rose || g->actors.states[breakout].ai != kAiIdle;
+            if (std::getenv("HLDS_AI_TRACE") != nullptr && f % 15 == 0)
+            {
+                const ActorState &b = g->actors.states[breakout];
+                const AiMonster *m = aiFind(g->actors, breakout);
+                std::printf("  breakout f=%d ai=%d script=%d phase=%d st=%d sched=%s enemy=%d pos=%d %d %d yaw=%u leaf=%d pleaf=%d\n", f, b.ai, b.script,
+                            b.scriptPhase, m ? m->state : -1, m && m->schedule ? m->schedule->name : "-", m ? m->enemy : -9,
+                            fxToInt(b.pos[0]), fxToInt(b.pos[1]), fxToInt(b.pos[2]), b.yaw, m ? m->leaf : -1, g->ai.playerLeaf);
+            }
         }
         const ActorState &j = g->actors.states[jumper];
         check(!j.airborne && fxToInt(j.pos[2]) > 370 && fxToInt(j.pos[2]) < 400,

@@ -56,7 +56,7 @@ namespace hldata
     HL_FIELDS(Gib, 10);
     HL_FIELDS(Decal, 9);
     HL_FIELDS(Piece, 14);
-    HL_FIELDS(ActorWorld, 41);
+    HL_FIELDS(ActorWorld, 42);
     HL_FIELDS(Inventory, 12);
     HL_FIELDS(PlayerState, 32);
     HL_FIELDS(ViewState, 8);
@@ -315,6 +315,9 @@ namespace hldata
             return false;
         detail::StateIn in(bytes + sizeof(detail::StateHeading), size - sizeof(detail::StateHeading));
         detail::mapState(in, w, player, format == 2);
+        // (What the monsters thought is not kept: they think afresh.)
+        if (w.actors != nullptr)
+            aiRestart(*w.actors);
         if (w.actors != nullptr && w.actors->boxes != nullptr)
         {
             for (int i = 0; i < w.actors->count; ++i)
@@ -359,3 +362,5 @@ namespace hldata
         return true;
     }
 } // namespace hldata
+
+#include "HlAiSave.hpp"

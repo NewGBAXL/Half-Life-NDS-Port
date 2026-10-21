@@ -67,6 +67,19 @@ HOT = {
     "hlrt::EffectDraw::drawRecord": ["lmul"],
     "hlrt::EffectDraw::drawDecals": ["lmul"],
     "hlrt::HudDraw::draw": SOFT,
+    # The minds of the monsters (header-only: ARM as long as the ARM objects come
+    # first on the link line -- architectds.py). Each of these runs for every
+    # monster every think or frame.
+    "hldata::aiTick": ["lmul"],
+    "hldata::aiMonsterThink": ["lmul"],
+    "hldata::aiLook": ["lmul"],
+    "hldata::aiTargetOf": ["lmul"],
+    "hldata::aiVisible": ["lmul"],
+    "hldata::aiMoveTick": ["lmul"],
+    "hldata::aiAnimEvents": ["lmul"],
+    "hldata::lineClear": ["lmul"],
+    "hldata::monstersTick": ["lmul"],
+    "hldata::logicTick": ["lmul"],
 }
 # ... and what has to be in the ITCM.
 HOT_ITCM = ["hldata::detail::hullCheck", "hldata::traceHull", "hldata::traceAll", "hldata::poseModel",
@@ -177,6 +190,13 @@ for name in HOT_ITCM:
     for function, at in where.items():
         if bare(function) == name and not (itcm_at <= at < itcm_at + 32768):
             failed.append("%s is not in the ITCM (it is at %08x)" % (function, at))
+# ... and what has to be ARM (the minds of the monsters, above).
+HOT_ARM = [name for name, banned in HOT.items() if name.startswith("hldata::ai") or name in
+           ("hldata::lineClear", "hldata::monstersTick", "hldata::logicTick")]
+for name in HOT_ARM:
+    for at, size, function in functions:
+        if bare(function) == name and (at & 1):
+            failed.append("%s is Thumb" % function)
 if itcm_size > ITCM_BUDGET:
     failed.append("the ITCM holds %d bytes, over its budget of %d" % (itcm_size, ITCM_BUDGET))
 

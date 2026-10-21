@@ -25,6 +25,10 @@ namespace hlrt::DebugLog
         Pose,  ///< working out where the models' bones are
         Models, ///< the models' matrices and their commands (Pose and this are inside Emit)
         Frame, ///< everything between two vblank waits, overlay excluded
+        Monsters, ///< what fights and thinks (monstersTick: inside Logic)
+        AiLook,   ///< ... their looking and listening (HlAi.hpp's aiSpent)
+        AiSched,  ///< ... their hearing, and their enemy looked to
+        AiMove,   ///< ... their going about
         Count
     };
 

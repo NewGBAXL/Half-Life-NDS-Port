@@ -111,6 +111,14 @@ namespace
         return -1;
     }
 
+    /// Whether the monster at `index` is making one of its attacks.
+    bool attacking(const Game &g, int index)
+    {
+        const AiMonster *m = aiFind(g.actors, index);
+        return m != nullptr && (m->activity == kActMeleeAttack1 || m->activity == kActMeleeAttack2 ||
+                                m->activity == kActRangeAttack1 || m->activity == kActRangeAttack2);
+    }
+
     /// The player held next to `actor`, `distance` units off along x.
     void beside(Game &g, const ActorState &actor, int distance)
     {
@@ -118,6 +126,7 @@ namespace
         g.player.origin[1] = actor.pos[1];
         g.player.origin[2] = actor.pos[2] + kStandingFeet;
         g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+        g.player.onGround = true; // (standing: a zombie's slash is for what stands)
     }
 
     void testCheats(const char *dir)
@@ -147,6 +156,8 @@ namespace
                     actor.pos[k] = home[k];
                 beside(g, actor, 40);
             };
+            // (Facing them: the game's monsters see what is in front of them.)
+            actor.yaw = 0;
             // Notarget: stood beside it for five seconds, it never turns on them.
             cheats.notarget = true;
             bool after = false;
@@ -154,7 +165,7 @@ namespace
             {
                 stay();
                 tick(g, 1);
-                after = after || actor.ai == kAiChase || actor.ai == kAiAttack;
+                after = after || actor.ai == kAiChase || attacking(g, zombie);
             }
             check(!after && g.player.health == 100, "notarget: a zombie at arm's length lets them be");
             cheats.notarget = false;
@@ -165,7 +176,13 @@ namespace
             {
                 stay();
                 tick(g, 1);
-                struck = struck || actor.ai == kAiAttack;
+                struck = struck || attacking(g, zombie);
+                if (std::getenv("HLDS_AI_TRACE") != nullptr && f % 10 == 0)
+                {
+                    const AiMonster *m = aiFind(g.actors, zombie);
+                    std::printf("  zombie f=%d st=%d sched=%s act=%d enemy=%d cond=%08x ground=%d\n", f, m->state,
+                                m->schedule ? m->schedule->name : "-", m->activity, m->enemy, m->conditions, g.player.onGround);
+                }
             }
             check(struck && g.player.health == 100 && g.player.inv.armor == 0, "god: it attacks, and does no harm");
             logicHurt(g.player, 40);
@@ -232,13 +249,21 @@ namespace
                 g.player.origin[2] = actor.pos[2] - fxFromInt(40) - kStandingFeet;
                 g.player.velocity[2] = 0;
             };
+            // (Its tongue let down first: eight units a tenth of a second.)
+            auto grabbed = [&](int index)
+            {
+                const AiMonster *m = aiFind(g.actors, index);
+                return m != nullptr && m->enemy == kAiPlayer;
+            };
             int frames = 0;
-            for (; frames < 60 && actor.ai != kAiAttack; ++frames)
+            for (; frames < 600 && !grabbed(barnacle); ++frames)
             {
                 under();
                 tick(g, 1);
             }
-            check(actor.ai == kAiAttack, "without it, a barnacle grabs whoever is under it");
+            check(grabbed(barnacle), "without it, a barnacle grabs whoever is under it");
+            // (Let go: it is killed, as it would be to get away.)
+            monsterHurt(g.logic, barnacle, 100, false, kHitBody, kDmgClub);
             // Another, with it on.
             const int other = findKind(g, ActorKind::Barnacle, 1);
             check(other >= 0, "a second barnacle");
@@ -248,7 +273,7 @@ namespace
             cheats.barnacleKill = true;
             const fx held = next.pos[2] - fxFromInt(40) - kStandingFeet;
             bool lifted = false;
-            for (frames = 0; frames < 60 && next.ai < kAiDying; ++frames)
+            for (frames = 0; frames < 600 && next.ai < kAiDying; ++frames)
             {
                 g.player.origin[0] = next.pos[0];
                 g.player.origin[1] = next.pos[1];

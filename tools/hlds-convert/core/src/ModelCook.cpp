@@ -740,6 +740,10 @@ namespace hlds
             clip.fps = static_cast<std::uint16_t>(
                 std::clamp(std::lround(std::max(0.01f, seq.fps) * 256), 1L, 65535L));
             clip.flags = (seq.flags & kMdlSequenceLooping) ? kClipLoops : 0;
+            // What it is for, and how often it is the one chosen for that
+            // (HlAi.hpp, LookupActivity): bits 8.. and 2..7 of its flags.
+            clip.flags = static_cast<std::uint16_t>(clip.flags | (std::clamp(seq.activity, 0, 255) << 8) |
+                                                    (std::clamp(seq.actWeight, 0, 63) << 2));
             clip.firstTrack = static_cast<std::uint32_t>(out.tracks.size());
             for (int a = 0; a < 3; ++a)
                 clip.travel[a] = fxFromDouble(seq.linearMovement[a]);
@@ -756,10 +760,27 @@ namespace hlds
                     clip.flags |= kClipDies;
                     continue;
                 }
-                if (event.options.empty())
-                    continue;
                 ModelEvent record{};
                 record.frame = static_cast<std::uint16_t>(std::clamp(event.frame, 0, frameCount - 1));
+                // Below 1000: the monster's own (a claw, a zap), by number.
+                if (event.event > 0 && event.event < 1000)
+                {
+                    record.kind = kEventMonster;
+                    record.target = static_cast<std::uint32_t>(event.event);
+                    out.events.push_back(record);
+                    continue;
+                }
+                // 1001, 1002: the scene may not, or may again, be broken
+                // off.
+                if (event.event == 1001 || event.event == 1002)
+                {
+                    record.kind = kEventInterrupt;
+                    record.target = event.event == 1002 ? 1 : 0;
+                    out.events.push_back(record);
+                    continue;
+                }
+                if (event.options.empty())
+                    continue;
                 if (event.event == 1003)
                 {
                     record.kind = kEventFire;

@@ -350,7 +350,8 @@ void testBloodAndSteps()
     check(bloodOf(kind(K::Turret)) == kBloodNone && bloodOf(kind(K::Tripmine)) == kBloodNone &&
               bloodOf(kind(K::Gman)) == kBloodNone,
           "machines do not bleed, nor the man in the suit");
-    check(canBeHurt(kind(K::Scientist)) && canBeHurt(kind(K::Guard)) && !canBeHurt(kind(K::Gman)) &&
+    // (The man in the suit takes a shot -- and shrugs it off: gman.cpp.)
+    check(canBeHurt(kind(K::Scientist)) && canBeHurt(kind(K::Guard)) && canBeHurt(kind(K::Gman)) &&
               !fights(kind(K::Scientist)),
           "people can be hurt, without being something that fights");
     check(decalFamily(kDecalHand) == decalFamily(kDecalBlood) && decalFamily(kDecalPool) == 5 &&

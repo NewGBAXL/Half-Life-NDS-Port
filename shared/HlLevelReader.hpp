@@ -340,12 +340,30 @@ namespace hldata
         }
         // What soldiers say: all of the table or none of it, and lines the
         // map has.
-        if (speechCount != 0 && speechCount != static_cast<std::uint32_t>(kSpeechGroups * kSpeechLines))
+        // (Then, from version 32, what the people say: a heading of each
+        // group's lines, which are after it.)
+        const std::uint32_t soldiers = static_cast<std::uint32_t>(kTalkTableAt);
+        const std::uint32_t talkStart = soldiers + static_cast<std::uint32_t>(kTalkHeading);
+        if (speechCount != 0 && speechCount != soldiers && speechCount < talkStart)
             return LevelError::BadIndex;
-        for (std::uint32_t i = 0; i < speechCount; ++i)
+        for (std::uint32_t i = 0; i < speechCount && i < soldiers; ++i)
         {
             if (speech[i] != 0xFFFF && speech[i] >= sentenceCount)
                 return LevelError::BadIndex;
+        }
+        if (speechCount >= talkStart)
+        {
+            for (int g = 0; g < kTalkGroups; ++g)
+            {
+                const std::uint32_t first = speech[soldiers + g * 2], count = speech[soldiers + g * 2 + 1];
+                if (first + count > speechCount - talkStart)
+                    return LevelError::BadIndex;
+            }
+            for (std::uint32_t i = talkStart; i < speechCount; ++i)
+            {
+                if (speech[i] >= sentenceCount)
+                    return LevelError::BadIndex;
+            }
         }
         // Light patches: a word of the stream each, a style there is, and a
         // base before anything is added to it.

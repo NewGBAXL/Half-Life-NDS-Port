@@ -26,7 +26,7 @@ namespace hlrt
     namespace
     {
 #ifdef HLDS_PROFILE
-        constexpr int kRows = 9;
+        constexpr int kRows = 10;
 #else
         constexpr int kRows = 7;
 #endif
@@ -176,9 +176,17 @@ namespace hlrt
                           static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::Emit)));
             break;
         case 8:
-            std::snprintf(line, sizeof(line), "us pose  %5u mdl  %4u",
+            std::snprintf(line, sizeof(line), "us pose %5u mdl %4u mon %5u",
                           static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::Pose)),
-                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::Models)));
+                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::Models)),
+                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::Monsters)));
+            break;
+        case 9:
+            // (Of the monsters': looking, hearing, going about.)
+            std::snprintf(line, sizeof(line), "ai look %5u hear %4u go %4u",
+                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::AiLook)),
+                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::AiSched)),
+                          static_cast<unsigned>(DebugLog::Perf::micros(DebugLog::Section::AiMove)));
             break;
 #endif
         default:

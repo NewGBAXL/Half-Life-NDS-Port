@@ -27,7 +27,7 @@ namespace hlrt::DebugLog::Perf
         constexpr std::uint32_t kStackPaint = 0x5AC3E5A1u;
 
         constexpr const char *kNames[kCount] = {"input", "logic", "move", "walk",
-                                                "emit",  "pose",  "models", "frame"};
+                                                "emit",  "pose",  "models", "frame", "monsters", "look", "hear", "going"};
         std::uint32_t toMicros(std::uint64_t ticks)
         {
             // The timer counts the 33.5 MHz bus clock.

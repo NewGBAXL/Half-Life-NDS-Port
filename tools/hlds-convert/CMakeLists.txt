@@ -115,6 +115,8 @@ if(HLDS_BUILD_TESTS)
             test_logic
             test_track
             test_monsters
+            test_ai
+            test_talk
             test_soldiers
             test_ui
             test_lod

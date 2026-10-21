@@ -104,7 +104,9 @@ namespace
         for (std::size_t n = 0; n < sitters.size(); ++n)
         {
             const ActorState &actor = g.actors.states[sitters[n]];
-            moving += !actor.frozen && !actor.finished;
+            // (One may be at the end of a way of sitting, for the tenth of
+            // a second until he next thinks: SittingThink.)
+            moving += !actor.frozen;
             changed += actor.clip != first[n];
         }
         rest.shifted += changed;

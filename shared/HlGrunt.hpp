@@ -1,550 +1,682 @@
 #pragma once
 
-// Soldiers: the game's hgrunt.cpp, by its rules and its numbers.
+// Soldiers: the game's hgrunt.cpp on its monster mind (HlAiCore.hpp) --
+// CHGrunt's schedules, tasks, attacks and calls, as they shipped.
 //
-// The game's soldier is run by "schedules" -- lists of tasks, each list
-// broken off when one of the conditions it names comes true -- chosen by one
-// long function (GetSchedule) every time a list ends or is broken off. This
-// is that function, and those lists, over what the port has: path nodes, the
-// walker, lines through the world. A soldier is always doing one of five
-// things (ActorState::ai), and `attack` says which of its kind:
+// A soldier goes about in a squad (CSquadMonster): by name, where the map
+// names one and flags its leader, or with whoever of his own kind he can
+// see within 1024 units when he starts (four at most). A squad has two
+// places for those firing at once and two for a grenade; the rest find
+// cover. He fights whatever he hates or dislikes -- the player, their
+// friends, the aliens -- runs from the sound of a grenade about to go off,
+// drops his gun when he dies, and calls out (Section::Speech's lines) when
+// nobody else of his kind has just done so.
 //
-//   kAiIdle     standing where the map put him, looking and listening
-//   kAiChase    going somewhere: to cover, to cover to reload, at the
-//               player for a line of fire, away from a grenade
-//   kAiAttack   acting something out, start to finish: a burst, a reload, a
-//               grenade thrown, launched or left at his feet, a kick, a wave
-//               of the hand
-//   kGruntWait  holding where he is, facing where the player is or was
-//   kAiFlinch   hit
-//
-// and gruntChoose() is asked what next. Squads are the game's: by name,
-// where the map names one and flags its leader, or whoever of his own kind a
-// soldier can see within 1024 units when the map starts (four at most). A
-// squad has two places for those firing at once and two for those with a
-// grenade in hand; the rest find cover.
-//
-// What the game's soldier does that this one does not: fight anything but
-// the player, drop his gun when he dies, slide down a rope, be eaten by a
-// barnacle.
+// What the game's does that this one does not yet: slide down a rope from
+// an Osprey (monster_grunt_repel), call out at the sight of an alien (the
+// level has no lines for it).
 //
 // Included at the end of HlMonsters.hpp. std-only and inline.
 
 namespace hldata
 {
-    inline constexpr std::uint8_t kGruntWait = kAiLeap;
-
-    // Why he is going where he is going (ai == kAiChase).
-    inline constexpr std::uint8_t kGoCover = 1;  ///< out of the player's sight
-    inline constexpr std::uint8_t kGoReload = 2; ///< ... to reload there
-    inline constexpr std::uint8_t kGoCharge = 3; ///< at the player, until there is a line of fire
-    inline constexpr std::uint8_t kGoFlee = 4;   ///< away from a grenade
-
-    // What he is acting out (ai == kAiAttack).
-    inline constexpr std::uint8_t kActBurst = 1;
-    inline constexpr std::uint8_t kActReload = 2;
-    inline constexpr std::uint8_t kActToss = 3;
-    inline constexpr std::uint8_t kActLaunch = 4;
-    inline constexpr std::uint8_t kActDrop = 5;   ///< a grenade left at his feet before he runs
-    inline constexpr std::uint8_t kActKick = 6;
-    inline constexpr std::uint8_t kActSignal = 7; ///< the leader's wave, before the first volley
-    inline constexpr std::uint8_t kActFound = 8;  ///< "over here"
-    inline constexpr std::uint8_t kActCower = 9;
-    inline constexpr std::uint8_t kActVictory = 10;
-
-    // ActorState::mood.
-    inline constexpr std::uint8_t kMoodStanding = 1; ///< fires standing, not crouched
-    inline constexpr std::uint8_t kMoodMet = 2;      ///< a leader who has given his first signal
-    inline constexpr std::uint8_t kMoodHurt = 4;     ///< hurt since he last chose what to do
-    inline constexpr std::uint8_t kMoodEluded = 8;   ///< (the leader's) the squad has lost sight of the player
-    inline constexpr std::uint8_t kMoodSeen = 16;    ///< the player has seen him
-    inline constexpr std::uint8_t kMoodScripted = 32; ///< a script has had him
-    inline constexpr std::uint8_t kMoodNew = 64;     ///< has only just learnt of the player
-    inline constexpr std::uint8_t kMoodReady = 128;  ///< his first tick is behind him
-
     // The game's numbers, at "normal".
     inline constexpr int kGruntHealth = 50;
-    inline constexpr int kGruntLimp = 20;        ///< health at which he limps
-    inline constexpr int kGruntClip = 36;
-    inline constexpr int kGruntShells = 8;
-    inline constexpr int kGruntRange = 2048;
-    inline constexpr int kGruntRound = 4;        ///< a round of his MP5
-    inline constexpr int kGruntPellet = 5;       ///< ... and each of his shotgun's five pellets
-    inline constexpr int kGruntPellets = 5;
-    inline constexpr int kGruntConeMp5 = 357;    ///< ten degrees across, in 4096ths either way
-    inline constexpr int kGruntConeShotgun = 535; ///< fifteen
-    inline constexpr int kGruntKick = 10;
-    inline constexpr int kGruntKickRange = 64;
-    inline constexpr int kGruntLaunchSpeed = 600;
-    inline constexpr int kGruntCoverRadius = 784;
+    inline constexpr int kGruntLimp = 20;  ///< HGRUNT_LIMP_HEALTH
+    inline constexpr int kGruntClip = 36;  ///< GRUNT_CLIP_SIZE
+    inline constexpr int kGruntShells = 8; ///< a shotgun's
+    inline constexpr int kGruntRound = 4;  ///< sk_9mmAR_bullet: a round of his MP5
+    inline constexpr int kGruntPellet = 5; ///< sk_plr_buckshot: each of his shotgun's pellets
+    inline constexpr int kGruntPellets = 5; ///< sk_hgrunt_pellets
+    inline constexpr int kGruntKick = 10;  ///< sk_hgrunt_kick
+    inline constexpr int kGruntGrenadeSpeed = 600; ///< sk_hgrunt_gspeed
     inline constexpr std::uint8_t kHitStomach = 3;
     inline constexpr std::uint8_t kHitHelmet = 11;
 
-    namespace detail
+    // ActorState::mood: what of his the game keeps in CHGrunt's own fields.
+    inline constexpr std::uint8_t kMoodStanding = 1; ///< m_fStanding: fires standing, not crouched
+    inline constexpr std::uint8_t kMoodMet = 2;      ///< !m_fFirstEncounter: has signalled his squad once
+
+    namespace grunt
     {
-        inline bool gruntAlive(const ActorState &actor)
+        inline constexpr int kReload = 2, kKick = 3, kBurst1 = 4, kBurst2 = 5, kBurst3 = 6, kGrenToss = 7,
+                             kGrenLaunch = 8, kGrenDrop = 9, kCaughtEnemy = 10, kDropGun = 11;
+
+        enum : std::uint8_t
         {
-            return actor.active && isGrunt(actor.kind) && actor.ai < kAiDying;
+            kSchedSuppress = kSchedLastCommon + 1,
+            kSchedEstablishLineOfFire,
+            kSchedCoverAndReload,
+            kSchedSweep,
+            kSchedFoundEnemy,
+            kSchedRepel,
+            kSchedRepelAttack,
+            kSchedRepelLand,
+            kSchedWaitFaceEnemy,
+            kSchedTakeCoverFailed,
+            kSchedElofFail
+        };
+        enum : std::uint8_t
+        {
+            kTaskFaceTossDir = kTaskLastCommon + 1,
+            kTaskSpeakSentence,
+            kTaskCheckFire
+        };
+        inline constexpr std::uint32_t kCondNoFire = kCondSpecial1; ///< bits_COND_GRUNT_NOFIRE
+
+        // What he is to say next (m_iSentence): a kSpeak* group, or none.
+        inline constexpr int kSentenceNone = -1;
+
+        // His own of the game's fields: m_flNextGrenadeCheck (time1),
+        // m_flNextPainTime (time2), m_vecTossVelocity (vec1),
+        // m_fThrowGrenade (flag1), m_iSentence (count1).
+
+        inline constexpr AiTask tlFail[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetActivity, kActIdle},
+            {kTaskWait, 2000},
+            {kTaskWaitPvs, 0},
+        };
+        inline constexpr AiSchedule slFail = {
+            tlFail, 4, kCondCanRangeAttack1 | kCondCanRangeAttack2 | kCondCanMeleeAttack1 | kCondCanMeleeAttack2, 0,
+            "Grunt Fail"};
+
+        inline constexpr AiTask tlCombatFail[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetActivity, kActIdle},
+            {kTaskWaitFaceEnemy, 2000},
+            {kTaskWaitPvs, 0},
+        };
+        inline constexpr AiSchedule slCombatFail = {tlCombatFail, 4, kCondCanRangeAttack1 | kCondCanRangeAttack2, 0,
+                                                    "Grunt Combat Fail"};
+
+        inline constexpr AiTask tlVictoryDance[] = {
+            {kTaskStopMoving, 0},          {kTaskFaceEnemy, 0},       {kTaskWait, 1500},
+            {kTaskGetPathToEnemyCorpse, 0}, {kTaskWalkPath, 0},       {kTaskWaitForMovement, 0},
+            {kTaskFaceEnemy, 0},           {kTaskPlaySequence, kActVictoryDance},
+        };
+        inline constexpr AiSchedule slVictoryDance = {tlVictoryDance, 8,
+                                                      kCondNewEnemy | kCondLightDamage | kCondHeavyDamage, 0,
+                                                      "GruntVictoryDance"};
+
+        inline constexpr AiTask tlEstablishLineOfFire[] = {
+            {kTaskSetFailSchedule, kSchedElofFail},
+            {kTaskGetPathToEnemy, 0},
+            {kTaskSpeakSentence, 0},
+            {kTaskRunPath, 0},
+            {kTaskWaitForMovement, 0},
+        };
+        inline constexpr AiSchedule slEstablishLineOfFire = {
+            tlEstablishLineOfFire, 5,
+            kCondNewEnemy | kCondEnemyDead | kCondCanRangeAttack1 | kCondCanMeleeAttack1 | kCondCanRangeAttack2 |
+                kCondCanMeleeAttack2 | kCondHearSound,
+            kSoundDanger, "GruntEstablishLineOfFire"};
+
+        inline constexpr AiTask tlFoundEnemy[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFaceEnemy, 0},
+            {kTaskPlaySequenceFaceEnemy, kActSignal1},
+        };
+        inline constexpr AiSchedule slFoundEnemy = {tlFoundEnemy, 3, kCondHearSound, kSoundDanger, "GruntFoundEnemy"};
+
+        inline constexpr AiTask tlCombatFace1[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetActivity, kActIdle},
+            {kTaskFaceEnemy, 0},
+            {kTaskWait, 1500},
+            {kTaskSetSchedule, kSchedSweep},
+        };
+        inline constexpr AiSchedule slCombatFace = {
+            tlCombatFace1, 5, kCondNewEnemy | kCondEnemyDead | kCondCanRangeAttack1 | kCondCanRangeAttack2, 0,
+            "Combat Face"};
+
+        inline constexpr AiTask tlSignalSuppress[] = {
+            {kTaskStopMoving, 0},   {kTaskFaceIdeal, 0},     {kTaskPlaySequenceFaceEnemy, kActSignal2},
+            {kTaskFaceEnemy, 0},    {kTaskCheckFire, 0},     {kTaskRangeAttack1, 0},
+            {kTaskFaceEnemy, 0},    {kTaskCheckFire, 0},     {kTaskRangeAttack1, 0},
+            {kTaskFaceEnemy, 0},    {kTaskCheckFire, 0},     {kTaskRangeAttack1, 0},
+            {kTaskFaceEnemy, 0},    {kTaskCheckFire, 0},     {kTaskRangeAttack1, 0},
+            {kTaskFaceEnemy, 0},    {kTaskCheckFire, 0},     {kTaskRangeAttack1, 0},
+        };
+        inline constexpr AiSchedule slSignalSuppress = {
+            tlSignalSuppress, 18,
+            kCondEnemyDead | kCondLightDamage | kCondHeavyDamage | kCondHearSound | kCondNoFire | kCondNoAmmoLoaded,
+            kSoundDanger, "SignalSuppress"};
+
+        inline constexpr AiTask tlSuppress[] = {
+            {kTaskStopMoving, 0}, {kTaskFaceEnemy, 0},  {kTaskCheckFire, 0}, {kTaskRangeAttack1, 0},
+            {kTaskFaceEnemy, 0},  {kTaskCheckFire, 0},  {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},
+            {kTaskCheckFire, 0},  {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0}, {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0}, {kTaskCheckFire, 0}, {kTaskRangeAttack1, 0},
+        };
+        inline constexpr AiSchedule slSuppress = {
+            tlSuppress, 16,
+            kCondEnemyDead | kCondLightDamage | kCondHeavyDamage | kCondHearSound | kCondNoFire | kCondNoAmmoLoaded,
+            kSoundDanger, "Suppress"};
+
+        inline constexpr AiTask tlWaitInCover[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetActivity, kActIdle},
+            {kTaskWaitFaceEnemy, 1000},
+        };
+        inline constexpr AiSchedule slWaitInCover = {
+            tlWaitInCover, 3,
+            kCondNewEnemy | kCondHearSound | kCondCanRangeAttack1 | kCondCanRangeAttack2 | kCondCanMeleeAttack1 |
+                kCondCanMeleeAttack2,
+            kSoundDanger, "GruntWaitInCover"};
+
+        inline constexpr AiTask tlTakeCover1[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetFailSchedule, kSchedTakeCoverFailed},
+            {kTaskWait, 200},
+            {kTaskFindCoverFromEnemy, 0},
+            {kTaskSpeakSentence, 0},
+            {kTaskRunPath, 0},
+            {kTaskWaitForMovement, 0},
+            {kTaskRemember, static_cast<std::int32_t>(kMemoryInCover)},
+            {kTaskSetSchedule, kSchedWaitFaceEnemy},
+        };
+        inline constexpr AiSchedule slTakeCover = {tlTakeCover1, 9, 0, 0, "TakeCover"};
+
+        inline constexpr AiTask tlGrenadeCover1[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFindCoverFromEnemy, 99000}, // (99 seconds' wait, as the game's)
+            {kTaskFindFarNodeCoverFromEnemy, 384},
+            {kTaskPlaySequence, kActSpecialAttack1},
+            {kTaskClearMoveWait, 0},
+            {kTaskRunPath, 0},
+            {kTaskWaitForMovement, 0},
+            {kTaskSetSchedule, kSchedWaitFaceEnemy},
+        };
+        inline constexpr AiSchedule slGrenadeCover = {tlGrenadeCover1, 8, 0, 0, "GrenadeCover"};
+
+        inline constexpr AiTask tlTossGrenadeCover1[] = {
+            {kTaskFaceEnemy, 0},
+            {kTaskRangeAttack2, 0},
+            {kTaskSetSchedule, kSchedTakeCoverFromEnemy},
+        };
+        inline constexpr AiSchedule slTossGrenadeCover = {tlTossGrenadeCover1, 3, 0, 0, "TossGrenadeCover"};
+
+        inline constexpr AiTask tlTakeCoverFromBestSound[] = {
+            {kTaskSetFailSchedule, kSchedCower}, // (duck and cover, if there is nowhere to go)
+            {kTaskStopMoving, 0},
+            {kTaskFindCoverFromBestSound, 0},
+            {kTaskRunPath, 0},
+            {kTaskWaitForMovement, 0},
+            {kTaskRemember, static_cast<std::int32_t>(kMemoryInCover)},
+            {kTaskTurnLeft, 179},
+        };
+        inline constexpr AiSchedule slTakeCoverFromBestSound = {tlTakeCoverFromBestSound, 7, 0, 0,
+                                                                "GruntTakeCoverFromBestSound"};
+
+        inline constexpr AiTask tlHideReload[] = {
+            {kTaskStopMoving, 0},
+            {kTaskSetFailSchedule, kSchedReload},
+            {kTaskFindCoverFromEnemy, 0},
+            {kTaskRunPath, 0},
+            {kTaskWaitForMovement, 0},
+            {kTaskRemember, static_cast<std::int32_t>(kMemoryInCover)},
+            {kTaskFaceEnemy, 0},
+            {kTaskPlaySequence, kActReload},
+        };
+        inline constexpr AiSchedule slHideReload = {tlHideReload, 8, kCondHeavyDamage | kCondHearSound, kSoundDanger,
+                                                    "GruntHideReload"};
+
+        inline constexpr AiTask tlSweep[] = {
+            {kTaskTurnLeft, 179},
+            {kTaskWait, 1000},
+            {kTaskTurnLeft, 179},
+            {kTaskWait, 1000},
+        };
+        inline constexpr AiSchedule slSweep = {
+            tlSweep, 4,
+            kCondNewEnemy | kCondLightDamage | kCondHeavyDamage | kCondCanRangeAttack1 | kCondCanRangeAttack2 |
+                kCondHearSound,
+            kSoundWorld | kSoundDanger | kSoundPlayer, "Grunt Sweep"};
+
+        inline constexpr AiTask tlRangeAttack1A[] = {
+            {kTaskStopMoving, 0},   {kTaskPlaySequenceFaceEnemy, kActCrouch}, {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                      {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                      {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                      {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0},
+        };
+        inline constexpr AiSchedule slRangeAttack1A = {
+            tlRangeAttack1A, 13,
+            kCondNewEnemy | kCondEnemyDead | kCondHeavyDamage | kCondEnemyOccluded | kCondHearSound | kCondNoFire |
+                kCondNoAmmoLoaded,
+            kSoundDanger, "Range Attack1A"};
+
+        inline constexpr AiTask tlRangeAttack1B[] = {
+            {kTaskStopMoving, 0},   {kTaskPlaySequenceFaceEnemy, kActIdleAngry}, {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                         {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                         {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0}, {kTaskFaceEnemy, 0},                         {kTaskCheckFire, 0},
+            {kTaskRangeAttack1, 0},
+        };
+        inline constexpr AiSchedule slRangeAttack1B = {
+            tlRangeAttack1B, 13,
+            kCondNewEnemy | kCondEnemyDead | kCondHeavyDamage | kCondEnemyOccluded | kCondNoAmmoLoaded | kCondNoFire |
+                kCondHearSound,
+            kSoundDanger, "Range Attack1B"};
+
+        inline constexpr AiTask tlRangeAttack2[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFaceTossDir, 0},
+            {kTaskPlaySequence, kActRangeAttack2},
+            {kTaskSetSchedule, kSchedWaitFaceEnemy}, // (not to run straight after throwing)
+        };
+        inline constexpr AiSchedule slRangeAttack2 = {tlRangeAttack2, 4, 0, 0, "RangeAttack2"};
+
+        // ------------------------------------------------------------ him
+
+        inline bool has(const AiCtx &c, std::uint32_t weapons) { return (c.me.item & weapons) != 0; }
+        inline int clipSize(const AiCtx &c) { return has(c, kGruntShotgun) ? kGruntShells : kGruntClip; }
+        inline bool standing(const AiCtx &c) { return (c.me.mood & kMoodStanding) != 0; }
+
+        /// GetGunPosition
+        inline void gunPosition(const AiCtx &c, fx *at)
+        {
+            at[0] = c.me.pos[0];
+            at[1] = c.me.pos[1];
+            at[2] = c.me.pos[2] + fxFromInt(standing(c) ? 60 : 48);
         }
 
-        /// What the map has him set off when `condition` comes about (the
-        /// game's numbers; 1 stands for all those of noticing the player):
-        /// set off, the once.
-        inline void gruntTrigger(LogicWorld &w, ActorState &me, int condition)
+        /// FOkToSpeak: nobody of his kind has just spoken; and one who is
+        /// gagged speaks only in a fight.
+        inline bool okToSpeak(const AiCtx &c)
         {
-            int his = me.item >> kGruntTriggerShift;
-            his = his >= 7 && his <= 11 ? 1 : his;
-            if (me.fires == 0 || his != condition)
-                return;
-            logicEnqueue(w, me.fires, 0, kUseToggle, -1, 1);
-            me.fires = 0;
+            if (c.a.speakMs > 0)
+                return false;
+            if ((c.me.flags & kActorGag) && c.m.state != kStateCombat)
+                return false;
+            return true;
         }
 
-        inline fx gruntGun(const ActorState &actor)
+        /// A line of `group`, and then nobody speaks for a second and a half
+        /// or two (SENTENCEG_PlayRndSz, JustSpoke).
+        inline void say(AiCtx &c, int group)
         {
-            return fxFromInt((actor.mood & kMoodStanding) ? 60 : 48);
-        }
-
-        /// One of the lines of `group` (kSpeak*), if nobody has spoken for a
-        /// moment; and then nobody speaks for a moment more.
-        inline void gruntSay(LogicWorld &w, const ActorState &actor, int group)
-        {
-            ActorWorld &a = *w.actors;
-            if (a.speakMs > 0)
+            ActorWorld &a = c.a;
+            a.speakMs = 1500 + aiRandomLong(a, 0, 500);
+            c.m.count1 = kSentenceNone;
+            if (c.w.speech == nullptr || c.w.heard == nullptr || group < 0)
                 return;
-            a.speakMs = 1500 + static_cast<int>(chance(a) % 500);
-            if (w.speech == nullptr || w.heard == nullptr)
-                return;
-            const std::uint16_t *lines = w.speech + group * kSpeechLines;
+            const std::uint16_t *lines = c.w.speech + group * kSpeechLines;
             int count = 0;
             while (count < kSpeechLines && lines[count] != 0xFFFF)
                 ++count;
             if (count != 0)
-                w.heard->add(lines[chance(a) % static_cast<std::uint32_t>(count)], actor.pos, 127, kRadiusLarge,
-                             kSoundSentence);
+                c.w.heard->add(lines[aiRandomLong(a, 0, count - 1)], c.me.pos, 127, kRadiusLarge, kSoundSentence);
         }
 
-        /// How many others of his squad are acting out `one` or `other`.
-        inline int squadActing(const ActorWorld &a, int index, std::uint8_t one, std::uint8_t other)
+        /// SpeakSentence: what he was to say, if he may.
+        inline void speakSentence(AiCtx &c)
         {
-            const ActorState &me = a.states[index];
-            int count = 0;
-            for (int i = 0; me.squad >= 0 && i < a.count; ++i)
-            {
-                const ActorState &mate = a.states[i];
-                if (i != index && gruntAlive(mate) && mate.squad == me.squad && mate.ai == kAiAttack &&
-                    (mate.attack == one || mate.attack == other))
-                    ++count;
-            }
-            return count;
+            if (c.m.count1 == kSentenceNone)
+                return;
+            if (okToSpeak(c))
+                say(c, c.m.count1);
         }
 
-        /// He is out of his squad (dead); and if he led it, it is no squad.
-        inline void gruntLeaves(ActorWorld &a, int index)
+        inline void sound(AiCtx &c, int which)
         {
-            const int squad = a.states[index].squad;
-            a.states[index].squad = -1;
-            if (squad != index)
-                return;
-            for (int i = 0; i < a.count; ++i)
+            switch (which)
             {
-                if (a.states[i].squad == squad && isGrunt(a.states[i].kind))
-                    a.states[i].squad = -1;
-            }
-        }
-
-        /// The squad he is to lead, got together: those of the name the map
-        /// gave him (if it flagged him their leader), or, with no name,
-        /// those without one he can see within 1024 units.
-        inline void gruntRecruit(LogicWorld &w, int index)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            if (me.squad >= 0)
-                return;
-            auto nameOf = [&](int i) -> std::uint32_t
-            {
-                return i < a.recordCount ? a.records[i].item >> kActorSquadShift : 0u;
-            };
-            const std::uint32_t name = nameOf(index);
-            if (name != 0 && !(me.flags & kActorLeader))
-                return;
-            const int most = name != 0 ? 5 : 4;
-            const fx eye[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(50)};
-            int members = 1;
-            for (int i = 0; i < a.count && members < most; ++i)
-            {
-                ActorState &other = a.states[i];
-                if (i == index || !gruntAlive(other) || other.squad >= 0 || nameOf(i) != name ||
-                    (other.flags & kActorPrisoner))
-                    continue;
-                if (name == 0)
+            case kAiSoundIdle:
+                // Idle talk: a question asked, and answered by the next.
+                if (okToSpeak(c) && (c.a.asked != 0 || aiRandomLong(c.a, 0, 1)))
                 {
-                    const fx d[3] = {other.pos[0] - me.pos[0], other.pos[1] - me.pos[1], other.pos[2] - me.pos[2]};
-                    const fx theirs[3] = {other.pos[0], other.pos[1], other.pos[2] + fxFromInt(50)};
-                    if (fxLength(d) > fxFromInt(1024) || !lineClear(*w.world, eye, theirs))
-                        continue;
+                    if (c.a.asked == 0)
+                    {
+                        switch (aiRandomLong(c.a, 0, 2))
+                        {
+                        case 0: say(c, kSpeakCheck); c.a.asked = 1; break;
+                        case 1: say(c, kSpeakQuestion); c.a.asked = 2; break;
+                        default: say(c, kSpeakIdle); break;
+                        }
+                    }
+                    else
+                    {
+                        say(c, c.a.asked == 1 ? kSpeakClear : kSpeakAnswer);
+                        c.a.asked = 0;
+                    }
                 }
-                other.squad = static_cast<std::int16_t>(index);
-                ++members;
+                break;
+            case kAiSoundPain:
+                // Five times in seven, and not more than once a second.
+                if (c.ai.now > c.m.time2)
+                {
+                    const int which = aiRandomLong(c.a, 0, 6);
+                    if (which <= 4)
+                        detail::aiSay(c, which & 1 ? CommonSound::GruntPain2 : CommonSound::GruntPain1);
+                    c.m.time2 = c.ai.now + 1000;
+                }
+                break;
+            case kAiSoundDeath:
+                detail::aiSay(c, aiRandomLong(c.a, 0, 1) ? CommonSound::GruntDie2 : CommonSound::GruntDie1);
+                break;
+            default:
+                break;
             }
-            if (members == 1)
-                return;
-            // Whoever leads wears the beret (and, in the game, a pale face).
-            me.squad = static_cast<std::int16_t>(index);
-            me.body = static_cast<std::uint8_t>(me.body - me.body % 4 + 1);
-            me.skin = 0;
         }
 
-        /// Whether there is a clear line between him and the player, within
-        /// range; `cone`: and the player is in front of him (as wide as the
-        /// game has him see).
-        inline bool gruntSees(const LogicWorld &w, const PlayerState &player, const ActorState &actor, bool cone)
+        inline int yawSpeed(AiCtx &c)
         {
-            if ((player.health <= 0 || unseen(player)))
-                return false;
-            const fx eye[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + gruntGun(actor)};
-            const fx d[3] = {player.origin[0] - eye[0], player.origin[1] - eye[1], player.origin[2] - eye[2]};
-            if (fxLength(d) > fxFromInt(kGruntRange))
-                return false;
-            if (cone)
+            switch (c.m.activity)
             {
-                fx sine, cosine;
-                fxSinCos(actor.yaw, sine, cosine);
-                const fx flat[3] = {d[0], d[1], 0};
-                const std::int64_t ahead = static_cast<std::int64_t>(d[0]) * cosine +
-                                           static_cast<std::int64_t>(d[1]) * sine;
-                if (ahead * 5 < static_cast<std::int64_t>(fxLength(flat)) * kFxOne)
+            case kActIdle:
+            case kActRun: return 150;
+            case kActWalk: return 180;
+            case kActRangeAttack1:
+            case kActRangeAttack2:
+            case kActMeleeAttack1:
+            case kActMeleeAttack2: return 120;
+            case kActTurnLeft:
+            case kActTurnRight: return 180;
+            case kActGlide:
+            case kActFly: return 30;
+            default: return 90;
+            }
+        }
+
+        /// NoFriendlyFire: none of his squad in the way, between two walls
+        /// either side of him a box and a half wide and him, towards his
+        /// enemy.
+        inline bool noFriendlyFire(AiCtx &c)
+        {
+            if (!aiInSquad(c))
+                return true;
+            AiTarget t;
+            if (!aiTargetOf(c.w, c.player, c.m.enemy, t))
+                return false;
+            const std::uint16_t yaw = fxAtan2Turns(t.center[1] - c.me.pos[1], t.center[0] - c.me.pos[0]);
+            fx forward[3], right[3];
+            aiForward(yaw, forward);
+            aiRight(yaw, right);
+            for (int i = 0; i < kMaxSquadMembers; ++i)
+            {
+                const std::int16_t id = aiSquadMember(c, i);
+                if (id == kAiNone || id == c.index)
+                    continue;
+                const fx *p = c.a.states[id].pos;
+                const fx d[2] = {p[0] - c.me.pos[0], p[1] - c.me.pos[1]};
+                const std::int64_t ahead = static_cast<std::int64_t>(d[0]) * forward[0] + static_cast<std::int64_t>(d[1]) * forward[1];
+                const std::int64_t side = static_cast<std::int64_t>(d[0]) * right[0] + static_cast<std::int64_t>(d[1]) * right[1];
+                const std::int64_t width = static_cast<std::int64_t>(fxFromInt(48)) * kFxOne;
+                if (ahead > 0 && side < width && side > -width)
                     return false;
             }
-            const fx head[3] = {player.origin[0], player.origin[1], player.origin[2] + player.viewHeight};
-            return lineClear(*w.world, eye, player.origin) || lineClear(*w.world, eye, head);
-        }
-
-        /// How squarely he faces `to` (feet to feet): the cosine, Q12.
-        inline fx gruntFacing(const ActorState &actor, const fx *to)
-        {
-            const fx d[3] = {to[0] - actor.pos[0], to[1] - actor.pos[1], 0};
-            const fx flat = fxLength(d);
-            if (flat <= 0)
-                return kFxOne;
-            fx sine, cosine;
-            fxSinCos(actor.yaw, sine, cosine);
-            return static_cast<fx>((static_cast<std::int64_t>(d[0]) * cosine + static_cast<std::int64_t>(d[1]) * sine) /
-                                   flat);
-        }
-
-        /// Whether one of his squad stands where his rounds would go: ahead
-        /// of him on the way to `to`, within a body and a half of the line.
-        inline bool gruntFriendInWay(const ActorWorld &a, int index, const fx *to)
-        {
-            const ActorState &me = a.states[index];
-            if (me.squad < 0)
-                return false;
-            const fx d[3] = {to[0] - me.pos[0], to[1] - me.pos[1], 0};
-            const fx flat = fxLength(d);
-            if (flat <= 0)
-                return false;
-            for (int i = 0; i < a.count; ++i)
-            {
-                const ActorState &mate = a.states[i];
-                if (i == index || !gruntAlive(mate) || mate.squad != me.squad)
-                    continue;
-                const std::int64_t mx = mate.pos[0] - me.pos[0], my = mate.pos[1] - me.pos[1];
-                const std::int64_t along = (mx * d[0] + my * d[1]) / flat;
-                std::int64_t aside = (mx * d[1] - my * d[0]) / flat;
-                aside = aside < 0 ? -aside : aside;
-                if (along > 0 && aside < fxFromInt(48))
-                    return true;
-            }
-            return false;
-        }
-
-        /// A live grenade near enough to run from: where it is, if so.
-        inline bool gruntDanger(const ActorWorld &a, const ActorState &me, fx *where)
-        {
-            for (const Projectile &shot : a.shots)
-            {
-                if (!shot.active || shot.kind != kShotGrenade)
-                    continue;
-                const fx d[3] = {shot.pos[0] - me.pos[0], shot.pos[1] - me.pos[1], shot.pos[2] - me.pos[2]};
-                if (fxLength(d) < fxFromInt(300))
-                {
-                    for (int k = 0; k < 3; ++k)
-                        where[k] = shot.pos[k];
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// Somewhere to stand that `threat` (an eye, or a grenade) has no
-        /// line to: a few steps to one side or the other, if that does it;
-        /// else the nearest path node, at least `least` and at most 784
-        /// units off, that is no nearer the threat than it is to him. False
-        /// if there is nowhere (and then he does not look again for a
-        /// while: looking is a good many lines through the world).
-        inline bool gruntCoverSearch(LogicWorld &w, int index, const fx *threat, int least, fx *out)
-        {
-            ActorWorld &a = *w.actors;
-            const ActorState &me = a.states[index];
-            const MoveWorld &world = *w.world;
-            int pause = 0;
-            fx sine, cosine;
-            fxSinCos(me.yaw, sine, cosine);
-            for (int n = 1; least == 0 && n <= 5; ++n)
-            {
-                for (int side = -1; side <= 1; side += 2)
-                {
-                    const fx there[3] = {me.pos[0] + sine * (48 * n * side), me.pos[1] - cosine * (48 * n * side),
-                                         me.pos[2]};
-                    const fx eye[3] = {there[0], there[1], there[2] + fxFromInt(50)};
-                    if (lineClear(world, threat, eye) ||
-                        !walkClear(world, &a, index, kWalkStanding, me.pos, there, n * 3 + 1))
-                        continue;
-                    for (int k = 0; k < 3; ++k)
-                        out[k] = there[k];
-                    return true;
-                }
-            }
-            int best = -1;
-            fx bestD = fxFromInt(kGruntCoverRadius);
-            // (Somewhere he can GET to: the node he is at, and a way from
-            // it. A wall away is hidden, and no use.)
-            const int mineNode = pathNearest(a, world, me.pos, kWalkStanding, index);
-            // (Which of the nodes he can get to at all, once: not a search
-            // for each.)
-            std::uint8_t reached[kMaxPathNodes];
-            if (mineNode >= 0)
-                pathReach(a, mineNode, kPathLinkHuman, true, reached);
-            for (int n = 0; n < a.nodeCount; ++n)
-            {
-                thinkPoint(pause, 8);
-                const fx *p = a.nodes[n].pos;
-                const fx mine[3] = {p[0] - me.pos[0], p[1] - me.pos[1], p[2] - me.pos[2]};
-                const fx far = fxLength(mine);
-                if (far < fxFromInt(least) || far >= bestD)
-                    continue;
-                const fx theirs[3] = {p[0] - threat[0], p[1] - threat[1], p[2] - threat[2]};
-                if (fxLength(theirs) < far)
-                    continue;
-                const fx eye[3] = {p[0], p[1], p[2] + fxFromInt(50)};
-                if (lineClear(world, threat, eye))
-                    continue;
-                if (mineNode >= 0 && n != mineNode && !reached[n])
-                    continue;
-                best = n;
-                bestD = far;
-            }
-            if (best < 0)
-                return false;
-            for (int k = 0; k < 3; ++k)
-                out[k] = a.nodes[best].pos[k];
             return true;
         }
 
-        /// Somewhere out of the sight of `threat` for the soldier at `index`,
-        /// `least` units off at least. None found: he does not look again for
-        /// two seconds. (Worked out in his tick, always: it is chosen in the
-        /// middle of deciding what to do, and the decision is not to wait.
-        /// One search of the ways for every node makes it cheap enough.)
-        inline bool gruntFindCover(LogicWorld &w, int index, const fx *threat, int least, fx *out)
+        inline bool canCheckAttacks(AiCtx &c)
         {
-            ActorState &me = w.actors->states[index];
-            if (me.coverMs > 0)
+            return !aiHas(c, kCondEnemyTooFar);
+        }
+
+        inline bool checkMelee1(AiCtx &c, fx dot, fx dist)
+        {
+            AiTarget t;
+            if (!aiTargetOf(c.w, c.player, c.m.enemy, t) || !t.monster)
                 return false;
-            const bool found = gruntCoverSearch(w, index, threat, least, out);
-            if (!found)
-                me.coverMs = 2000;
-            return found;
+            return dist <= fxFromInt(64) && dot >= fxDot(0.7) && t.cls != kClassAlienBioweapon &&
+                   t.cls != kClassPlayerBioweapon;
         }
 
-        // --------------------------------------------------- what he does
-
-        inline void gruntGo(ActorWorld &a, ActorState &me, const fx *dest, std::uint8_t why)
+        inline bool checkRange1(AiCtx &c, fx dot, fx dist)
         {
-            me.ai = kAiChase;
-            me.attack = why;
-            for (int k = 0; k < 3; ++k)
-                me.target[k] = dest[k];
-            me.thinkMs = 0;
-            me.lookMs = 200;
-            me.stuckMs = 0;
-            me.moveMs = 6000; // (longer than that and he is getting nowhere)
-            me.hasGoal = false;
-            me.goalNode = me.fromNode = -1;
-            // Hurt badly enough, he limps.
-            const char *clip = me.health <= kGruntLimp ? "limpingrun" : "run";
-            const ModelView *model = actorModel(a, me);
-            if (model == nullptr || model->findClip(nameHash(clip)) < 0)
-                clip = "run";
-            me.speed = actorClipSpeed(a, me, nameHash(clip), fxFromInt(170));
-            monsterClip(a, me, clip, false);
-        }
-
-        inline void gruntAct(ActorWorld &a, ActorState &me, std::uint8_t what, const char *clip)
-        {
-            me.ai = kAiAttack;
-            me.attack = what;
-            me.struck = 0;
-            me.lookMs = 0;
-            monsterClip(a, me, clip, true);
-        }
-
-        inline void gruntWait(ActorWorld &a, ActorState &me, int ms)
-        {
-            me.ai = kGruntWait;
-            me.attack = 0;
-            me.cooldownMs = ms;
-            me.lookMs = 300;
-            monsterClip(a, me, (me.mood & kMoodStanding) ? "combatidle" : "crouching_idle", false);
-        }
-
-        /// A burst begun: one of `bursts` (0: the next of those he has left).
-        inline void gruntBurst(ActorWorld &a, ActorState &me, int bursts)
-        {
-            if (bursts != 0)
-            {
-                me.bursts = static_cast<std::uint8_t>(bursts);
-                // Standing or crouched: chosen again one time in ten.
-                if (chance(a) % 10 == 0)
-                    me.mood = static_cast<std::uint8_t>((me.mood & ~kMoodStanding) | ((chance(a) & 1) ? kMoodStanding : 0));
-            }
-            const bool shotgun = (me.item & kGruntShotgun) != 0;
-            const bool standing = (me.mood & kMoodStanding) != 0;
-            gruntAct(a, me, kActBurst,
-                     shotgun ? (standing ? "standing_shotgun" : "crouching_shotgun")
-                             : (standing ? "standing_mp5" : "crouching_mp5"));
-        }
-
-        /// The game's toss: up to the top of an arc (as high as the ceiling
-        /// midway lets it be) and down onto `to`, under half gravity. False
-        /// if the place is too far above him, there is no headroom, he is
-        /// too near, or something is in the way of either half.
-        inline bool gruntToss(LogicWorld &w, const ActorState &me, const fx *from, fx *to, fx *velocity)
-        {
-            ActorWorld &a = *w.actors;
-            if (to[2] - from[2] > fxFromInt(500))
+            if (aiHas(c, kCondEnemyOccluded) || dist > fxFromInt(2048) || dot < fxDot(0.5) || !noFriendlyFire(c))
                 return false;
-            // A little to one side: not down on their head.
-            fx sine, cosine;
-            fxSinCos(me.yaw, sine, cosine);
-            const int right = static_cast<int>(chance(a) % 49) - 24, ahead = static_cast<int>(chance(a) % 49) - 24;
-            to[0] += sine * right + cosine * ahead;
-            to[1] += -cosine * right + sine * ahead;
+            AiTarget t;
+            if (!aiTargetOf(c.w, c.player, c.m.enemy, t))
+                return false;
+            if (!t.isPlayer && dist <= fxFromInt(64))
+                return false; // (too close to something that is not the player: kick it)
+            fx gun[3];
+            gunPosition(c, gun);
+            return lineClear(*c.w.world, gun, t.center);
+        }
+
+        /// VecCheckToss: up to the top of an arc as high as the ceiling
+        /// midway lets it be, and down onto the spot, at `gravity` (the
+        /// world's, adjusted); none if it cannot be done.
+        inline bool vecCheckToss(AiCtx &c, const fx *from, fx *to, int gravityPercent, fx *velocity)
+        {
+            const int gravity = fxToInt(gravityOf(c.player)) * gravityPercent / 100;
+            if (to[2] - from[2] > fxFromInt(500) || gravity <= 0)
+                return false;
+            // (Somewhere about the spot: not on their head.)
+            fx forward[3], right[3];
+            aiForward(c.me.yaw, forward);
+            aiRight(c.me.yaw, right);
+            const int across = aiRandomLong(c.a, -8, 8) + aiRandomLong(c.a, -16, 16);
+            const int along = aiRandomLong(c.a, -8, 8) + aiRandomLong(c.a, -16, 16);
+            for (int k = 0; k < 2; ++k)
+                to[k] += right[k] * across + forward[k] * along;
             fx mid[3] = {(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2};
             const fx above[3] = {mid[0], mid[1], mid[2] + fxFromInt(500)};
-            const Shot up = traceShot(*w.world, mid, above);
+            const Shot up = traceShot(*c.w.world, mid, above);
             mid[2] += static_cast<fx>((static_cast<std::int64_t>(fxFromInt(500)) * up.fraction) >> kFractionShift) -
                       fxFromInt(15);
             if (mid[2] < from[2] || mid[2] < to[2])
                 return false;
-            // How long up, and how long down: t = sqrt(d / (g / 2)), g = 400.
-            const std::int64_t t1 = isqrt64(static_cast<std::uint64_t>(fxToInt(mid[2] - from[2])) * 5000u);
-            const std::int64_t t2 = isqrt64(static_cast<std::uint64_t>(fxToInt(mid[2] - to[2])) * 5000u);
+            // t = sqrt(d / (g / 2)), in ms.
+            const std::int64_t t1 =
+                isqrt64(static_cast<std::uint64_t>(fxToInt(mid[2] - from[2])) * 2000000u / static_cast<std::uint32_t>(gravity));
+            const std::int64_t t2 =
+                isqrt64(static_cast<std::uint64_t>(fxToInt(mid[2] - to[2])) * 2000000u / static_cast<std::uint32_t>(gravity));
             if (t1 < 100)
                 return false;
-            velocity[0] = static_cast<fx>((static_cast<std::int64_t>(to[0] - from[0]) * 1000) / (t1 + t2));
-            velocity[1] = static_cast<fx>((static_cast<std::int64_t>(to[1] - from[1]) * 1000) / (t1 + t2));
-            velocity[2] = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(400)) * t1) / 1000);
+            for (int k = 0; k < 2; ++k)
+                velocity[k] = static_cast<fx>((static_cast<std::int64_t>(to[k] - from[k]) * 1000) / (t1 + t2));
+            velocity[2] = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(gravity)) * t1) / 1000);
             const fx apex[3] = {from[0] + static_cast<fx>((static_cast<std::int64_t>(velocity[0]) * t1) / 1000),
                                 from[1] + static_cast<fx>((static_cast<std::int64_t>(velocity[1]) * t1) / 1000),
                                 mid[2]};
-            const fx land[3] = {to[0], to[1], to[2] + fxFromInt(8)};
-            return lineClear(*w.world, from, apex) && lineClear(*w.world, land, apex);
+            return lineClear(*c.w.world, from, apex) && lineClear(*c.w.world, to, apex);
         }
 
-        /// The game's throw: straight at `to` at `speed`, lifted for what
-        /// half gravity will take off it on the way.
-        inline bool gruntThrow(LogicWorld &w, const fx *from, const fx *to, int speed, fx *velocity)
+        /// VecCheckThrow: straight at the spot at `speed`, lifted for what
+        /// the world's pull (adjusted) takes off it on the way.
+        inline bool vecCheckThrow(AiCtx &c, const fx *from, const fx *to, int speed, int gravityPercent, fx *velocity)
         {
+            const int gravity = fxToInt(gravityOf(c.player)) * gravityPercent / 100;
             const fx d[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
             const std::int64_t ms = static_cast<std::int64_t>(fxToInt(fxLength(d))) * 1000 / speed;
             if (ms < 1)
                 return false;
             for (int k = 0; k < 3; ++k)
                 velocity[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) * 1000) / ms);
-            velocity[2] += static_cast<fx>((static_cast<std::int64_t>(fxFromInt(200)) * ms) / 1000);
+            velocity[2] += static_cast<fx>((static_cast<std::int64_t>(fxFromInt(gravity)) * ms) / 2000);
             const fx apex[3] = {from[0] + d[0] / 2, from[1] + d[1] / 2,
                                 from[2] + d[2] / 2 +
-                                    static_cast<fx>((static_cast<std::int64_t>(fxFromInt(200)) * ms * ms) / 4000000)};
-            const fx land[3] = {to[0], to[1], to[2] + fxFromInt(8)};
-            return lineClear(*w.world, from, apex) && lineClear(*w.world, land, apex);
+                                    static_cast<fx>((static_cast<std::int64_t>(fxFromInt(gravity)) * ms * ms) / 8000000)};
+            return lineClear(*c.w.world, from, apex) && lineClear(*c.w.world, to, apex);
         }
 
-        /// Whether he has a grenade for the player and a way to get it to
-        /// them: then ActorState::velocity is how it is to leave him.
-        inline bool gruntGrenade(LogicWorld &w, const PlayerState &player, int index, bool sees)
+        inline bool checkRange2(AiCtx &c, fx, fx)
         {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            if (!(me.item & (kGruntGrenades | kGruntLauncher)) || me.grenadeMs > 0)
+            if (!has(c, kGruntGrenades | kGruntLauncher))
                 return false;
-            // Not at someone in the air above him.
-            if (!player.onGround && player.waterLevel == 0 && me.seen[2] > me.pos[2] + fxFromInt(72))
-                return false;
-            const fx gun[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(60)};
-            fx to[3];
-            if (me.item & kGruntGrenades)
+            // (Not while on the move.)
+            if (aiIsMoving(c))
             {
-                // At their feet (which he knows, seen or not), or where he
-                // last saw them: one or the other.
-                const bool feet = (chance(a) & 1) != 0;
-                for (int k = 0; k < 3; ++k)
-                    to[k] = feet ? player.origin[k] : me.seen[k];
-                to[2] -= player.ducked ? kCrouchedFeet : kStandingFeet;
+                c.m.flag1 = false;
+                return false;
+            }
+            if (c.ai.now < c.m.time1)
+                return c.m.flag1;
+            AiTarget t;
+            if (!aiTargetOf(c.w, c.player, c.m.enemy, t))
+                return false;
+            // Not at something in the air above him.
+            fx mins[3], maxs[3];
+            targetBox(c.me, mins, maxs);
+            if (!t.onGround && !(t.isPlayer && c.player.waterLevel != 0) && c.m.enemyLkp[2] > maxs[2])
+            {
+                c.m.flag1 = false;
+                return false;
+            }
+            fx target[3];
+            if (has(c, kGruntGrenades))
+            {
+                // At their feet, or where they were last seen.
+                if (aiRandomLong(c.a, 0, 1))
+                {
+                    target[0] = t.origin[0];
+                    target[1] = t.origin[1];
+                    target[2] = t.isPlayer ? t.origin[2] - t.height / 2 : t.origin[2];
+                }
+                else
+                {
+                    for (int k = 0; k < 3; ++k)
+                        target[k] = c.m.enemyLkp[k];
+                }
             }
             else
             {
-                // Where they will be when it gets there, if he can see them.
-                const fx d[3] = {player.origin[0] - gun[0], player.origin[1] - gun[1], player.origin[2] - gun[2]};
-                const std::int64_t ms = static_cast<std::int64_t>(fxToInt(fxLength(d))) * 1000 / kGruntLaunchSpeed;
+                // Its body where it was last seen, and ahead of it, if seen.
                 for (int k = 0; k < 3; ++k)
-                    to[k] = player.origin[k] +
-                            (sees ? static_cast<fx>((static_cast<std::int64_t>(player.velocity[k]) * ms) / 1000) : 0);
+                    target[k] = c.m.enemyLkp[k] + (t.center[k] - t.origin[k]);
+                if (aiHas(c, kCondSeeEnemy))
+                {
+                    const fx d[3] = {target[0] - c.me.pos[0], target[1] - c.me.pos[1], target[2] - c.me.pos[2]};
+                    const std::int64_t ms = static_cast<std::int64_t>(fxToInt(fxLength(d))) * 1000 / kGruntGrenadeSpeed;
+                    for (int k = 0; k < 3; ++k)
+                        target[k] += static_cast<fx>((static_cast<std::int64_t>(t.velocity[k]) * ms) / 1000);
+                }
             }
-            // Not onto his own squad, and not at his own feet.
-            me.grenadeMs = 1000;
-            for (int i = 0; i < a.count; ++i)
+            // Not onto his own squad, nor at his own feet.
+            if (aiInSquad(c) && aiSquadMemberInRange(c, target, fxFromInt(256)))
             {
-                const ActorState &mate = a.states[i];
-                if (i == index || me.squad < 0 || !gruntAlive(mate) || mate.squad != me.squad)
-                    continue;
-                const fx d[3] = {mate.pos[0] - to[0], mate.pos[1] - to[1], mate.pos[2] - to[2]};
-                if (fxLength(d) <= fxFromInt(256))
-                    return false;
+                c.m.time1 = c.ai.now + 1000;
+                c.m.flag1 = false;
             }
-            const fx flat[3] = {to[0] - me.pos[0], to[1] - me.pos[1], 0};
-            if (fxLength(flat) <= fxFromInt(256))
+            if (aiDist2D(target, c.me.pos) <= fxFromInt(256))
+            {
+                c.m.time1 = c.ai.now + 1000;
+                c.m.flag1 = false;
                 return false;
-            const bool can = (me.item & kGruntGrenades) ? gruntToss(w, me, gun, to, me.velocity)
-                                                        : gruntThrow(w, gun, to, kGruntLaunchSpeed, me.velocity);
-            if (can)
-                me.grenadeMs = 0;
-            return can;
+            }
+            fx gun[3];
+            gunPosition(c, gun);
+            if (has(c, kGruntGrenades))
+            {
+                if (vecCheckToss(c, gun, target, 50, c.m.vec1))
+                {
+                    c.m.flag1 = true;
+                    c.m.time1 = c.ai.now; // (the game's "1/3 second" is now)
+                }
+                else
+                {
+                    c.m.flag1 = false;
+                    c.m.time1 = c.ai.now + 1000;
+                }
+            }
+            else
+            {
+                if (vecCheckThrow(c, gun, target, kGruntGrenadeSpeed, 50, c.m.vec1))
+                {
+                    c.m.flag1 = true;
+                    c.m.time1 = c.ai.now + 300;
+                }
+                else
+                {
+                    c.m.flag1 = false;
+                    c.m.time1 = c.ai.now + 1000;
+                }
+            }
+            return c.m.flag1;
         }
 
-        /// A round (or a shell): from his gun at the player, or where he
-        /// last saw them, as loose as the gun is. It hurts whatever it meets
-        /// first -- the player, or anything else that can be shot.
-        inline void gruntShoot(LogicWorld &w, PlayerState &player, int index, bool sees)
+        inline void checkAmmo(AiCtx &c)
         {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            const bool shotgun = (me.item & kGruntShotgun) != 0;
-            const fx gun[3] = {me.pos[0], me.pos[1], me.pos[2] + gruntGun(me)};
-            // (Somewhere between their belt and the top of their head.)
-            const fx *at = sees ? player.origin : me.seen;
-            const fx aim[3] = {at[0], at[1],
-                               at[2] + static_cast<fx>((static_cast<std::int64_t>(player.viewHeight) *
-                                                        (50 + chance(a) % 61)) / 100)};
-            const fx d[3] = {aim[0] - gun[0], aim[1] - gun[1], aim[2] - gun[2]};
-            const fx length = fxLength(d);
-            if (length <= 0)
+            if (c.me.ammo <= 0)
+                aiSet(c, kCondNoAmmoLoaded);
+        }
+
+        /// The helmet: a plain soldier's turns 20 of a bullet, a blade, a
+        /// blast or a club -- all of it, with a ricochet, if that is all
+        /// there was; and it is his head.
+        inline bool traceAttack(AiCtx &c, AiDamage &d)
+        {
+            if (d.group != kHitHelmet)
+                return true;
+            if ((c.me.body & 3) == 0 && (d.type & (kDmgBullet | kDmgSlash | kDmgBlast | kDmgClub)))
+            {
+                d.amount -= 20;
+                if (d.amount <= 0)
+                {
+                    detail::aiSay(c, aiRandomLong(c.a, 0, 1) ? CommonSound::Ricochet1 : CommonSound::Ricochet2);
+                    d.amount = 0;
+                    d.graze = true;
+                }
+            }
+            d.group = kHitHead;
+            return true;
+        }
+
+        inline bool takeDamage(AiCtx &c, AiDamage &)
+        {
+            aiForgetMemory(c, kMemoryInCover);
+            return true;
+        }
+
+        /// His gun (and a launcher's grenades) left where he fell -- the
+        /// places the map kept for them where he first stood (the converter
+        /// puts them there, not yet in the world).
+        inline void dropGun(AiCtx &c)
+        {
+            if ((c.me.body / 4) % 3 == 2 || c.index >= c.a.recordCount || c.a.records == nullptr)
+                return; // (none: dropped already)
+            c.me.body = static_cast<std::uint8_t>((c.me.body & 3) + 2 * 4);
+            const ActorRecord &mine = c.a.records[c.index];
+            fx forward[3];
+            aiForward(c.me.yaw, forward);
+            int n = 0;
+            for (int slot = 0; slot < c.a.recordCount && slot < c.a.count; ++slot)
+            {
+                const ActorRecord &record = c.a.records[slot];
+                if (record.kind != static_cast<std::uint8_t>(ActorKind::Item) || !(record.flags & kActorDormant) ||
+                    c.a.states[slot].active || record.origin[0] != mine.origin[0] ||
+                    record.origin[1] != mine.origin[1] || record.origin[2] != mine.origin[2])
+                    continue;
+                actorSetup(c.a, slot, record, *c.w.world);
+                ActorState &item = c.a.states[slot];
+                item.flags &= static_cast<std::uint8_t>(~kActorDormant);
+                ++n;
+                item.pos[0] = c.me.pos[0] + forward[0] * (16 + 12 * n);
+                item.pos[1] = c.me.pos[1] + forward[1] * (16 + 12 * n);
+                item.pos[2] = c.me.pos[2] + fxFromInt(36);
+                pointToFloor(*c.w.world, item.pos, fxFromInt(128));
+                actorPlaceBox(c.a, slot);
+            }
+        }
+
+        inline bool killed(AiCtx &c)
+        {
+            // (Torn apart, he still drops it: GibMonster.)
+            if (c.me.health < -30)
+                dropGun(c);
+            return false;
+        }
+
+        /// One round of his MP5, or the shotgun's pellets: at his enemy,
+        /// as loose as the gun is, each hurting whatever it meets first
+        /// (FireBullets: the pellets that hit one thing are one blow).
+        inline void fire(AiCtx &c)
+        {
+            if (c.m.enemy == kAiNone)
                 return;
-            fx dir[3], right[3], up[3];
-            for (int k = 0; k < 3; ++k)
-                dir[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) << kFxShift) / length);
+            fx gun[3], dir[3];
+            gunPosition(c, gun);
+            aiShootAtEnemy(c, gun, dir);
+            const bool shotgun = has(c, kGruntShotgun);
+            const int shots = shotgun ? kGruntPellets : 1;
+            // (VECTOR_CONE_10DEGREES and _15DEGREES: their sines, Q12.)
+            const fx cone = shotgun ? 535 : 357;
+            fx right[3], up[3];
             const fx flat[3] = {dir[0], dir[1], 0};
             const fx across = fxLength(flat);
             right[0] = across > 0 ? static_cast<fx>((static_cast<std::int64_t>(dir[1]) << kFxShift) / across) : kFxOne;
@@ -553,721 +685,454 @@ namespace hldata
             up[0] = fxMul(right[1], dir[2]);
             up[1] = -fxMul(right[0], dir[2]);
             up[2] = fxMul(right[0], dir[1]) - fxMul(right[1], dir[0]);
-            const int cone = shotgun ? kGruntConeShotgun : kGruntConeMp5;
-            const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
-            const fx mins[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16),
-                                player.origin[2] - tall};
-            const fx maxs[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16),
-                                player.origin[2] + tall};
-            for (int n = 0; n < (shotgun ? kGruntPellets : 1); ++n)
+            for (int n = 0; n < shots; ++n)
             {
-                // (Two throws added: more of them near the middle.)
-                const int x = static_cast<int>(chance(a) % 513) + static_cast<int>(chance(a) % 513) - 512;
-                const int y = static_cast<int>(chance(a) % 513) + static_cast<int>(chance(a) % 513) - 512;
-                fx end[3];
+                // (Two throws added, either way: more of them near the middle.)
+                const int x = aiRandomLong(c.a, -2048, 2048) + aiRandomLong(c.a, -2048, 2048);
+                const int y = aiRandomLong(c.a, -2048, 2048) + aiRandomLong(c.a, -2048, 2048);
+                fx aim[3];
                 for (int k = 0; k < 3; ++k)
-                {
-                    const fx off = dir[k] + static_cast<fx>((static_cast<std::int64_t>(right[k]) * x * cone +
-                                                             static_cast<std::int64_t>(up[k]) * y * cone) >> 21);
-                    end[k] = gun[k] + off * kGruntRange;
-                }
-                std::int64_t reach = traceShot(*w.world, gun, end).fraction;
-                const std::int64_t wall = reach;
-                int struck = -1;
-                for (int i = 0; i < a.count; ++i)
-                {
-                    const ActorState &other = a.states[i];
-                    if (i == index || !other.active || !fights(other.kind) || other.ai >= kAiDying)
-                        continue;
-                    fx lo[3], hi[3];
-                    targetBox(other, lo, hi);
-                    std::int64_t enter;
-                    if (lineEntersBox(gun, end, lo, hi, enter) && enter < reach)
-                    {
-                        reach = enter;
-                        struck = i;
-                    }
-                }
-                std::int64_t enter;
-                if (player.health > 0 && lineEntersBox(gun, end, mins, maxs, enter) && enter < reach)
-                {
-                    reach = enter;
-                    struck = -1;
-                    playerHurt(player, shotgun ? kGruntPellet : kGruntRound, gun);
-                    a.got |= kGotHurt;
-                }
-                if (struck >= 0)
-                {
-                    monsterHurt(w, struck, shotgun ? kGruntPellet : kGruntRound, true);
-                    fx mins[3], maxs[3];
-                    targetBox(a.states[struck], mins, maxs);
-                    const fx at[3] = {a.states[struck].pos[0], a.states[struck].pos[1], (mins[2] + maxs[2]) / 2};
-                    bleed(w, struck, at, nullptr, a.states[struck].ai >= kAiDying || !a.states[struck].active);
-                }
+                    aim[k] = dir[k] + static_cast<fx>((static_cast<std::int64_t>(right[k]) * x * cone +
+                                                       static_cast<std::int64_t>(up[k]) * y * cone) >>
+                                                      (2 * kFxShift));
+                fx end[3];
+                const std::int16_t hit = aiTraceLine(c, gun, aim, 2048, end);
                 if (n == 0)
+                    effectAdd(c.a, kEffectTracer, gun, end, 0, 60);
+                if (hit == kAiNone)
                 {
-                    fx land[3];
-                    for (int k = 0; k < 3; ++k)
-                        land[k] = gun[k] + static_cast<fx>((static_cast<std::int64_t>(end[k] - gun[k]) * reach) >>
-                                                           kFractionShift);
-                    effectAdd(a, kEffectTracer, gun, land, 0, 60);
-                    // (What misses marks the wall behind.)
-                    if (reach == wall && wall < kFractionOne)
-                        markShot(a, *w.world, gun, end, false);
+                    const fx far[3] = {gun[0] + aim[0] * 2048, gun[1] + aim[1] * 2048, gun[2] + aim[2] * 2048};
+                    markShot(c.a, *c.w.world, gun, far, false);
+                    continue;
                 }
+                // Where it lands on what it hits (a head is three times), and
+                // its blood.
+                const int group = hit >= 0 ? hitGroup(c.a, c.a.states[hit], gun, end) : kHitBody;
+                if (hit >= 0)
+                    bleed(c.w, hit, end, aim, false);
+                aiDamageTarget(c, hit, shotgun ? kGruntPellet : kGruntRound, kDmgBullet | kDmgNeverGib,
+                               static_cast<std::uint8_t>(group));
             }
             const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
-            effectAdd(a, kEffectMuzzle, flash, nullptr, 0, 50);
-            if (me.ammo > 0)
-                --me.ammo;
+            effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);
+            // (A casing out to his right.)
+            if (c.me.ammo > 0)
+                --c.me.ammo;
         }
 
-        inline void gruntChoose(LogicWorld &w, PlayerState &player, int index);
-
-        /// Out of the player's sight, if there is anywhere: a soldier on
-        /// his own leaves a grenade behind half the time. Otherwise he
-        /// fires if he may, and failing that stays where he is.
-        inline void gruntTakeCover(LogicWorld &w, PlayerState &player, int index, bool canShoot, bool slot)
+        inline void animEvent(AiCtx &c, int event)
         {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            const fx threat[3] = {player.origin[0], player.origin[1], player.origin[2] + player.viewHeight};
-            fx dest[3];
-            if (gruntFindCover(w, index, threat, 0, dest))
+            switch (event)
             {
-                if (me.squad < 0 && (chance(a) & 1))
+            case kDropGun:
+                dropGun(c);
+                break;
+            case kReload:
+                if (c.w.heard != nullptr)
+                    c.w.heard->add(CommonSound::GruntReload, c.me.pos, 127, kRadiusMedium);
+                c.me.ammo = static_cast<std::uint8_t>(clipSize(c));
+                aiClear(c, kCondNoAmmoLoaded);
+                break;
+            case kGrenToss:
+            {
+                fx gun[3];
+                gunPosition(c, gun);
+                if (Projectile *shot = projectileAdd(c.a, kShotGrenade, gun, c.m.vec1, 3500))
+                    (void)shot;
+                c.m.flag1 = false;
+                c.m.time1 = c.ai.now + 6000; // (six seconds before he even looks again)
+                break;
+            }
+            case kGrenLaunch:
+            {
+                if (c.w.heard != nullptr)
+                    c.w.heard->add(CommonSound::Launcher, c.me.pos, 100, kRadiusMedium);
+                fx gun[3];
+                gunPosition(c, gun);
+                if (Projectile *shot = projectileAdd(c.a, kShotContact, gun, c.m.vec1, 10000))
+                    shot->sprite = 1; // (a soldier's: it goes off at the player too)
+                c.m.flag1 = false;
+                c.m.time1 = c.ai.now + 6000;
+                break;
+            }
+            case kGrenDrop:
+            {
+                fx forward[3], right[3];
+                aiForward(c.me.yaw, forward);
+                aiRight(c.me.yaw, right);
+                const fx at[3] = {c.me.pos[0] + forward[0] * 17 - right[0] * 27,
+                                  c.me.pos[1] + forward[1] * 17 - right[1] * 27, c.me.pos[2] + fxFromInt(6)};
+                const fx still[3] = {0, 0, 0};
+                projectileAdd(c.a, kShotGrenade, at, still, 3000);
+                break;
+            }
+            case kBurst1:
+                fire(c);
+                if (c.w.heard != nullptr)
                 {
-                    // (Where he is going is kept for when it is dropped.)
-                    for (int k = 0; k < 3; ++k)
-                        me.target[k] = dest[k];
-                    gruntAct(a, me, kActDrop, "drop_grenade");
-                    return;
-                }
-                gruntGo(a, me, dest, kGoCover);
-                return;
-            }
-            if (canShoot && slot)
-                gruntBurst(a, me, 4);
-            else
-                gruntWait(a, me, 2000);
-        }
-
-        /// What next: the game's GetSchedule, in its order.
-        inline void gruntChoose(LogicWorld &w, PlayerState &player, int index)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            me.attack = 0;
-            if ((player.health <= 0 || unseen(player)))
-            {
-                // Nobody left to fight: whoever leads (or is alone) crows.
-                me.ai = kAiIdle;
-                me.lookMs = 1000;
-                if (me.squad < 0 || me.squad == index)
-                    gruntAct(a, me, kActVictory, "victorydance");
-                else
-                    monsterClip(a, me, "idle1", false);
-                return;
-            }
-            const bool inSquad = me.squad >= 0;
-            const bool isNew = (me.mood & kMoodNew) != 0;
-            const bool hurt = (me.mood & kMoodHurt) != 0;
-            me.mood &= static_cast<std::uint8_t>(~(kMoodNew | kMoodHurt));
-
-            // A grenade by him comes before everything.
-            fx danger[3];
-            if (gruntDanger(a, me, danger))
-            {
-                gruntSay(w, me, kSpeakGrenade);
-                fx dest[3];
-                me.coverMs = 0;
-                if (gruntFindCover(w, index, danger, 256, dest))
-                    gruntGo(a, me, dest, kGoFlee);
-                else
-                    gruntAct(a, me, kActCower, "cower");
-                return;
-            }
-
-            const bool sees = gruntSees(w, player, me, false);
-            if (sees)
-            {
-                for (int k = 0; k < 3; ++k)
-                    me.seen[k] = player.origin[k];
-            }
-            const fx feet[3] = {player.origin[0], player.origin[1], playerFeet(player)};
-            const fx d[3] = {feet[0] - me.pos[0], feet[1] - me.pos[1], feet[2] - me.pos[2]};
-            const fx far = fxLength(d);
-            const fx facing = gruntFacing(me, feet);
-            const bool clearOfFriends = !gruntFriendInWay(a, index, feet);
-            const bool canShoot = sees && facing >= kFxOne / 2 && clearOfFriends;
-            const bool canKick = far <= fxFromInt(kGruntKickRange) && facing >= kFxOne * 7 / 10;
-            const bool engage = !inSquad || squadActing(a, index, kActBurst, kActSignal) < 2;
-            const bool grenadeSlot = !inSquad || squadActing(a, index, kActToss, kActLaunch) < 2;
-            ActorState *leader = inSquad ? &a.states[me.squad] : nullptr;
-
-            auto grenade = [&]()
-            {
-                if (me.item & kGruntGrenades)
-                    gruntAct(a, me, kActToss, "throwgrenade");
-                else
-                    gruntAct(a, me, kActLaunch, "launchgrenade");
-            };
-            auto charge = [&]()
-            {
-                gruntGo(a, me, feet, kGoCharge);
-            };
-
-            if (isNew && inSquad)
-            {
-                leader->mood &= static_cast<std::uint8_t>(~kMoodEluded);
-                if (me.squad != index)
-                {
-                    gruntTakeCover(w, player, index, canShoot, engage);
-                    return;
-                }
-                // The leader calls it, and keeps their head down (the first
-                // time, with a wave to the others first).
-                gruntSay(w, me, kSpeakAlert);
-                if (!canShoot)
-                {
-                    if (sees && facing < kFxOne / 2)
-                    {
-                        me.mood |= kMoodNew;
-                        gruntWait(a, me, 300);
-                    }
+                    if (has(c, kGruntMp5))
+                        c.w.heard->add(aiRandomLong(c.a, 0, 1) ? CommonSound::GruntFire1 : CommonSound::GruntFire2,
+                                       c.me.pos, 127, kRadiusLarge);
                     else
-                    {
-                        charge();
-                    }
-                    return;
+                        c.w.heard->add(CommonSound::Shotgun, c.me.pos, 127, kRadiusLarge);
                 }
-                if (!(me.mood & kMoodMet))
-                {
-                    me.mood |= kMoodMet;
-                    me.bursts = 5;
-                    gruntAct(a, me, kActSignal, "flank_signal");
-                }
-                else
-                {
-                    gruntBurst(a, me, 5);
-                }
-                return;
-            }
-            if (me.ammo == 0)
+                aiSound(c.a, kSoundCombat, c.me.pos, 384, 300);
+                break;
+            case kBurst2:
+            case kBurst3:
+                fire(c);
+                break;
+            case kKick:
             {
-                const fx threat[3] = {player.origin[0], player.origin[1], player.origin[2] + player.viewHeight};
-                fx dest[3];
-                if (gruntFindCover(w, index, threat, 0, dest))
-                    gruntGo(a, me, dest, kGoReload);
-                else
-                    gruntAct(a, me, kActReload, (me.item & kGruntShotgun) ? "reload_shotgun" : "reload_mp5");
-                return;
-            }
-            if (hurt)
-            {
-                // Nine times in ten he runs for cover; else he flinches.
-                if (chance(a) % 100 <= 90)
+                const std::int16_t hit = aiHullAttack(c, 70, 0, 0);
+                if (hit != kAiNone)
                 {
-                    gruntSay(w, me, kSpeakCover);
-                    gruntTakeCover(w, player, index, canShoot, engage);
-                }
-                else
-                {
-                    me.ai = kAiFlinch;
-                    monsterClip(a, me, "smflinch", true);
-                }
-                return;
-            }
-            if (canKick)
-            {
-                gruntAct(a, me, kActKick, "frontkick");
-                return;
-            }
-            const bool canGrenade = grenadeSlot && gruntGrenade(w, player, index, sees);
-            if ((me.item & kGruntLauncher) && canGrenade)
-            {
-                grenade();
-                return;
-            }
-            if (canShoot)
-            {
-                // The squad had lost them, and here they are with their
-                // back turned: a wave to the others first.
-                const fx back[3] = {me.pos[0] - player.origin[0], me.pos[1] - player.origin[1], 0};
-                const fx span = fxLength(back);
-                const bool facingMe =
-                    span <= 0 || static_cast<std::int64_t>(back[0]) * player.facingXY[0] +
-                                         static_cast<std::int64_t>(back[1]) * player.facingXY[1] >
-                                     static_cast<std::int64_t>(span) * (kFxOne / 2);
-                if (inSquad && (leader->mood & kMoodEluded) && !facingMe)
-                {
-                    leader->mood &= static_cast<std::uint8_t>(~kMoodEluded);
-                    gruntAct(a, me, kActFound, "advance_signal");
-                    return;
-                }
-                if (engage)
-                    gruntBurst(a, me, 4);
-                else if (canGrenade)
-                    grenade();
-                else
-                    gruntTakeCover(w, player, index, false, false);
-                return;
-            }
-            if (!sees)
-            {
-                if (canGrenade)
-                {
-                    gruntSay(w, me, kSpeakThrow);
-                    grenade();
-                }
-                else if (engage)
-                {
-                    gruntSay(w, me, kSpeakCharge);
-                    charge();
-                }
-                else
-                {
-                    // Nothing for it but to wait and see if they come out.
-                    if (chance(a) & 1)
-                        gruntSay(w, me, kSpeakTaunt);
-                    if (leader != nullptr)
-                        leader->mood |= kMoodEluded;
-                    gruntWait(a, me, 2000);
-                }
-                return;
-            }
-            // In sight, and no shot to be had: turned the wrong way, or one
-            // of his own between.
-            if (facing < kFxOne / 2)
-                gruntWait(a, me, 300);
-            else
-                charge();
-        }
-
-        /// He learns of the player, and so do those of his squad who had
-        /// not: `where` is where the player is taken to be.
-        inline void gruntAlert(LogicWorld &w, int index, const fx *where)
-        {
-            ActorWorld &a = *w.actors;
-            const int squad = a.states[index].squad;
-            for (int i = 0; i < a.count; ++i)
-            {
-                ActorState &one = a.states[i];
-                if (i != index && (squad < 0 || one.squad != squad))
-                    continue;
-                if (!gruntAlive(one) || one.ai != kAiIdle || one.script >= 0 || (one.flags & kActorPrisoner))
-                    continue;
-                one.mood |= kMoodNew | kMoodSeen | kMoodScripted;
-                if (i == index)
-                    gruntTrigger(w, one, 1);
-                for (int k = 0; k < 3; ++k)
-                    one.seen[k] = where[k];
-                gruntWait(a, one, 0);
-            }
-        }
-
-        inline void gruntTick(LogicWorld &w, PlayerState &player, int index, int ms)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &me = a.states[index];
-            const MoveWorld &world = *w.world;
-            if (!(me.mood & kMoodReady))
-            {
-                // His first tick: what he has to lose, what is in his gun,
-                // and whom he leads.
-                me.mood |= kMoodReady | kMoodStanding;
-                me.health = kGruntHealth;
-                if ((me.item & (kGruntMp5 | kGruntShotgun)) == 0)
-                    me.item |= kGruntMp5 | ((me.item & 15) == 0 ? kGruntGrenades : 0);
-                me.ammo = static_cast<std::uint8_t>((me.item & kGruntShotgun) ? kGruntShells : kGruntClip);
-                me.speed = actorClipSpeed(a, me, nameHash("run"), fxFromInt(170));
-                me.lookMs = (index * 37) % 300;
-                me.restClip = me.clip;
-                me.squad = me.squad >= 0 ? me.squad : std::int16_t(-1);
-                gruntRecruit(w, index);
-            }
-            if (me.ai == kAiDead)
-                return;
-            if (me.ai == kAiDying)
-            {
-                if (me.finished)
-                    me.ai = kAiDead;
-                return;
-            }
-            if (me.script >= 0)
-            {
-                me.mood |= kMoodScripted;
-                return;
-            }
-            if (me.cooldownMs > 0)
-                me.cooldownMs -= ms;
-            if (me.grenadeMs > 0)
-                me.grenadeMs -= ms;
-            if (me.painMs > 0)
-                me.painMs -= ms;
-            if (me.coverMs > 0)
-                me.coverMs -= ms;
-
-            const fx feet[3] = {player.origin[0], player.origin[1], playerFeet(player)};
-            const fx d[3] = {feet[0] - me.pos[0], feet[1] - me.pos[1], feet[2] - me.pos[2]};
-
-            switch (me.ai)
-            {
-            case kAiIdle:
-            {
-                // (Acting out his crowing over the player: let it finish.)
-                if (me.attack == kActVictory && me.finished)
-                {
-                    me.attack = 0;
-                    monsterClip(a, me, "idle1", false);
-                }
-                if ((me.lookMs -= ms) > 0)
-                    break;
-                me.lookMs = 300;
-                if ((player.health <= 0 || unseen(player)) || (me.flags & kActorPrisoner))
-                    break;
-                if ((me.flags & kActorWaitScript) && !(me.mood & kMoodScripted))
-                    break;
-                if ((me.flags & kActorWaitSeen) && !(me.mood & kMoodSeen))
-                {
-                    // Nothing, until the player has looked his way.
-                    const fx flat[3] = {-d[0], -d[1], 0};
-                    const fx span = fxLength(flat);
-                    if (span > 0 &&
-                        static_cast<std::int64_t>(flat[0]) * player.facingXY[0] +
-                                static_cast<std::int64_t>(flat[1]) * player.facingXY[1] >
-                            static_cast<std::int64_t>(span) * (kFxOne / 2) &&
-                        gruntSees(w, player, me, false))
-                        me.mood |= kMoodSeen;
-                    break;
-                }
-                // Something loud not far off: he turns to it.
-                if (a.noiseMs > 0)
-                {
-                    const fx n[3] = {a.noise[0] - me.pos[0], a.noise[1] - me.pos[1], a.noise[2] - me.pos[2]};
-                    if (fxLength(n) < fxFromInt(1024))
-                        me.yaw = fxAtan2Turns(n[1], n[0]);
-                }
-                if (gruntSees(w, player, me, true))
-                {
-                    gruntAlert(w, index, player.origin);
-                    break;
-                }
-                // Now and then, something said to pass the time: a question
-                // (which the next to speak answers), or nothing much.
-                if (!(me.flags & kActorGag) && chance(a) % 33 == 0 && a.speakMs <= 0 && (a.asked != 0 || (chance(a) & 1)))
-                {
-                    if (a.asked != 0)
-                    {
-                        gruntSay(w, me, a.asked == 1 ? kSpeakClear : kSpeakAnswer);
-                        a.asked = 0;
-                    }
-                    else
-                    {
-                        const int what = static_cast<int>(chance(a) % 3);
-                        gruntSay(w, me, what == 0 ? kSpeakCheck : (what == 1 ? kSpeakQuestion : kSpeakIdle));
-                        a.asked = static_cast<std::uint8_t>(what == 0 ? 1 : (what == 1 ? 2 : 0));
-                    }
+                    fx forward[3];
+                    aiForward(c.me.yaw, forward);
+                    detail::aiPunch(c, hit, fxFromInt(15), 0);
+                    const fx shove[3] = {forward[0] * 100, forward[1] * 100, fxFromInt(50)};
+                    detail::aiShove(c, hit, shove);
+                    aiDamageTarget(c, hit, kGruntKick, kDmgClub);
                 }
                 break;
             }
-            case kAiChase:
-            {
-                const bool charging = me.attack == kGoCharge;
-                const fx *dest = charging ? feet : me.target;
-                const int went = walkTick(a, world, index, kWalkStanding, dest, me.speed, ms, &player, fxFromInt(16),
-                                          fxFromInt(72), !charging);
-                me.moveMs -= ms;
-                const fx left[3] = {dest[0] - me.pos[0], dest[1] - me.pos[1], 0};
-                const bool there = !charging && fxLength(left) < fxFromInt(24);
-                if (charging && (me.lookMs -= ms) <= 0)
-                {
-                    // Broken off for a shot, a kick, or a grenade at his feet.
-                    me.lookMs = 200;
-                    fx danger[3];
-                    if ((player.health <= 0 || unseen(player)) || gruntDanger(a, me, danger) ||
-                        (fxLength(d) <= fxFromInt(kGruntKickRange)) || gruntSees(w, player, me, false))
-                    {
-                        gruntChoose(w, player, index);
-                        break;
-                    }
-                }
-                if (!there && went != kWalkNoWay && me.moveMs > 0)
-                    break;
-                if (me.attack == kGoReload)
-                {
-                    gruntAct(a, me, kActReload, (me.item & kGruntShotgun) ? "reload_shotgun" : "reload_mp5");
-                }
-                else if (charging)
-                {
-                    // No way to them: back out of sight, if there is that.
-                    const bool sees = gruntSees(w, player, me, false);
-                    gruntTakeCover(w, player, index, sees, me.squad < 0 ||
-                                                               squadActing(a, index, kActBurst, kActSignal) < 2);
-                }
-                else
-                {
-                    gruntWait(a, me, 1000);
-                }
-                break;
-            }
-            case kGruntWait:
-            {
-                faceTo(me, me.seen[0] - me.pos[0], me.seen[1] - me.pos[1], ms, 27307); // 150 degrees a second
-                if (me.cooldownMs <= 0)
-                {
-                    gruntChoose(w, player, index);
-                    break;
-                }
-                if ((me.lookMs -= ms) > 0)
-                    break;
-                me.lookMs = 200;
-                // (A look is a line through the world: five a second, not
-                // one a frame.)
-                const bool sees = gruntSees(w, player, me, false);
-                if (sees)
-                {
-                    for (int k = 0; k < 3; ++k)
-                        me.seen[k] = player.origin[k];
-                }
-                // Broken off as soon as there is something to do about them.
-                fx danger[3];
-                if (gruntDanger(a, me, danger) || (me.mood & kMoodHurt) ||
-                    fxLength(d) <= fxFromInt(kGruntKickRange) || (sees && gruntFacing(me, feet) >= kFxOne / 2))
-                    gruntChoose(w, player, index);
-                break;
-            }
-            case kAiAttack:
-            {
-                // Whether he still sees them, looked at ten times a second
-                // (kept in the top bit of `struck`, which the frames below
-                // do not use).
-                if (me.attack == kActBurst && (me.lookMs -= ms) <= 0)
-                {
-                    me.lookMs = 100;
-                    me.struck &= 0x7F;
-                    if (gruntSees(w, player, me, false))
-                    {
-                        me.struck |= 0x80;
-                        for (int k = 0; k < 3; ++k)
-                            me.seen[k] = player.origin[k];
-                    }
-                }
-                const bool sees = (me.struck & 0x80) != 0;
-                if (me.attack != kActCower && me.attack != kActDrop)
-                    faceTo(me, me.seen[0] - me.pos[0], me.seen[1] - me.pos[1], ms, 21845); // 120 degrees a second
-                const fx gun[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(60)};
-                // What the clip's own frames bring (the model's events).
-                auto at = [&](int bit, int frame)
-                {
-                    if ((me.struck & (1 << bit)) || (frame > 0 && !passedFrame(me, frame)))
-                        return false;
-                    me.struck |= static_cast<std::uint8_t>(1 << bit);
-                    return true;
-                };
-                switch (me.attack)
-                {
-                case kActBurst:
-                {
-                    // Three rounds a tenth of a second apart (a shotgun:
-                    // one shell), the first with the gun's noise.
-                    const bool shotgun = (me.item & kGruntShotgun) != 0;
-                    for (int n = 0; n < (shotgun ? 1 : 3); ++n)
-                    {
-                        if (!at(n, n * 2) || me.ammo == 0)
-                            continue;
-                        if (n == 0)
-                            monsterSound(w, me, shotgun ? CommonSound::Shotgun
-                                                        : ((chance(a) & 1) ? CommonSound::GruntFire1
-                                                                           : CommonSound::GruntFire2));
-                        gruntShoot(w, player, index, sees);
-                    }
-                    if (!me.finished)
-                        break;
-                    if (me.bursts > 0)
-                        --me.bursts;
-                    // Another, if there are more to come, rounds for it,
-                    // and still a shot to be had.
-                    if (me.bursts > 0 && me.ammo > 0 && sees && player.health > 0 &&
-                        !gruntFriendInWay(a, index, feet))
-                        gruntBurst(a, me, 0);
-                    else
-                        gruntChoose(w, player, index);
-                    break;
-                }
-                case kActReload:
-                    if (at(0, 47))
-                    {
-                        me.ammo = static_cast<std::uint8_t>((me.item & kGruntShotgun) ? kGruntShells : kGruntClip);
-                        monsterSound(w, me, CommonSound::GruntReload);
-                    }
-                    if (me.finished)
-                    {
-                        // (A model without the clip: reloaded all the same.)
-                        me.ammo = static_cast<std::uint8_t>((me.item & kGruntShotgun) ? kGruntShells : kGruntClip);
-                        gruntChoose(w, player, index);
-                    }
-                    break;
-                case kActToss:
-                    if (at(0, 36))
-                    {
-                        projectileAdd(a, kShotGrenade, gun, me.velocity, 3500);
-                        me.grenadeMs = 6000;
-                    }
-                    if (me.finished)
-                        gruntChoose(w, player, index);
-                    break;
-                case kActLaunch:
-                    if (at(0, 16))
-                    {
-                        monsterSound(w, me, CommonSound::Launcher);
-                        if (Projectile *shot = projectileAdd(a, kShotContact, gun, me.velocity, 10000))
-                            shot->sprite = 1; // (a soldier's: it goes off at the player too)
-                        me.grenadeMs = 6000;
-                    }
-                    if (me.finished)
-                        gruntChoose(w, player, index);
-                    break;
-                case kActDrop:
-                    if (at(0, 22))
-                    {
-                        fx sine, cosine;
-                        fxSinCos(me.yaw, sine, cosine);
-                        const fx from[3] = {me.pos[0] + cosine * 17 - sine * 27, me.pos[1] + sine * 17 + cosine * 27,
-                                            me.pos[2] + fxFromInt(6)};
-                        const fx still[3] = {0, 0, 0};
-                        projectileAdd(a, kShotGrenade, from, still, 3000);
-                    }
-                    if (me.finished)
-                    {
-                        const fx dest[3] = {me.target[0], me.target[1], me.target[2]};
-                        gruntGo(a, me, dest, kGoCover);
-                    }
-                    break;
-                case kActKick:
-                    if (at(0, 14) && player.health > 0 && fxLength(d) <= fxFromInt(70) &&
-                        gruntFacing(me, feet) >= kFxOne / 2)
-                    {
-                        // Ten, and back they go.
-                        playerHurt(player, kGruntKick, me.pos);
-                        a.got |= kGotHurt;
-                        fx sine, cosine;
-                        fxSinCos(me.yaw, sine, cosine);
-                        player.velocity[0] += cosine * 100;
-                        player.velocity[1] += sine * 100;
-                        player.velocity[2] += fxFromInt(50);
-                        player.onGround = false;
-                    }
-                    if (me.finished)
-                        gruntChoose(w, player, index);
-                    break;
-                case kActSignal:
-                    if (me.finished)
-                        gruntBurst(a, me, me.bursts > 0 ? me.bursts : 5);
-                    break;
-                default:
-                    if (me.finished)
-                        gruntChoose(w, player, index);
-                    break;
-                }
-                break;
-            }
-            case kAiFlinch:
-                if (me.finished)
-                    gruntChoose(w, player, index);
+            case kCaughtEnemy:
+                if (okToSpeak(c))
+                    say(c, kSpeakAlert);
                 break;
             default:
                 break;
             }
         }
-    } // namespace detail
 
-    /// Hurt the soldier at `index`, with `damage` to a hit box of `group`.
-    /// The game's rules: his helmet takes twenty off what lands on it (and
-    /// all of it, if that is all there was); a hit to the head counts three
-    /// times; he dies by where he was hit, or by which way he was facing
-    /// whoever hit him; far enough past dead, he comes apart.
-    inline void gruntHurt(LogicWorld &w, int index, int damage, bool bullet, int group)
-    {
-        ActorWorld &a = *w.actors;
-        ActorState &me = a.states[index];
-        if (!me.active || me.ai >= kAiDying)
-            return;
-        (void)bullet;
-        if (group == kHitHelmet)
+        /// SetActivity: his own clips for firing and throwing; a limp, hurt;
+        /// angry, in a fight.
+        inline void setActivity(AiCtx &c, std::uint8_t activity)
         {
-            // (Only a plain soldier wears one: the first of the heads.)
-            if (me.body % 4 == 0)
+            const ModelView *model = actorModel(c.a, c.me);
+            int clip = -1;
+            auto named = [&](const char *name) { return model != nullptr ? model->findClip(nameHash(name)) : -1; };
+            switch (activity)
             {
-                damage -= 20;
-                if (damage <= 0)
-                    return;
+            case kActRangeAttack1:
+                if (has(c, kGruntMp5))
+                    clip = named(standing(c) ? "standing_mp5" : "crouching_mp5");
+                else
+                    clip = named(standing(c) ? "standing_shotgun" : "crouching_shotgun");
+                break;
+            case kActRangeAttack2:
+                clip = named(has(c, kGruntGrenades) ? "throwgrenade" : "launchgrenade");
+                break;
+            case kActRun:
+                clip = aiLookupActivity(c, c.me.health <= kGruntLimp ? kActRunHurt : kActRun);
+                break;
+            case kActWalk:
+                clip = aiLookupActivity(c, c.me.health <= kGruntLimp ? kActWalkHurt : kActWalk);
+                break;
+            case kActIdle:
+                if (c.m.state == kStateCombat)
+                    activity = kActIdleAngry;
+                clip = aiLookupActivity(c, activity);
+                break;
+            default:
+                clip = aiLookupActivity(c, activity);
+                break;
             }
-            group = kHitHead;
-        }
-        if (group == kHitHead)
-            damage *= 3;
-        me.health = static_cast<std::int16_t>(me.health - damage);
-        detail::gruntTrigger(w, me, 2);
-        if (me.health <= kGruntHealth / 2)
-            detail::gruntTrigger(w, me, 3);
-        if (me.health <= 0)
-            detail::gruntTrigger(w, me, 4);
-        if (me.health < -30)
-        {
-            const int squad = me.squad;
-            if (gibBurst(w, index))
+            c.m.activity = activity;
+            c.m.idealActivity = activity;
+            if (clip >= 0)
             {
-                me.squad = static_cast<std::int16_t>(squad);
-                detail::gruntLeaves(a, index);
+                const bool loops = c.me.clip >= 0 && (model->clips[c.me.clip].flags & kClipLoops) != 0;
+                aiPlayClip(c, clip, c.me.clip != clip || !loops);
+                aiSetYawSpeed(c);
+            }
+        }
+
+        inline bool startTask(AiCtx &c, const AiTask &task)
+        {
+            c.m.taskStatus = kTaskStatusRunning;
+            switch (task.task)
+            {
+            case kTaskCheckFire:
+                if (!noFriendlyFire(c))
+                    aiSet(c, kCondNoFire);
+                aiTaskComplete(c);
+                return true;
+            case kTaskSpeakSentence:
+                speakSentence(c);
+                aiTaskComplete(c);
+                return true;
+            case kTaskWalkPath:
+            case kTaskRunPath:
+                aiForgetMemory(c, kMemoryInCover);
+                return false;
+            case kTaskReload:
+                c.m.idealActivity = kActReload;
+                return true;
+            case kTaskFaceTossDir:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        inline bool runTask(AiCtx &c, const AiTask &task)
+        {
+            if (task.task != kTaskFaceTossDir)
+                return false;
+            const fx toward[3] = {c.me.pos[0] + c.m.vec1[0] * 64, c.me.pos[1] + c.m.vec1[1] * 64, c.me.pos[2]};
+            aiMakeIdealYaw(c, toward);
+            aiChangeYaw(c);
+            if (aiFacingIdeal(c))
+                c.m.taskStatus = kTaskStatusComplete;
+            return true;
+        }
+
+        /// PrescheduleThink: the squad keeps when any of it last saw its
+        /// enemy; five seconds without, and the enemy has eluded it.
+        inline void prescheduleThink(AiCtx &c)
+        {
+            if (!aiInSquad(c) || c.m.enemy == kAiNone)
                 return;
-            }
+            AiMonster *leader = aiSquadLeader(c);
+            if (aiHas(c, kCondSeeEnemy))
+                leader->lastEnemySightTime = c.ai.now;
+            else if (c.ai.now - leader->lastEnemySightTime > 5000)
+                leader->enemyEluded = true;
         }
-        if (me.health <= 0)
+
+        inline const AiSchedule *scheduleOfType(AiCtx &c, int type);
+
+        inline const AiSchedule *getSchedule(AiCtx &c)
         {
-            if (me.script >= 0 && me.script < w.recordCount)
+            c.m.count1 = kSentenceNone;
+            if (aiHas(c, kCondHearSound))
             {
-                w.states[me.script].dead = true;
-                me.script = -1;
-                me.scriptPhase = kActorFree;
+                const AiSound *heard = aiBestSound(c);
+                if (heard != nullptr && (heard->type & kSoundDanger))
+                {
+                    if (okToSpeak(c))
+                        say(c, kSpeakGrenade);
+                    return scheduleOfType(c, kSchedTakeCoverFromBestSound);
+                }
             }
-            detail::gruntLeaves(a, index);
-            // Which way he goes down: shot in the head or the gut, by that;
-            // else away from whoever did it.
-            const char *clip = "diesimple";
-            if (group == kHitHead)
-                clip = "dieheadshot";
-            else if (group == kHitStomach)
-                clip = "diegutshot";
-            else if (me.ai != kAiIdle)
+            if (c.m.state == kStateCombat)
             {
-                const fx facing = detail::gruntFacing(me, a.foe);
-                clip = facing > kFxOne * 3 / 10 ? ((detail::chance(a) & 1) ? "dieback1" : "diebackwards")
-                                                : (facing < -kFxOne * 3 / 10 ? "dieforward" : "diesimple");
+                if (aiHas(c, kCondEnemyDead))
+                    return aiBaseGetSchedule(c);
+                if (aiHas(c, kCondNewEnemy))
+                {
+                    if (aiInSquad(c))
+                    {
+                        aiSquadLeader(c)->enemyEluded = false;
+                        if (!aiIsLeader(c))
+                            return scheduleOfType(c, kSchedTakeCoverFromEnemy);
+                        if (okToSpeak(c))
+                        {
+                            AiTarget t;
+                            const bool known = aiTargetOf(c.w, c.player, c.m.enemy, t);
+                            if (known && t.isPlayer)
+                                say(c, kSpeakAlert);
+                            else if (known && t.cls != kClassPlayerAlly && t.cls != kClassHumanPassive &&
+                                     t.cls != kClassMachine)
+                                say(c, -1); // (HG_MONST: the level has no such lines)
+                        }
+                        if (aiHas(c, kCondCanRangeAttack1))
+                            return scheduleOfType(c, kSchedSuppress);
+                        return scheduleOfType(c, kSchedEstablishLineOfFire);
+                    }
+                }
+                else if (aiHas(c, kCondNoAmmoLoaded))
+                {
+                    return scheduleOfType(c, kSchedCoverAndReload);
+                }
+                else if (aiHas(c, kCondLightDamage))
+                {
+                    // Nine times in ten (and a bit), for cover; else a flinch.
+                    if (aiRandomLong(c.a, 0, 99) <= 90 && c.m.enemy != kAiNone)
+                    {
+                        if (okToSpeak(c))
+                            c.m.count1 = kSpeakCover;
+                        return scheduleOfType(c, kSchedTakeCoverFromEnemy);
+                    }
+                    return scheduleOfType(c, kSchedSmallFlinch);
+                }
+                else if (aiHas(c, kCondCanMeleeAttack1))
+                {
+                    return scheduleOfType(c, kSchedMeleeAttack1);
+                }
+                else if (has(c, kGruntLauncher) && aiHas(c, kCondCanRangeAttack2) && aiOccupySlot(c, kSlotsGruntGrenade))
+                {
+                    return scheduleOfType(c, kSchedRangeAttack2);
+                }
+                else if (aiHas(c, kCondCanRangeAttack1))
+                {
+                    if (aiInSquad(c))
+                    {
+                        AiMonster *leader = aiSquadLeader(c);
+                        if (leader->enemyEluded && !aiHas(c, kCondEnemyFacingMe))
+                        {
+                            leader->enemyEluded = false;
+                            return scheduleOfType(c, kSchedFoundEnemy);
+                        }
+                    }
+                    if (aiOccupySlot(c, kSlotsGruntEngage))
+                        return scheduleOfType(c, kSchedRangeAttack1);
+                    if (aiHas(c, kCondCanRangeAttack2) && aiOccupySlot(c, kSlotsGruntGrenade))
+                        return scheduleOfType(c, kSchedRangeAttack2);
+                    return scheduleOfType(c, kSchedTakeCoverFromEnemy);
+                }
+                else if (aiHas(c, kCondEnemyOccluded))
+                {
+                    if (aiHas(c, kCondCanRangeAttack2) && aiOccupySlot(c, kSlotsGruntGrenade))
+                    {
+                        if (okToSpeak(c))
+                            say(c, kSpeakThrow);
+                        return scheduleOfType(c, kSchedRangeAttack2);
+                    }
+                    if (aiOccupySlot(c, kSlotsGruntEngage))
+                    {
+                        if (okToSpeak(c))
+                            c.m.count1 = kSpeakCharge;
+                        return scheduleOfType(c, kSchedEstablishLineOfFire);
+                    }
+                    if (okToSpeak(c) && aiRandomLong(c.a, 0, 1))
+                        say(c, kSpeakTaunt);
+                    return scheduleOfType(c, kSchedStandoff);
+                }
+                if (aiHas(c, kCondSeeEnemy) && !aiHas(c, kCondCanRangeAttack1))
+                    return scheduleOfType(c, kSchedEstablishLineOfFire);
             }
-            const ModelView *model = actorModel(a, me);
-            if (model == nullptr || model->findClip(nameHash(clip)) < 0)
-                clip = "diesimple";
-            me.ai = kAiDying;
-            me.attack = 0;
-            detail::monsterSound(w, me, (detail::chance(a) & 1) ? CommonSound::GruntDie1 : CommonSound::GruntDie2);
-            me.flags &= static_cast<std::uint8_t>(~kActorSolid);
-            me.velocity[0] = me.velocity[1] = me.velocity[2] = 0;
-            detail::monsterClip(a, me, clip, true);
-            actorPlaceBox(a, index);
-            return;
+            return aiBaseGetSchedule(c);
         }
-        if (me.painMs <= 0)
+
+        inline const AiSchedule *scheduleOfType(AiCtx &c, int type)
         {
-            me.painMs = 1000;
-            detail::monsterSound(w, me, (detail::chance(a) & 1) ? CommonSound::GruntPain1 : CommonSound::GruntPain2);
+            switch (type)
+            {
+            case kSchedTakeCoverFromEnemy:
+                if (aiInSquad(c))
+                    return &slTakeCover; // (only "hard" tosses a grenade first)
+                return aiRandomLong(c.a, 0, 1) ? &slTakeCover : &slGrenadeCover;
+            case kSchedTakeCoverFromBestSound:
+                return &slTakeCoverFromBestSound;
+            case kSchedTakeCoverFailed:
+                if (aiHas(c, kCondCanRangeAttack1) && aiOccupySlot(c, kSlotsGruntEngage))
+                    return scheduleOfType(c, kSchedRangeAttack1);
+                return scheduleOfType(c, kSchedFail);
+            case kSchedElofFail:
+                return scheduleOfType(c, kSchedTakeCoverFromEnemy);
+            case kSchedEstablishLineOfFire:
+                return &slEstablishLineOfFire;
+            case kSchedRangeAttack1:
+                // One time in ten, standing or crouched is chosen afresh.
+                if (aiRandomLong(c.a, 0, 9) == 0)
+                    c.me.mood = static_cast<std::uint8_t>((c.me.mood & ~kMoodStanding) |
+                                                          (aiRandomLong(c.a, 0, 1) ? kMoodStanding : 0));
+                return standing(c) ? &slRangeAttack1B : &slRangeAttack1A;
+            case kSchedRangeAttack2:
+                return &slRangeAttack2;
+            case kSchedCombatFace:
+                return &slCombatFace;
+            case kSchedWaitFaceEnemy:
+                return &slWaitInCover;
+            case kSchedSweep:
+                return &slSweep;
+            case kSchedCoverAndReload:
+                return &slHideReload;
+            case kSchedFoundEnemy:
+                return &slFoundEnemy;
+            case kSchedVictoryDance:
+                if (aiInSquad(c) && !aiIsLeader(c))
+                    return &slFail;
+                return &slVictoryDance;
+            case kSchedSuppress:
+            {
+                AiTarget t;
+                if (aiTargetOf(c.w, c.player, c.m.enemy, t) && t.isPlayer && !(c.me.mood & kMoodMet))
+                {
+                    // (The first time: the leader's signal to his squad.)
+                    c.me.mood |= kMoodMet;
+                    return &slSignalSuppress;
+                }
+                return &slSuppress;
+            }
+            case kSchedFail:
+                return c.m.enemy != kAiNone ? &slCombatFail : &slFail;
+            default:
+                return aiSquadScheduleOfType(c, type);
+            }
         }
-        me.mood |= kMoodHurt;
-        if (me.script >= 0 || (me.flags & kActorPrisoner))
-            return;
-        // Whoever was minding his own business is not any more, nor his
-        // squad.
-        if (me.ai == kAiIdle)
-            detail::gruntAlert(w, index, a.foe);
-    }
+
+        /// StartMonster's last word: a squad's leader wears the commander's
+        /// head, and is fair.
+        inline void started(AiCtx &c)
+        {
+            if (aiIsLeader(c))
+            {
+                c.me.body = static_cast<std::uint8_t>((c.me.body & ~3) | 1);
+                c.me.skin = 0;
+            }
+            if (c.me.ammo == 0)
+                c.me.ammo = static_cast<std::uint8_t>(clipSize(c));
+            c.m.time1 = c.ai.now + 1000; // m_flNextGrenadeCheck
+            c.m.count1 = kSentenceNone;
+        }
+
+        inline constexpr AiClipName kClips[] = {
+            {kActIdle, "idle1"},        {kActIdleAngry, "combatidle"}, {kActRun, "run"},
+            {kActRunHurt, "limpingrun"}, {kActSmallFlinch, "smflinch"}, {kActMeleeAttack1, "frontkick"},
+            {kActDieSimple, "diesimple"}, {kActDieBackward, "dieback1"}, {kActDieForward, "dieforward"},
+            {kActDieHeadshot, "dieheadshot"}, {kActDieGutshot, "diegutshot"}, {kActCower, "cower"},
+            {kActVictoryDance, "victorydance"}, {kActSignal1, "advance_signal"}, {kActSignal2, "flank_signal"},
+            {kActSpecialAttack1, "drop_grenade"}, {kActReload, "reload_mp5"}, {kActCrouch, "crouching_idle"},
+            {kActReset, nullptr},
+        };
+        inline constexpr AiClipEvent kEvents[] = {
+            {"standing_mp5", 0, kBurst1},   {"standing_mp5", 2, kBurst2},   {"standing_mp5", 4, kBurst3},
+            {"crouching_mp5", 0, kBurst1},  {"crouching_mp5", 2, kBurst2},  {"crouching_mp5", 4, kBurst3},
+            {"standing_shotgun", 0, kBurst1}, {"crouching_shotgun", 0, kBurst1}, {"reload_mp5", 47, kReload},
+            {"reload_shotgun", 47, kReload}, {"throwgrenade", 36, kGrenToss}, {"launchgrenade", 16, kGrenLaunch},
+            {"drop_grenade", 22, kGrenDrop}, {"frontkick", 14, kKick},     {"advance_signal", 1, kCaughtEnemy},
+            {"diesimple", 3, kDropGun},     {"dieback1", 5, kDropGun},      {"diebackwards", 6, kDropGun},
+            {"dieforward", 3, kDropGun},    {"dieheadshot", 1, kDropGun},   {"diegutshot", 0, kDropGun},
+            {nullptr, 0, 0}};
+
+        inline const AiKind &kind()
+        {
+            static const AiKind k = []
+            {
+                AiKind k;
+                k.kind = static_cast<std::uint8_t>(ActorKind::Grunt);
+                k.health = kGruntHealth;
+                k.eye = fxFromInt(73);
+                k.fov = fxDot(0.2);
+                k.capability = kCapSquad | kCapTurnHead | kCapDoorsGroup;
+                k.soundMask = kSoundWorld | kSoundCombat | kSoundPlayer | kSoundDanger;
+                k.squadMonster = true;
+                k.sound = sound;
+                k.yawSpeed = yawSpeed;
+                k.canCheckAttacks = canCheckAttacks;
+                k.checkMelee1 = checkMelee1;
+                k.checkRange1 = checkRange1;
+                k.checkRange2 = checkRange2;
+                k.checkAmmo = checkAmmo;
+                k.traceAttack = traceAttack;
+                k.takeDamage = takeDamage;
+                k.killed = killed;
+                k.animEvent = animEvent;
+                k.setActivity = setActivity;
+                k.startTask = startTask;
+                k.runTask = runTask;
+                k.prescheduleThink = prescheduleThink;
+                k.getSchedule = getSchedule;
+                k.scheduleOfType = scheduleOfType;
+                k.started = started;
+                k.clipNames = kClips;
+                k.clipEvents = kEvents;
+                return k;
+            }();
+            return k;
+        }
+    } // namespace grunt
 } // namespace hldata

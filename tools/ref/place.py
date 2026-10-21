@@ -42,7 +42,9 @@ def main():
             moved += 1
         out.append(block)
     if moved == 0:
-        sys.exit('no info_player_start in %s' % src)
+        # (A map the game only ever comes into from another has none: one
+        # is added, where the player is to be.)
+        out.append('{\n"classname" "info_player_start"\n"origin" "%g %g %g"\n"angles" "0 %g 0"\n}' % (x, y, z, yaw))
     lump = ('\n'.join(out) + '\n').encode('latin-1') + b'\0'
     while len(data) % 4:
         data.append(0)

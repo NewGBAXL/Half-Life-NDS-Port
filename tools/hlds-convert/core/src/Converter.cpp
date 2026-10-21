@@ -402,6 +402,13 @@ namespace hlds
             if (need.firstSequence && !mdl.sequences.empty())
                 clips.push_back(mdl.sequences[0].label);
             clips.insert(clips.end(), need.clips.begin(), need.clips.end());
+            // (A monster that chooses by what clips are for: every one that
+            // is for something.)
+            for (const MdlSequence &seq : mdl.sequences)
+            {
+                if (need.activities && seq.activity != 0)
+                    clips.push_back(seq.label);
+            }
             CookedModel cooked;
             ModelCookReport modelReport;
             out = ModelOut();
@@ -1527,6 +1534,13 @@ namespace hlds
                 thread.join();
         }
         failed += failedCount.load();
+        // (Again, now that the maps are: what their people say is in it.)
+        {
+            PackReport report;
+            std::string why;
+            if (!packCommon(stageDir(), dataDir(options_.cardRoot), options_.compress, report, why))
+                common_.warnings.push_back("the common archive was not made: " + why);
+        }
 
         if (!writeManifest(error))
             return failed + 1;

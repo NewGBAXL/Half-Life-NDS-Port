@@ -18,7 +18,7 @@
 //
 // std-only and inline: the host tests run it.
 
-#include "HlLogic.hpp"
+#include "HlMonsters.hpp"
 
 namespace hldata
 {
@@ -64,6 +64,19 @@ namespace hldata
         };
         Visitor visitors[kMaxVisitors];
     };
+
+    // One of the people who comes along keeps his mind's part (the game
+    // carries the whole of him): in what a Visitor has to spare, so that
+    // what a save keeps of an Arrival keeps its form. `light` is 0..31
+    // (drawn no brighter by any build); above it, whether he follows the
+    // player, whether the player provoked him, and that his health is in the
+    // low six bits of `yaw` (a third of a degree of it, which a build before
+    // turns him by).
+    inline constexpr std::uint8_t kVisitorLight = 31;
+    inline constexpr std::uint8_t kVisitorFollows = 32;
+    inline constexpr std::uint8_t kVisitorProvoked = 64;
+    inline constexpr std::uint8_t kVisitorMind = 128;
+    inline constexpr std::uint16_t kVisitorHealth = 63;
 
     /// A visitor slot that is not someone: where a func_train that crosses
     /// is HEADING (the corner it was on its way to), from the landmark; its
@@ -164,7 +177,13 @@ namespace hldata
             for (int i = 0; i < w.actors->count; ++i)
             {
                 const ActorState &actor = w.actors->states[i];
-                if (!actor.active || actor.nameHash == 0 || actor.model >= w.actors->modelCount)
+                // (One of the people who follows the player comes, name or
+                // none; anyone else by name.)
+                const bool person = (actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+                                     actor.kind == static_cast<std::uint8_t>(ActorKind::Guard)) &&
+                                    actor.ai < 5;
+                const bool follows = person && actor.ai == 1 && actor.script < 0;
+                if (!actor.active || (actor.nameHash == 0 && !follows) || actor.model >= w.actors->modelCount)
                     continue;
                 const fx d[3] = {actor.pos[0] - here->origin[0], actor.pos[1] - here->origin[1],
                                  actor.pos[2] - here->origin[2]};
@@ -180,7 +199,8 @@ namespace hldata
                                   worldLeaf(*w.world, chest)))
                         continue;
                 }
-                const fx distance = fxLength(d);
+                // (Those who follow first: as if nearer than anyone.)
+                const fx distance = fxLength(d) - (follows ? 4 * kVisitorRange : 0);
                 int at = taken < kMaxVisitors ? taken : kMaxVisitors - 1;
                 if (taken >= kMaxVisitors && distance >= far[at])
                     continue;
@@ -200,7 +220,23 @@ namespace hldata
                 visitor.body = actor.body;
                 visitor.kind = actor.kind;
                 visitor.flags = actor.flags;
-                visitor.light = actor.light;
+                visitor.light = static_cast<std::uint8_t>(actor.light > kVisitorLight ? kVisitorLight : actor.light);
+                if (person)
+                {
+                    // His health (absolute once he has thought: HlAiCore's
+                    // aiInit; before, what he has lost of it).
+                    int health = actor.health;
+                    const AiMonster *mind = w.actors->ai != nullptr ? aiFind(*w.actors, i) : nullptr;
+                    if (health <= 0 && (mind == nullptr || mind->maxHealth == 0))
+                        health += personHealth(actor.kind);
+                    health = health < 1 ? 1 : (health > kVisitorHealth ? kVisitorHealth : health);
+                    visitor.yaw = static_cast<std::uint16_t>((actor.yaw & ~kVisitorHealth) | health);
+                    visitor.light |= kVisitorMind;
+                    if (follows)
+                        visitor.light |= kVisitorFollows;
+                    if (mind != nullptr && (mind->memory & kMemoryProvoked))
+                        visitor.light |= kVisitorProvoked;
+                }
                 if (taken < kMaxVisitors)
                     ++taken;
             }
@@ -309,7 +345,7 @@ namespace hldata
             for (int i = 0; i < w.actors->count; ++i)
             {
                 const ActorState &other = w.actors->states[i];
-                if (other.active && other.nameHash == visitor.name)
+                if (other.active && visitor.name != 0 && other.nameHash == visitor.name)
                     here2 = true;
                 if (!other.active && slot < 0)
                     slot = i;
@@ -338,7 +374,25 @@ namespace hldata
             actor.body = visitor.body;
             actor.kind = visitor.kind;
             actor.flags = visitor.flags;
-            actor.light = visitor.light;
+            actor.light = static_cast<std::uint8_t>(visitor.light & kVisitorLight);
+            // One of the people, as he left: his health, whether he follows
+            // the player, whether the player provoked him.
+            if (visitor.light & kVisitorMind)
+            {
+                actor.health = static_cast<std::int16_t>(visitor.yaw & kVisitorHealth);
+                actor.ai = (visitor.light & kVisitorFollows) ? 1 : 0;
+                if (w.actors->ai != nullptr)
+                {
+                    aiForget(*w.actors, slot);
+                    if (AiMonster *mind = aiOf(*w.actors, slot))
+                    {
+                        if (visitor.light & kVisitorFollows)
+                            mind->targetEnt = kAiPlayer;
+                        if (visitor.light & kVisitorProvoked)
+                            mind->memory |= kMemoryProvoked;
+                    }
+                }
+            }
             const ModelView *view = actorModel(*w.actors, actor);
             if (view != nullptr && view->header->clipCount != 0)
             {

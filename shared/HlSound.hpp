@@ -312,18 +312,33 @@ namespace hldata
         HornetHit1,
         HornetHit2,
         HornetHit3,
+        // ... and the rest of what the people cry out, and a guard's pistol
+        // (from level version 32: kCommonSoundsBefore32).
+        ScientistPain2,
+        ScientistPain3,
+        ScientistPain4,
+        ScientistPain5,
+        GuardPain2,
+        GuardPain3,
+        GuardDie2,
+        GuardDie3,
+        GuardShot,
         Count
     };
     /// How many of these a map of level version 29 or before has.
     inline constexpr std::uint16_t kCommonSoundsBefore30 = static_cast<std::uint16_t>(CommonSound::XbowFire);
     /// ... and of version 30.
     inline constexpr std::uint16_t kCommonSoundsBefore31 = static_cast<std::uint16_t>(CommonSound::RocketFire);
+    /// ... and of version 31.
+    inline constexpr std::uint16_t kCommonSoundsBefore32 = static_cast<std::uint16_t>(CommonSound::ScientistPain2);
     /// How many of them a map of level version `version` has (its sounds
     /// after those are its own).
     inline constexpr std::uint16_t commonsOf(std::uint16_t version)
     {
-        return version < 30 ? kCommonSoundsBefore30
-                            : (version < 31 ? kCommonSoundsBefore31 : static_cast<std::uint16_t>(CommonSound::Count));
+        return version < 30   ? kCommonSoundsBefore30
+               : version < 31 ? kCommonSoundsBefore31
+               : version < 32 ? kCommonSoundsBefore32
+                              : static_cast<std::uint16_t>(CommonSound::Count);
     }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
 
@@ -386,7 +401,10 @@ namespace hldata
             "weapons/egon_off1.wav",  "agrunt/ag_fire1.wav",     "agrunt/ag_fire2.wav",
             "agrunt/ag_fire3.wav",    "hornet/ag_buzz1.wav",     "hornet/ag_buzz2.wav",
             "hornet/ag_buzz3.wav",    "hornet/ag_hornethit1.wav", "hornet/ag_hornethit2.wav",
-            "hornet/ag_hornethit3.wav"};
+            "hornet/ag_hornethit3.wav", "scientist/sci_pain2.wav", "scientist/sci_pain3.wav",
+            "scientist/sci_pain4.wav",  "scientist/sci_pain5.wav", "barney/ba_pain2.wav",
+            "barney/ba_pain3.wav",      "barney/ba_die2.wav",      "barney/ba_die3.wav",
+            "barney/ba_attack2.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

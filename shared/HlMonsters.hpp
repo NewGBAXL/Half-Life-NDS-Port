@@ -32,6 +32,13 @@
 
 #include "HlLogic.hpp"
 #include "HlMaterial.hpp"
+#include "HlAi.hpp"
+
+namespace hldata
+{
+    inline void aiTick(LogicWorld &w, PlayerState &player, int index, int ms);
+    inline void aiWorldTick(LogicWorld &w, PlayerState &player, int ms);
+} // namespace hldata
 
 namespace hldata
 {
@@ -127,8 +134,14 @@ namespace hldata
         // (A soldier: HlGrunt.hpp has the rest of him.)
         static const MonsterKind kGrunt = {50, false, fxFromInt(16), fxFromInt(72), fxFromInt(170),
                                            "idle1", "run", "smflinch", "diesimple"};
+        // (The people, and whatever stands as one: the human hull.)
+        static const MonsterKind kPerson = {20, false, fxFromInt(16), fxFromInt(72), fxFromInt(150),
+                                            "idle1", "run", "flinch", "diesimple"};
         if (kind == static_cast<std::uint8_t>(ActorKind::Grunt))
             return kGrunt;
+        if (isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Gman) ||
+            kind == static_cast<std::uint8_t>(ActorKind::Generic))
+            return kPerson;
         if (kind == static_cast<std::uint8_t>(ActorKind::Slave))
             return kSlave;
         if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid))
@@ -164,36 +177,6 @@ namespace hldata
     inline constexpr int kGrenadeBlast = 100;
     inline constexpr int kGrenadeRadius = 250;
     inline constexpr fx kSpitSpeed = fxFromInt(900);
-
-    // The attacks of the newer kinds (ActorState::attack): a clip, and the
-    // frames of it on which something happens (the model's own events).
-    inline constexpr std::uint8_t kAttackNone = 0;
-    inline constexpr std::uint8_t kAttackSlaveZap = 1;
-    inline constexpr std::uint8_t kAttackSlaveClaw = 2;
-    inline constexpr std::uint8_t kAttackSquidSpit = 3;
-    inline constexpr std::uint8_t kAttackSquidBite = 4;
-    inline constexpr std::uint8_t kAttackSquidWhip = 5;
-    inline constexpr std::uint8_t kAttackHoundBlast = 6;
-
-    struct MonsterAttack
-    {
-        const char *clip;
-        int frames[3]; ///< -1: none
-        int cooldownMs;
-    };
-    inline const MonsterAttack &monsterAttack(std::uint8_t attack)
-    {
-        static const MonsterAttack kAttacks[] = {
-            {"", {-1, -1, -1}, 0},
-            {"zapattack1", {24, -1, -1}, 2000},
-            {"attack1", {7, 13, 21}, 500},
-            {"range", {11, -1, -1}, 2500},
-            {"bite", {7, -1, -1}, 500},
-            {"whip", {23, -1, -1}, 500},
-            {"attack", {58, -1, -1}, 1500},
-        };
-        return kAttacks[attack <= kAttackHoundBlast ? attack : 0];
-    }
 
     inline constexpr fx kSightRange = fxFromInt(1024);
     /// The size a kind walks about as (HlWalk.hpp kWalk*).
@@ -308,24 +291,6 @@ namespace hldata
             actor.lastFrame = 0;
         }
 
-        inline void monsterWake(ActorWorld &a, ActorState &actor)
-        {
-            if (actor.ai != kAiIdle)
-                return;
-            actor.ai = kAiChase;
-            actor.thinkMs = 0;
-            actor.hasGoal = false;
-            actor.goalNode = actor.fromNode = -1;
-            // (Where it was: where it goes back to if it loses them.)
-            for (int i = 0; i < 3; ++i)
-                actor.home[i] = actor.pos[i];
-            actor.hasSeen = false;
-            actor.goingHome = false;
-            actor.lostMs = 0;
-            actor.lookMs = 0;
-            monsterClip(a, actor, monsterKind(actor.kind).move, false);
-        }
-
         /// Whether the frame `at` of the actor's clip went by this tick.
         inline bool passedFrame(const ActorState &actor, int at)
         {
@@ -342,14 +307,14 @@ namespace hldata
     inline void shakeStart(LogicWorld &w, fx amplitude, int ms);
     inline void explodeAt(LogicWorld &w, PlayerState &player, const fx *at, int size, bool fireball, bool sound,
                           bool hurts);
-    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group = kHitBody);
+    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group = kHitBody,
+                            std::uint32_t type = kDmgUnset, std::int16_t attacker = kAiPlayer,
+                            const fx *from = nullptr);
+    inline void aiActorHurt(LogicWorld &w, PlayerState *player, int index, const AiDamage &d);
     inline void turretHurt(LogicWorld &w, int index, int damage, bool bullet, int group);
-    inline void gruntHurt(LogicWorld &w, int index, int damage, bool bullet, int group);
     inline void mineHurt(LogicWorld &w, int index);
     namespace detail
     {
-        inline void gruntTick(LogicWorld &w, PlayerState &player, int index, int ms);
-        inline void personTick(LogicWorld &w, PlayerState &player, int index, int ms);
         inline void mineTick(LogicWorld &w, PlayerState &player, int index, int ms);
     }
     inline bool fights(std::uint8_t kind);
@@ -368,7 +333,7 @@ namespace hldata
     /// what breaks. `except` is a monster it leaves alone (its own maker),
     /// or -1.
     inline void radiusDamage(LogicWorld &w, PlayerState &player, const fx *origin, int damage, int radius,
-                             int except)
+                             int except, std::uint32_t type = kDmgBlast, std::int16_t attacker = kAiPlayer)
     {
         ActorWorld &a = *w.actors;
         auto share = [&](const fx *at) -> int
@@ -410,14 +375,22 @@ namespace hldata
             {
                 // Something lying dead, caught in it: it comes apart (the
                 // game's rule: a blast of more than what is left of it).
-                if ((isMonster(actor.kind) || isGrunt(actor.kind) || isPerson(actor.kind)) && share(middle) >= 40)
+                if (actorThinks(actor.kind))
+                {
+                    const int hurt = share(middle);
+                    if (hurt > 0)
+                        monsterHurt(w, i, hurt, false, kHitBody, type, attacker, origin);
+                }
+                else if ((isGrunt(actor.kind) || isPerson(actor.kind)) && share(middle) >= 40)
+                {
                     gibBurst(w, i);
+                }
                 continue;
             }
             const int hurt = share(middle);
             if (hurt > 0)
             {
-                monsterHurt(w, i, hurt, false);
+                monsterHurt(w, i, hurt, false, kHitBody, type, attacker, origin);
                 // (Away from the blast.)
                 fx away[3] = {middle[0] - origin[0], middle[1] - origin[1], middle[2] - origin[2]};
                 const fx far = fxLength(away);
@@ -502,7 +475,8 @@ namespace hldata
     /// Hurt the monster at `index`. `bullet`: by a bullet, which a zombie
     /// hardly feels (three tenths, as in the game).
     /// `group`: the part of it that was hit (kHit*).
-    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group)
+    inline void monsterHurt(LogicWorld &w, int index, int damage, bool bullet, int group, std::uint32_t type,
+                            std::int16_t attacker, const fx *from)
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
@@ -520,101 +494,33 @@ namespace hldata
             turretHurt(w, index, damage, bullet, group);
             return;
         }
-        if (actor.active && isGrunt(actor.kind))
-        {
-            gruntHurt(w, index, damage, bullet, group);
-            return;
-        }
         if (actor.active && isMine(actor.kind))
         {
             mineHurt(w, index);
             return;
         }
-        if (actor.active && isPerson(actor.kind))
+        if (!actor.active || !actorThinks(actor.kind))
+            return;
+        // The monsters that think as the game's do: its TakeDamage. (A shot
+        // is a bullet that never tears apart: the game's multidamage.)
+        AiDamage d;
+        d.amount = damage;
+        d.type = type != kDmgUnset ? type : (bullet ? kDmgBullet | kDmgNeverGib : kDmgGeneric);
+        d.attacker = attacker;
+        d.group = static_cast<std::uint8_t>(group);
+        if (from != nullptr)
         {
-            // One of the people of the place. They do not fight back: they
-            // cry out, and die of enough of it -- the scene that had them
-            // has lost them, and they lie where they fell.
-            if (actor.ai >= kAiDying)
-                return;
-            if (group == kHitHead)
-                damage *= 3;
-            actor.health = static_cast<std::int16_t>(actor.health - damage);
-            const bool guard = actor.kind == static_cast<std::uint8_t>(ActorKind::Guard);
-            if (-actor.health < personHealth(actor.kind))
-            {
-                // (A cry no more than twice a second or so, as the game's
-                // guard: not one for every pellet.)
-                if (actor.painMs <= 0)
-                {
-                    actor.painMs = 600;
-                    detail::monsterSound(w, actor, guard ? CommonSound::GuardPain : CommonSound::ScientistPain);
-                }
-                return;
-            }
-            detail::monsterSound(w, actor, guard ? CommonSound::GuardDie : CommonSound::ScientistDie);
-            if (actor.script >= 0 && actor.script < w.recordCount)
-            {
-                w.states[actor.script].dead = true;
-                actor.script = -1;
-                actor.scriptPhase = kActorFree;
-            }
-            actor.ai = kAiDead;
-            // Taken well past dead (the game's 30 more than they had: a
-            // tripmine, a grenade at their feet), they come apart.
-            if (personHealth(actor.kind) + actor.health < -30 && gibBurst(w, index))
-                return;
-            actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
-            actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
-            // (Falling, if this map's model was given how: else as they
-            // stood, which is at least still.)
-            detail::monsterClip(a, actor, "diesimple", true);
-            actorPlaceBox(a, index);
-            return;
+            d.hasFrom = true;
+            for (int k = 0; k < 3; ++k)
+                d.from[k] = from[k];
         }
-        if (!actor.active || !isMonster(actor.kind) || actor.ai >= kAiDying)
-            return;
-        // A hit to the head counts three times over (before whatever else
-        // the kind makes of it).
-        if (group == kHitHead)
-            damage *= 3;
-        if (bullet && actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))
-            damage = (damage * 3 + 9) / 10;
-        actor.health = static_cast<std::int16_t>(actor.health - damage);
-        const MonsterKind &kind = monsterKind(actor.kind);
-        // Taken far past dead (the game's thirty under): it comes apart.
-        if (actor.health < -30 && gibBurst(w, index))
-            return;
-        if (actor.health <= 0)
+        else if (attacker == kAiPlayer && w.actors->ai != nullptr && w.actors->ai->player != nullptr)
         {
-            // A script that had it has lost it.
-            if (actor.script >= 0 && actor.script < w.recordCount)
-            {
-                w.states[actor.script].dead = true;
-                actor.script = -1;
-                actor.scriptPhase = kActorFree;
-            }
-            actor.ai = kAiDying;
-            detail::monsterVoice(w, actor, 2);
-            actor.flags &= static_cast<std::uint8_t>(~kActorSolid);
-            actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
-            actor.reach = 0;
-            detail::monsterClip(a, actor, kind.die, true);
-            actorPlaceBox(a, index);
-            return;
+            d.hasFrom = true;
+            for (int k = 0; k < 3; ++k)
+                d.from[k] = w.actors->ai->player->origin[k];
         }
-        detail::monsterVoice(w, actor, 1);
-        if (actor.script >= 0 || (actor.flags & kActorPrisoner))
-            return;
-        const bool wasIdle = actor.ai == kAiIdle;
-        detail::monsterWake(a, actor);
-        // It flinches, if it was doing nothing that cannot be broken off.
-        if ((wasIdle || actor.ai == kAiChase) && (detail::chance(a) & 1) &&
-            actor.kind != static_cast<std::uint8_t>(ActorKind::Barnacle))
-        {
-            actor.ai = kAiFlinch;
-            detail::monsterClip(a, actor, kind.flinch, true);
-        }
+        aiActorHurt(w, w.actors->ai != nullptr ? w.actors->ai->player : nullptr, index, d);
     }
 
     /// Every one of `kind` there is, dead of it at once -- each as it would
@@ -647,561 +553,12 @@ namespace hldata
 
     namespace detail
     {
-        inline void headcrabLeap(LogicWorld &w, const PlayerState &player, int index)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &actor = a.states[index];
-            // At the player's eyes, by the game's sum: up fast enough to
-            // reach their height (16 units at the least), and across in the
-            // time that takes; not faster than 650 in all.
-            const fx to[3] = {player.origin[0] - actor.pos[0], player.origin[1] - actor.pos[1],
-                              player.origin[2] + player.viewHeight - actor.pos[2]};
-            fx height = to[2] < fxFromInt(16) ? fxFromInt(16) : to[2];
-            // v = sqrt(2 g h); both in units, so the root is too.
-            const fx up = fxFromInt(static_cast<int>(
-                isqrt64(static_cast<std::uint64_t>(2) * 800 * static_cast<std::uint64_t>(fxToInt(height)))));
-            // The time to the top, in milliseconds.
-            const std::int64_t ms = (static_cast<std::int64_t>(up) * 1000) / (gravityOf(player) > 0 ? gravityOf(player) : 1);
-            actor.velocity[0] = static_cast<fx>((static_cast<std::int64_t>(to[0]) * 1000) / (ms > 0 ? ms : 1));
-            actor.velocity[1] = static_cast<fx>((static_cast<std::int64_t>(to[1]) * 1000) / (ms > 0 ? ms : 1));
-            actor.velocity[2] = up;
-            const fx length = fxLength(actor.velocity);
-            if (length > fxFromInt(650))
-            {
-                for (int i = 0; i < 3; ++i)
-                    actor.velocity[i] = static_cast<fx>(
-                        (static_cast<std::int64_t>(actor.velocity[i]) * fxFromInt(650)) / length);
-            }
-            actor.yaw = fxAtan2Turns(to[1], to[0]);
-            actor.ai = kAiLeap;
-            actor.struck = 0;
-            actor.thinkMs = 3000; // the longest a leap may last
-            monsterSound(w, actor, CommonSound::HeadcrabAttack);
-            monsterClip(a, actor, "jump", true);
-        }
-
-        inline void headcrabFly(LogicWorld &w, PlayerState &player, int index, int ms)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &actor = a.states[index];
-            const MonsterKind &kind = monsterKind(actor.kind);
-            const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + kCrouchedFeet};
-            fx to[3];
-            for (int i = 0; i < 3; ++i)
-                to[i] = from[i] + static_cast<fx>((static_cast<std::int64_t>(actor.velocity[i]) * ms) / 1000);
-            actor.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player)) * ms) / 1000);
-            const Trace t = walkerTrace(*w.world, &a, index, true, from, to);
-            bool landed = false;
-            if (!t.startSolid)
-            {
-                actor.pos[0] = t.endPos[0];
-                actor.pos[1] = t.endPos[1];
-                actor.pos[2] = t.endPos[2] - kCrouchedFeet;
-            }
-            if (t.startSolid || t.fraction < kFractionOne)
-            {
-                // The floor ends it; a wall or a ceiling only stops it going
-                // that way.
-                if (t.startSolid || t.normal[2] > kFloorNormalZ)
-                    landed = true;
-                else
-                {
-                    actor.velocity[0] = actor.velocity[1] = 0;
-                    if (actor.velocity[2] > 0)
-                        actor.velocity[2] = 0;
-                }
-            }
-            if (!actor.struck && touchesPlayer(player, actor.pos, kind.half, kind.height))
-            {
-                actor.struck = 1;
-                monsterSound(w, actor, CommonSound::HeadcrabBite);
-                playerHurt(player, kHeadcrabBite, actor.pos);
-                a.got |= kGotHurt;
-                actor.velocity[0] = actor.velocity[1] = 0;
-            }
-            actor.thinkMs -= ms;
-            if (landed || actor.thinkMs <= 0)
-            {
-                actor.ai = kAiChase;
-                actor.cooldownMs = 2000;
-                actor.thinkMs = 0;
-                actor.velocity[0] = actor.velocity[1] = actor.velocity[2] = 0;
-                monsterClip(a, actor, kind.move, false);
-            }
-        }
-
-        inline void barnacleTick(LogicWorld &w, PlayerState &player, int index, int ms)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &actor = a.states[index];
-            // Its feet are its mouth, on the ceiling; the tongue hangs from
-            // there to the floor (found once, when it first looks).
-            if (actor.ai == kAiIdle && actor.reach == 0)
-            {
-                // (As far down as the game looks, 2048; and no longer than
-                // its tongue can be drawn: kBarnacleTongueMost.)
-                const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] - fxFromInt(4)};
-                const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] - fxFromInt(2048)};
-                const Shot down = traceShot(*w.world, from, to);
-                actor.reach = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(2044)) * down.fraction) >>
-                                              kFractionShift) -
-                              fxFromInt(8);
-                if (actor.reach > kBarnacleTongueMost)
-                    actor.reach = kBarnacleTongueMost;
-                if (actor.reach < fxFromInt(8))
-                    actor.reach = fxFromInt(8);
-                actor.goal[2] = actor.reach; // how long it is when let all the way down
-            }
-            const fx dx = player.origin[0] - actor.pos[0];
-            const fx dy = player.origin[1] - actor.pos[1];
-            const bool under = dx < fxFromInt(20) && dx > -fxFromInt(20) && dy < fxFromInt(20) &&
-                               dy > -fxFromInt(20);
-            const fx head = player.origin[2] + (player.ducked ? kCrouchedFeet : kStandingFeet);
-            if (actor.ai == kAiIdle)
-            {
-                // Let down again, if it was pulled up.
-                if (actor.reach < actor.goal[2])
-                    actor.reach += static_cast<fx>((static_cast<std::int64_t>(fxFromInt(60)) * ms) / 1000);
-                // Touched: anywhere between the mouth and the tip.
-                if (under && head > actor.pos[2] - actor.reach - fxFromInt(8) && head < actor.pos[2] &&
-                    player.health > 0 && !unseen(player))
-                {
-                    // (The COMMAND line's barnaclekill: it dies of it, as
-                    // shot, and lets nobody up.)
-                    if (player.cheats != nullptr && player.cheats->barnacleKill)
-                    {
-                        monsterHurt(w, index, (actor.health > 0 ? actor.health : monsterKind(actor.kind).health) + 1, false);
-                        return;
-                    }
-                    actor.ai = kAiAttack;
-                    actor.thinkMs = 0;
-                    monsterSound(w, actor, CommonSound::BarnacleAlert);
-                    monsterClip(a, actor, "attack1", false);
-                }
-                return;
-            }
-            // It has them: up they go, and at the top it bites.
-            if (!under || (player.health <= 0 || unseen(player)))
-            {
-                actor.ai = kAiIdle;
-                monsterClip(a, actor, "idle1", false);
-                return;
-            }
-            const fx top = actor.pos[2] - fxFromInt(36);
-            if (head < top)
-            {
-                const fx lift = static_cast<fx>((static_cast<std::int64_t>(fxFromInt(50)) * ms) / 1000);
-                fx to[3] = {actor.pos[0], actor.pos[1], player.origin[2] + lift};
-                const Trace t = traceAll(*w.world, player.ducked, player.origin, to);
-                if (!t.startSolid)
-                {
-                    for (int i = 0; i < 3; ++i)
-                        player.origin[i] = t.endPos[i];
-                }
-                player.velocity[0] = player.velocity[1] = player.velocity[2] = 0;
-                player.onGround = false;
-                actor.reach = actor.pos[2] - head;
-                if (t.fraction >= kFractionOne)
-                    return;
-            }
-            player.velocity[0] = player.velocity[1] = 0;
-            player.velocity[2] = 0;
-            actor.thinkMs -= ms;
-            if (actor.thinkMs <= 0)
-            {
-                actor.thinkMs = 1000;
-                monsterClip(a, actor, "chewcycle", false);
-                monsterSound(w, actor, CommonSound::BarnacleChew);
-                playerHurt(player, kBarnacleBite, actor.pos);
-                a.got |= kGotHurt;
-            }
-        }
-
-        /// Which of its attacks one of the newer kinds makes from where it
-        /// is, if any: `flat` and `dz` are how far off the player is, `sees`
-        /// whether there is a clear line to them.
-        inline std::uint8_t chooseAttack(ActorWorld &a, const ActorState &actor, fx flat, fx dz, bool sees)
-        {
-            const bool level = dz < fxFromInt(64) && dz > -fxFromInt(64);
-            switch (static_cast<ActorKind>(actor.kind))
-            {
-            case ActorKind::Slave:
-                if (flat < fxFromInt(60) && level)
-                    return kAttackSlaveClaw;
-                if (sees && actor.cooldownMs <= 0 && flat < fxFromInt(784))
-                    return kAttackSlaveZap;
-                break;
-            case ActorKind::Bullsquid:
-                if (flat < fxFromInt(85) && level)
-                    return (chance(a) & 1) ? kAttackSquidBite : kAttackSquidWhip;
-                if (sees && actor.cooldownMs <= 0 && flat > fxFromInt(128) && flat < fxFromInt(784))
-                    return kAttackSquidSpit;
-                break;
-            case ActorKind::Houndeye:
-                if (actor.cooldownMs <= 0 && flat < fxFromInt(100) && level)
-                    return kAttackHoundBlast;
-                break;
-            default:
-                break;
-            }
-            return kAttackNone;
-        }
-
-        /// The moment of an attack: frame `n` of its frames has come.
-        inline void attackLands(LogicWorld &w, PlayerState &player, int index, fx flat, fx dz,
-                                const fx *eye, const fx *theirs)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &actor = a.states[index];
-            const bool reach = flat < kZombieReach && dz < fxFromInt(64) && dz > -fxFromInt(64);
-            auto hurt = [&](int damage)
-            {
-                playerHurt(player, damage, actor.pos);
-                a.got |= kGotHurt;
-            };
-            switch (actor.attack)
-            {
-            case kAttackSlaveZap:
-            {
-                // The bolt goes where they are now: if they are still to be
-                // seen, it has them.
-                monsterSound(w, actor, CommonSound::SlaveZap);
-                const Shot shot = traceShot(*w.world, eye, theirs);
-                fx end[3];
-                for (int i = 0; i < 3; ++i)
-                    end[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(theirs[i] - eye[i]) *
-                                                       shot.fraction) >> kFractionShift);
-                // (Where it lands on someone is their chest, not the eye they
-                // see it with: a bolt drawn into the eye itself is a smear
-                // across the whole picture.)
-                if (shot.fraction >= kFractionOne)
-                    end[2] -= fxFromInt(20);
-                effectAdd(a, kEffectBolt, eye, end, 0, 200);
-                if (shot.fraction >= kFractionOne && player.health > 0)
-                    hurt(kSlaveZap);
-                break;
-            }
-            case kAttackSlaveClaw:
-                monsterSound(w, actor, reach ? CommonSound::ClawStrike : CommonSound::ClawMiss);
-                if (reach)
-                    hurt(kSlaveClaw);
-                break;
-            case kAttackSquidSpit:
-            {
-                monsterSound(w, actor, CommonSound::SquidSpit);
-                const fx d[3] = {theirs[0] - eye[0], theirs[1] - eye[1], theirs[2] - eye[2]};
-                const fx length = fxLength(d);
-                if (length > 0)
-                {
-                    fx velocity[3];
-                    for (int i = 0; i < 3; ++i)
-                        velocity[i] = static_cast<fx>((static_cast<std::int64_t>(d[i]) * kSpitSpeed) / length);
-                    projectileAdd(a, kShotSpit, eye, velocity, 3000);
-                }
-                break;
-            }
-            case kAttackSquidBite:
-                monsterSound(w, actor, CommonSound::SquidBite);
-                if (reach)
-                    hurt(kSquidBite);
-                break;
-            case kAttackSquidWhip:
-                monsterSound(w, actor, CommonSound::SquidBite);
-                if (reach)
-                {
-                    // The tail throws them: away from it, and up.
-                    hurt(kSquidWhip);
-                    fx sine, cosine;
-                    fxSinCos(actor.yaw, sine, cosine);
-                    player.velocity[0] += cosine * 250;
-                    player.velocity[1] += sine * 250;
-                    player.velocity[2] = fxFromInt(250);
-                    player.onGround = false;
-                }
-                break;
-            case kAttackHoundBlast:
-            {
-                monsterSound(w, actor, CommonSound::HoundBlast);
-                const fx middle[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(16)};
-                effectAdd(a, kEffectRing, middle, nullptr, kHoundBlastRadius, 300);
-                radiusDamage(w, player, middle, kHoundBlast, kHoundBlastRadius, index);
-                break;
-            }
-            default:
-                break;
-            }
-        }
-
         inline void peopleGround(LogicWorld &w, ActorState &actor, int ms);
 
-        inline void scriptRouse(LogicWorld &w, int actorIndex)
-        {
-            ActorState &actor = w.actors->states[actorIndex];
-            if (isMonster(actor.kind) && actor.ai == kAiIdle)
-                monsterWake(*w.actors, actor);
-        }
-
-        inline void monsterTick(LogicWorld &w, PlayerState &player, int index, int ms)
-        {
-            ActorWorld &a = *w.actors;
-            ActorState &actor = a.states[index];
-            const MonsterKind &kind = monsterKind(actor.kind);
-            const MoveWorld &world = *w.world;
-            if (actor.health == 0 && actor.ai == kAiIdle)
-            {
-                // Its first tick: what it has to lose, and how fast it goes.
-                actor.health = static_cast<std::int16_t>(kind.health);
-                actor.speed = actorClipSpeed(a, actor, nameHash(kind.move), kind.speed);
-                actor.thinkMs = (index * 37) % 300;
-                actor.restClip = actor.clip;
-            }
-            if (actor.ai == kAiDead)
-                return;
-            if (actor.ai == kAiDying)
-            {
-                if (actor.finished)
-                    actor.ai = kAiDead;
-                return;
-            }
-            // A script's, for now.
-            if (actor.script >= 0)
-                return;
-            // Falling (left in the air by its script, or its floor gone):
-            // nothing else until it lands.
-            if (actor.airborne && w.brushStates != nullptr && w.movers != nullptr)
-            {
-                peopleGround(w, actor, ms);
-                return;
-            }
-            if (actor.cooldownMs > 0)
-                actor.cooldownMs -= ms;
-            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
-            {
-                barnacleTick(w, player, index, ms);
-                return;
-            }
-
-            const fx target[3] = {player.origin[0], player.origin[1], playerFeet(player)};
-            const fx d[3] = {target[0] - actor.pos[0], target[1] - actor.pos[1], 0};
-            const fx flat = fxLength(d);
-            const fx dz = target[2] - actor.pos[2];
-            const fx eye[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + kind.height - fxFromInt(4)};
-            const fx theirs[3] = {player.origin[0], player.origin[1],
-                                  player.origin[2] + player.viewHeight};
-
-            switch (actor.ai)
-            {
-            case kAiIdle:
-            {
-                actor.thinkMs -= ms;
-                if (actor.thinkMs > 0)
-                    break;
-                actor.thinkMs = 300;
-                // (A prisoner goes for nobody.)
-                if ((player.health <= 0 || unseen(player)) || flat > kSightRange || dz > fxFromInt(512) ||
-                    dz < -fxFromInt(512) || (actor.flags & kActorPrisoner))
-                    break;
-                // In front of it, or near enough to be heard.
-                fx sine, cosine;
-                fxSinCos(actor.yaw, sine, cosine);
-                const std::int64_t ahead = static_cast<std::int64_t>(d[0]) * cosine +
-                                           static_cast<std::int64_t>(d[1]) * sine;
-                // (Someone moving is heard from twice as far as someone
-                // standing still.)
-                const fx speed[3] = {player.velocity[0], player.velocity[1], 0};
-                const fx heard = fxLength(speed) > fxFromInt(100) ? fxFromInt(400) : fxFromInt(192);
-                if (ahead < 0 && flat > heard)
-                    break;
-                if (lineClear(world, eye, theirs))
-                {
-                    monsterWake(a, actor);
-                    monsterVoice(w, actor, 0);
-                }
-                break;
-            }
-            case kAiChase:
-            {
-                if ((player.health <= 0 || unseen(player)))
-                {
-                    actor.ai = kAiIdle;
-                    monsterClip(a, actor, kind.idle, false);
-                    break;
-                }
-                // In reach?
-                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))
-                {
-                    if (flat < fxFromInt(56) && dz < fxFromInt(48) && dz > -fxFromInt(48))
-                    {
-                        actor.ai = kAiAttack;
-                        actor.struck = 0;
-                        actor.yaw = fxAtan2Turns(d[1], d[0]);
-                        monsterSound(w, actor, CommonSound::ZombieAttack);
-                        monsterClip(a, actor, (chance(a) & 1) ? "attack1" : "attack2", true);
-                        break;
-                    }
-                }
-                else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Headcrab))
-                {
-                    if (actor.cooldownMs <= 0 && flat < kLeapRange && dz < fxFromInt(160) &&
-                        dz > -fxFromInt(96) && lineClear(world, eye, theirs))
-                    {
-                        headcrabLeap(w, player, index);
-                        break;
-                    }
-                }
-                else
-                {
-                    // The newer kinds: an attack from a distance needs them
-                    // in sight, which is looked for only when it could be
-                    // made (a line through the world is not free).
-                    const bool far = actor.cooldownMs <= 0 && flat < fxFromInt(784) &&
-                                     actor.kind != static_cast<std::uint8_t>(ActorKind::Houndeye);
-                    const bool sees = far && lineClear(world, eye, theirs);
-                    const std::uint8_t attack = chooseAttack(a, actor, flat, dz, sees);
-                    if (attack != kAttackNone)
-                    {
-                        actor.ai = kAiAttack;
-                        actor.attack = attack;
-                        actor.struck = 0;
-                        actor.yaw = fxAtan2Turns(d[1], d[0]);
-                        if (attack == kAttackHoundBlast)
-                            monsterSound(w, actor, CommonSound::HoundAttack);
-                        monsterClip(a, actor, monsterAttack(attack).clip, true);
-                        break;
-                    }
-                }
-                const fx speed = actor.speed > 0 ? actor.speed : kind.speed;
-                // Does it see them? Looked at twice a second. While it does,
-                // it is them it makes for; once it does not, where it last
-                // did -- and it gets there, looks, and after a while gives
-                // them up and goes back to where it was.
-                actor.lookMs -= ms;
-                if (actor.lookMs <= 0)
-                {
-                    actor.lookMs = 500;
-                    if (lineClear(world, eye, theirs))
-                    {
-                        for (int i = 0; i < 3; ++i)
-                            actor.seen[i] = target[i];
-                        actor.hasSeen = true;
-                        actor.lostMs = 0;
-                        actor.goingHome = false;
-                    }
-                    else
-                    {
-                        actor.lostMs += 500;
-                    }
-                }
-                if (actor.goingHome)
-                {
-                    const fx back[3] = {actor.home[0] - actor.pos[0], actor.home[1] - actor.pos[1], 0};
-                    const int went = fxLength(back) < fxFromInt(40)
-                                         ? kWalkNoWay
-                                         : walkTick(a, world, index, monsterHull(actor.kind), actor.home, speed, ms,
-                                                    &player, kind.half, kind.height);
-                    if (went == kWalkNoWay || actor.lostMs > 40000)
-                    {
-                        // Home (or as near as there is a way): as it was.
-                        actor.ai = kAiIdle;
-                        actor.goingHome = false;
-                        monsterClip(a, actor, kind.idle, false);
-                        break;
-                    }
-                    monsterClip(a, actor, kind.move, false);
-                    break;
-                }
-                const bool lost = actor.hasSeen && actor.lostMs > 0;
-                const fx *making = lost ? actor.seen : target;
-                const fx gap[3] = {making[0] - actor.pos[0], making[1] - actor.pos[1], 0};
-                const bool there = lost && fxLength(gap) < fxFromInt(48);
-                const int went = there ? kWalkNoWay
-                                       : walkTick(a, world, index, monsterHull(actor.kind), making, speed, ms, &player,
-                                                  kind.half, kind.height);
-                if (went == kWalkNoWay)
-                {
-                    // Nowhere to go, or where it last saw them and they are
-                    // not there: it waits, looking -- and not for ever.
-                    faceTo(actor, d[0], d[1], ms, 32768);
-                    monsterClip(a, actor, kind.idle, false);
-                    if (actor.lostMs > 6000)
-                    {
-                        actor.goingHome = true;
-                        actor.thinkMs = 0;
-                        actor.hasGoal = false;
-                        actor.goalNode = actor.fromNode = -1;
-                    }
-                    break;
-                }
-                monsterClip(a, actor, kind.move, false);
-                break;
-            }
-            case kAiAttack:
-            {
-                if (actor.attack != kAttackNone)
-                {
-                    // One of the newer kinds': whatever its frames bring.
-                    const MonsterAttack &attack = monsterAttack(actor.attack);
-                    faceTo(actor, d[0], d[1], ms, 32768);
-                    for (int n = 0; n < 3; ++n)
-                    {
-                        if (attack.frames[n] < 0 || (actor.struck & (1 << n)) ||
-                            !passedFrame(actor, attack.frames[n]))
-                            continue;
-                        actor.struck |= static_cast<std::uint8_t>(1 << n);
-                        attackLands(w, player, index, flat, dz, eye, theirs);
-                    }
-                    if (actor.finished)
-                    {
-                        actor.cooldownMs = attack.cooldownMs;
-                        actor.attack = kAttackNone;
-                        actor.ai = kAiChase;
-                        actor.thinkMs = 0;
-                        monsterClip(a, actor, kind.move, false);
-                    }
-                    break;
-                }
-                // A zombie's swing: one arm then the other, or both at once.
-                // The frames are the model's own events.
-                const ModelView *model = actorModel(a, actor);
-                const bool both = model != nullptr && actor.clip >= 0 &&
-                                  actor.clip == model->findClip(nameHash("attack2"));
-                const int at[2] = {both ? 6 : 10, both ? -1 : 19};
-                for (int n = 0; n < 2; ++n)
-                {
-                    if (at[n] < 0 || (actor.struck & (1 << n)) || !passedFrame(actor, at[n]))
-                        continue;
-                    actor.struck |= static_cast<std::uint8_t>(1 << n);
-                    const bool lands = flat < kZombieReach && dz < fxFromInt(64) && dz > -fxFromInt(64);
-                    monsterSound(w, actor, lands ? CommonSound::ClawStrike : CommonSound::ClawMiss);
-                    if (lands)
-                    {
-                        playerHurt(player, both ? kZombieBothSlash : kZombieSlash, actor.pos);
-                        a.got |= kGotHurt;
-                    }
-                }
-                if (actor.finished)
-                {
-                    actor.ai = kAiChase;
-                    actor.thinkMs = 0;
-                    monsterClip(a, actor, kind.move, false);
-                }
-                break;
-            }
-            case kAiLeap:
-                headcrabFly(w, player, index, ms);
-                break;
-            case kAiFlinch:
-                if (actor.finished)
-                {
-                    actor.ai = kAiChase;
-                    actor.thinkMs = 0;
-                    monsterClip(a, actor, kind.move, false);
-                }
-                break;
-            default:
-                break;
-            }
-        }
+        /// A scene has let a monster go: it thinks again by itself, idle (or
+        /// lying in wait, `ambush`) -- now, not at its next think, so that
+        /// whatever follows has its mind as it is (CineCleanup).
+        inline void scriptRouse(LogicWorld &w, int actorIndex, bool ambush);
 
         // ----------------------------------------------------------- items
 
@@ -1531,6 +888,7 @@ namespace hldata
             }
             actorSetup(a, slot, born, *w.world);
             a.states[slot].flags &= static_cast<std::uint8_t>(~kActorDormant);
+            aiForget(a, slot); // (a new monster in the old one's place: it thinks afresh)
             actorPlaceBox(a, slot);
             if (state.phase > 0)
                 --state.phase;
@@ -1683,8 +1041,12 @@ namespace hldata
                         // (Where a piece of someone lands, it leaves some.)
                         const bool alien = static_cast<int>(gib.model) == a.alienGibs;
                         if (static_cast<int>(gib.model) == a.humanGibs || alien)
+                        {
                             markFloor(a, *w.world, gib.pos, 24, alien ? kDecalAlien2 : kDecalBlood, 13,
                                       alien ? kMarkAlien : kMarkBlood);
+                            // (Meat, to whatever eats it: CGib::WaitTillLand.)
+                            aiSound(a, kSoundMeat, gib.pos, 384, 25000);
+                        }
                     }
                 }
                 for (int i = 0; i < 3; ++i)
@@ -2092,6 +1454,14 @@ namespace hldata
                         shot.active = false;
                         explodeAt(w, player, shot.pos, kGrenadeBlast, true, true, true);
                     }
+                    else if ((shot.leftMs + ms) / 200 != shot.leftMs / 200)
+                    {
+                        // (Danger, five times a second, half a second ahead,
+                        // as loud as it is fast: DangerSoundThink.)
+                        const fx ahead[3] = {shot.pos[0] + shot.velocity[0] / 2, shot.pos[1] + shot.velocity[1] / 2,
+                                             shot.pos[2] + shot.velocity[2] / 2};
+                        aiSound(a, kSoundDanger, ahead, fxToInt(fxLength(shot.velocity)), 200);
+                    }
                     continue;
                 }
                 const bool satchel = shot.kind == kShotSatchel;
@@ -2133,6 +1503,27 @@ namespace hldata
                     }
                     for (int i = 0; i < 3; ++i)
                         shot.pos[i] = t.startSolid ? shot.pos[i] : to[i];
+                    if (shot.kind == kShotGrenade && shot.leftMs > 0)
+                    {
+                        // What the monsters hear of it: once, louder than its
+                        // blast, as soon as it all but stops; and ten times a
+                        // second in its last second, where it will be
+                        // (TumbleThink, BounceTouch).
+                        const fx slow[3] = {shot.velocity[0], shot.velocity[1], shot.velocity[2] * 45 / 100};
+                        if (shot.sprite == 0xFFFF && fxLength(slow) <= fxFromInt(60))
+                        {
+                            shot.sprite = 0xFFFE;
+                            aiSound(a, kSoundDanger, shot.pos, kGrenadeBlast * 10 / 4, 300);
+                        }
+                        if (shot.leftMs < 1000 && (shot.leftMs + ms) / 100 != shot.leftMs / 100)
+                        {
+                            fx ahead[3];
+                            for (int i = 0; i < 3; ++i)
+                                ahead[i] = shot.pos[i] +
+                                           static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * shot.leftMs) / 1000);
+                            aiSound(a, kSoundDanger, ahead, 400, 100);
+                        }
+                    }
                     if (satchel)
                     {
                         // A satchel goes off when it is told to (the radio):
@@ -2151,6 +1542,7 @@ namespace hldata
                             continue; // (what was thrown out is simply gone)
                         effectAdd(a, kEffectBurst, shot.pos, nullptr, 96, 450);
                         markBlast(a, *w.world, shot.pos, 48);
+                        aiSound(a, kSoundCombat, shot.pos, kNormalExplosionVolume, 3000);
                         if (w.heard != nullptr)
                             w.heard->add(CommonSound::Explode, shot.pos, 127, 2000);
                         radiusDamage(w, player, shot.pos, kGrenadeBlast, kGrenadeRadius, -1);
@@ -2173,13 +1565,34 @@ namespace hldata
                 // and the end of this tick's flight.)
                 const fx middle[3] = {(shot.pos[0] + end[0]) / 2, (shot.pos[1] + end[1]) / 2,
                                       (shot.pos[2] + end[2]) / 2};
-                const bool hits = player.health > 0 &&
-                                  (playerTouchesBox(player, middle, middle, fxFromInt(4)) ||
-                                   playerTouchesBox(player, end, end, fxFromInt(4)));
+                bool hits = player.health > 0 &&
+                            (playerTouchesBox(player, middle, middle, fxFromInt(4)) ||
+                             playerTouchesBox(player, end, end, fxFromInt(4)));
                 if (hits)
                 {
                     playerHurt(player, kSquidSpit, shot.pos);
                     a.got |= kGotHurt;
+                }
+                else
+                {
+                    // ... or anything else that can be hurt (CSquidSpit::Touch),
+                    // but whoever spat it.
+                    for (int i = 0; i < a.count && !hits; ++i)
+                    {
+                        const ActorState &other = a.states[i];
+                        if (i == shot.sprite || !other.active || !(other.flags & kActorSolid) || !canBeHurt(other.kind))
+                            continue;
+                        fx lo[3], hi[3];
+                        targetBox(other, lo, hi);
+                        std::int64_t enter = 0;
+                        if (lineEntersBox(shot.pos, end, lo, hi, enter))
+                        {
+                            hits = true;
+                            monsterHurt(w, i, kSquidSpit, false, kHitBody, kDmgGeneric,
+                                        shot.sprite < a.count ? static_cast<std::int16_t>(shot.sprite) : kAiNone,
+                                        shot.pos);
+                        }
+                    }
                 }
                 if (hits || line.fraction < kFractionOne || shot.leftMs <= 0)
                 {
@@ -2868,7 +2281,10 @@ namespace hldata
     }
     inline bool canBeHurt(std::uint8_t kind)
     {
-        return fights(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Player);
+        // (The man in the suit takes a shot, and shrugs it off; whatever a
+        // map makes of a monster_generic dies of a few.)
+        return fights(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Player) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Gman) || kind == static_cast<std::uint8_t>(ActorKind::Generic);
     }
 
     inline void bleed(LogicWorld &w, int index, const fx *at, const fx *dir, bool heavy)
@@ -3101,6 +2517,7 @@ namespace hldata
         }
         for (int k = 0; k < 3; ++k)
             a.foe[k] = player.origin[k];
+        aiWorldTick(w, player, ms);
         if (a.noiseMs > 0)
             a.noiseMs -= ms;
         if (a.speakMs > 0)
@@ -3156,19 +2573,19 @@ namespace hldata
                 detail::mineTick(w, player, i, ms);
                 continue;
             }
-            if (isGrunt(actor.kind))
+            // (Whoever a barnacle has hold of is where it has them.)
+            if (aiHeld(a, i) && !actorThinks(actor.kind))
             {
-                detail::gruntTick(w, player, i, ms);
                 actor.lastFrame = actor.frame;
                 actorPlaceBox(a, i);
                 continue;
             }
-            if (isPerson(actor.kind))
+            if (isPerson(actor.kind) || actor.kind == static_cast<std::uint8_t>(ActorKind::Gman))
             {
-                // (No scene has them: they stand on what is under them, and
-                // follow, run, or shoot.)
+                // (No scene has them: they stand on what is under them -- a
+                // lift, a train -- and go where it goes, or fall.)
                 if (actor.script < 0 && actor.kind != static_cast<std::uint8_t>(ActorKind::Sitter) &&
-                    w.brushStates != nullptr && w.movers != nullptr)
+                    w.brushStates != nullptr && w.movers != nullptr && !aiHeld(a, i))
                 {
                     detail::peopleGround(w, actor, ms);
                     if (actor.airborne)
@@ -3177,13 +2594,10 @@ namespace hldata
                         continue;
                     }
                 }
-                if (actor.script < 0 && actor.ai < kAiDying)
-                    detail::personTick(w, player, i, ms);
-                continue;
             }
-            if (!isMonster(actor.kind))
+            if (!actorThinks(actor.kind))
                 continue;
-            detail::monsterTick(w, player, i, ms);
+            aiTick(w, player, i, ms);
             actor.lastFrame = actor.frame;
             actorPlaceBox(a, i);
         }
@@ -3421,7 +2835,8 @@ namespace hldata
             const ActorState &actor = a->states[i];
             // (`from`: the actor whose shot it is, if it is not the
             // player's -- who does not shoot himself.)
-            if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying || i == from)
+            if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying || i == from ||
+                (actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) && !(actor.flags & kActorSolid)))
                 continue;
             fx mins[3], maxs[3];
             targetBox(actor, mins, maxs);
@@ -3450,39 +2865,18 @@ namespace hldata
                                                      kFractionShift);
                 if (bullet && w.heard != nullptr)
                     w.heard->add(CommonSound::BulletFlesh, at, 90, kRadiusSmall);
-                monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
+                monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end), kDmgUnset,
+                            from >= 0 ? static_cast<std::int16_t>(from) : kAiPlayer,
+                            from >= 0 ? a->states[from].pos : nullptr);
                 const bool killed = a->states[struck].ai >= kAiDying || !a->states[struck].active;
                 if (met != nullptr)
                     *met = killed ? kMetKilled : kMetFlesh;
-                // A guard and the player's shots, by the game's rule: in a
-                // fight it is taken for a stray one; with nothing else to
-                // shoot at, the first makes him wary -- unless he was
-                // plainly aimed at -- and the next an enemy, who follows
-                // nobody. (`struck`: 0 easy, 1 wary, 2 an enemy.)
-                if (kind == static_cast<std::uint8_t>(ActorKind::Guard) && from < 0)
-                {
-                    ActorState &him = w.actors->states[struck];
-                    if (him.foe < 0 && him.struck < 2)
-                    {
-                        const fx to[3] = {him.pos[0] - eye[0], him.pos[1] - eye[1], him.pos[2] + fxFromInt(36) - eye[2]};
-                        const fx far = fxLength(to);
-                        const std::int64_t along = static_cast<std::int64_t>(to[0]) * dir[0] +
-                                                   static_cast<std::int64_t>(to[1]) * dir[1] +
-                                                   static_cast<std::int64_t>(to[2]) * dir[2];
-                        // (Within about fifteen degrees of where the shot went.)
-                        const bool aimed = far > 0 && along * 100 > static_cast<std::int64_t>(far) * fxLength(dir) * 96;
-                        him.struck = static_cast<std::uint8_t>(him.struck >= 1 || aimed ? 2 : 1);
-                        if (him.struck >= 2)
-                        {
-                            him.ai = 0; // (kPersonIdle: he follows no longer)
-                            him.wasFollowing = false;
-                        }
-                    }
-                }
                 bleed(w, struck, at, dir, killed || damage >= 40);
                 return true;
             }
-            monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end));
+            monsterHurt(w, struck, damage, bullet, hitGroup(*a, a->states[struck], eye, end), kDmgUnset,
+                        from >= 0 ? static_cast<std::int16_t>(from) : kAiPlayer,
+                        from >= 0 ? a->states[from].pos : nullptr);
             if (met != nullptr)
                 *met = kMetThing;
             return true;
@@ -3773,10 +3167,53 @@ namespace hldata
             dot[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * shot.fraction) >> kFractionShift);
     }
 
+    namespace detail
+    {
+        inline std::uint32_t weaponsTickBody(LogicWorld &w, PlayerState &player, WeaponState &state,
+                                             const fx *eye, const fx *forward, const fx *right, const fx *up,
+                                             bool attack, bool next, int ms, bool second, int pick, bool reload);
+    }
+
+    /// How loud each gun is to the monsters when it fires (the game's
+    /// m_iWeaponVolume, weapon by weapon); `secondary`: its other fire.
+    inline int weaponVolume(std::uint8_t weapon, bool secondary)
+    {
+        switch (weapon)
+        {
+        case kWeaponGlock:
+        case kWeaponMp5:       return kNormalGunVolume;
+        case kWeaponShotgun:
+        case kWeaponPython:
+        case kWeaponRpg:       return kLoudGunVolume;
+        case kWeaponCrossbow:
+        case kWeaponSnark:     return kQuietGunVolume;
+        case kWeaponGauss:     return kGaussFireVolume;
+        case kWeaponEgon:      return kEgonVolume;
+        case kWeaponHornetgun: return secondary ? kNormalGunVolume : kQuietGunVolume;
+        default:               return 0; // (the crowbar's is by what it hits; what is thrown, none)
+        }
+    }
+
     inline std::uint32_t weaponsTick(LogicWorld &w, PlayerState &player, WeaponState &state,
                                      const fx *eye, const fx *forward, const fx *right, const fx *up,
                                      bool attack, bool next, int ms, bool second = false, int pick = 0,
                                      bool reload = false)
+    {
+        const std::uint8_t held = player.inv.current;
+        const std::uint32_t did =
+            detail::weaponsTickBody(w, player, state, eye, forward, right, up, attack, next, ms, second, pick, reload);
+        if ((did & kWeaponFired) && held != kWeaponCrowbar)
+        {
+            const int volume = weaponVolume(held, (did & kWeaponSecondary) != 0);
+            if (volume > 0)
+                aiWeaponVolume(w, volume);
+        }
+        return did;
+    }
+
+    inline std::uint32_t detail::weaponsTickBody(LogicWorld &w, PlayerState &player, WeaponState &state,
+                                                 const fx *eye, const fx *forward, const fx *right, const fx *up,
+                                                 bool attack, bool next, int ms, bool second, int pick, bool reload)
     {
         Inventory &inv = player.inv;
         std::uint32_t did = 0;
@@ -3810,6 +3247,7 @@ namespace hldata
             if (met != kMetNothing)
             {
                 detail::crowbarLanded(state, met);
+                aiWeaponVolume(w, met == kMetFlesh || met == kMetKilled ? kCrowbarBodyHitVolume : kCrowbarWallHitVolume);
                 did |= kWeaponHit;
             }
         }
@@ -4085,6 +3523,7 @@ namespace hldata
                 return did;
             }
             detail::crowbarLanded(state, met);
+            aiWeaponVolume(w, met == kMetFlesh || met == kMetKilled ? kCrowbarBodyHitVolume : kCrowbarWallHitVolume);
             return did | kWeaponHit;
         }
 
@@ -4794,5 +4233,9 @@ namespace hldata
 } // namespace hldata
 
 #include "HlEffects.hpp"
+#include "HlAiCore.hpp"
+#include "HlAiMonsters.hpp"
 #include "HlGrunt.hpp"
+#include "HlAiTalk.hpp"
+#include "HlAiPeople.hpp"
 #include "HlPeople.hpp"

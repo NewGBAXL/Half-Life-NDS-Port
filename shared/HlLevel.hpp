@@ -52,18 +52,22 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 31;
+    inline constexpr std::uint16_t kLevelVersion = 32;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
-    /// The oldest build that can read what it writes.
-    inline constexpr std::uint16_t kLevelMinReader = 28;
+    /// The oldest build that can read what it writes. (32: what the people
+    /// say, after the soldiers' table in Section::Speech, which a build
+    /// before would refuse.)
+    inline constexpr std::uint16_t kLevelMinReader = 32;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
     /// none), 29 -> 30 the later weapons' items (cooked after every other
     /// actor) and sounds (after the others: kCommonSoundsBefore30), 30 -> 31
     /// the last four weapons and the weaponbox (items cooked after even
-    /// those, sounds after theirs: commonsOf), none that a save points at.
+    /// those, sounds after theirs: commonsOf), 31 -> 32 what the people say
+    /// and a guard's pistol to drop (an item cooked after all of those),
+    /// none that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
@@ -550,8 +554,31 @@ namespace hldata
         Beverage,
         /// The rush of light the incident's portals open with, at `move`.
         Funnel,
+        /// Somebody says a line (scripted_sentence, from level version 32):
+        /// extra[0] the sentence, extra[1] for how long (ms, the game's
+        /// duration), extra[2] how loud (0..127), extra[3] how long after it
+        /// may be said again (refire, ms). The speaker: by name (netName),
+        /// or the nearest of a kind (damage: kind + 1) within waitMs units
+        /// of `move`. mins[0] how far it carries (kRadius*), mins[1] the
+        /// name id of who is spoken to (mins[2] 1: the player), maxs[0] the
+        /// map's spawnflags (kSentence*). With no name it starts by itself.
+        Sentence,
         Count
     };
+    // What a scripted_sentence's spawnflags say (LogicKind::Sentence).
+    inline constexpr std::int16_t kSentenceOnce = 1;       ///< said once, then gone
+    inline constexpr std::int16_t kSentenceFollowers = 2;  ///< only by one following the player
+    inline constexpr std::int16_t kSentenceInterrupt = 4;  ///< by one busy with something else, too
+    inline constexpr std::int16_t kSentenceConcurrent = 8; ///< (the game's: the others are NOT silenced)
+
+    // What a script's spawnflags say (LogicKind::Script, in its `pad`, from
+    // level version 32; 0 before): as the game numbers them, and above.
+    inline constexpr std::uint16_t kScriptLeaveCorpse = 8;
+    inline constexpr std::uint16_t kScriptNoInterrupt = 32;
+    inline constexpr std::uint16_t kScriptOverrideState = 64;
+    inline constexpr std::uint16_t kScriptNoScriptMovement = 128;
+    inline constexpr std::uint16_t kScriptAi = 0x100;     ///< an aiscripted_sequence
+    inline constexpr std::uint16_t kScriptAmbush = 0x200; ///< ... that ends in an ambush (m_iFinishSchedule 1)
 
     // What a "use" asks for.
     inline constexpr std::uint8_t kUseOff = 0;
@@ -744,6 +771,29 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Turret);
     }
 
+    /// The kinds that think as the game's monsters do (HlAi.hpp).
+    inline bool actorThinks(std::uint8_t kind)
+    {
+        switch (static_cast<ActorKind>(kind))
+        {
+        case ActorKind::Headcrab:
+        case ActorKind::Zombie:
+        case ActorKind::Barnacle:
+        case ActorKind::Slave:
+        case ActorKind::Bullsquid:
+        case ActorKind::Houndeye:
+        case ActorKind::Grunt:
+        case ActorKind::Scientist:
+        case ActorKind::Guard:
+        case ActorKind::Sitter:
+        case ActorKind::Gman:
+        case ActorKind::Generic:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     inline constexpr std::uint8_t kActorSolid = 1; ///< the player cannot walk through it
     /// Not there when the map starts: a place kept for what a monstermaker
     /// makes.
@@ -776,6 +826,10 @@ namespace hldata
     /// 11 at the sight or sound of the player, 2 hurt, 3 down to half his
     /// health, 4 killed). Once.
     inline constexpr int kGruntTriggerShift = 4;
+    /// One of the people (a scientist, a guard), in the low bits of the same
+    /// word: met before the disaster (the game's SF_MONSTER_PREDISASTER):
+    /// he will not follow.
+    inline constexpr std::uint32_t kPersonPreDisaster = 1;
 
     // What a soldier calls out (Section::Speech): the game's HG_ groups.
     inline constexpr int kSpeakGrenade = 0; ///< a grenade lands by him
@@ -791,6 +845,71 @@ namespace hldata
     inline constexpr int kSpeakClear = 10;
     inline constexpr int kSpeechGroups = 11;
     inline constexpr int kSpeechLines = 6;
+
+    // What the people of the place say (the game's talkmonster groups):
+    // after the soldiers' table in Section::Speech (version 32 on), for each
+    // voice and slot the first of its lines and how many, then the lines
+    // (Sentences) themselves. A slot is the game's TLK_* (in its order), then
+    // what each voice has besides.
+    inline constexpr int kVoiceScientist = 0;
+    inline constexpr int kVoiceBarney = 1;
+    inline constexpr int kVoices = 2;
+    enum : int
+    {
+        kTalkAnswer,
+        kTalkQuestion,
+        kTalkIdle,
+        kTalkStare,
+        kTalkUse,
+        kTalkUnuse,
+        kTalkStop,
+        kTalkNoShoot,
+        kTalkHello,
+        kTalkPHello,
+        kTalkPIdle,
+        kTalkPQuestion,
+        kTalkPlHurt1,
+        kTalkPlHurt2,
+        kTalkPlHurt3,
+        kTalkSmell,
+        kTalkWound,
+        kTalkMortal,
+        kTalkDecline, ///< SC_POK, BA_POK: "not now" (DeclineFollowing)
+        kTalkExtra1,  ///< SC_SCREAM; BA_ATTACK
+        kTalkExtra2,  ///< SC_HEAL;   BA_MAD
+        kTalkExtra3,  ///< SC_FEAR;   BA_SHOT
+        kTalkExtra4,  ///< SC_PLFEAR; BA_KILL
+        kTalkSlots
+    };
+    inline constexpr int kTalkScream = kTalkExtra1, kTalkHeal = kTalkExtra2, kTalkFear = kTalkExtra3,
+                         kTalkPlFear = kTalkExtra4;
+    inline constexpr int kTalkAttack = kTalkExtra1, kTalkMad = kTalkExtra2, kTalkShot = kTalkExtra3,
+                         kTalkKill = kTalkExtra4;
+    inline constexpr int kTalkGroups = kVoices * kTalkSlots;
+    /// Where the talk table starts in Section::Speech, and how long its
+    /// heading (first, count for each group) is.
+    inline constexpr int kTalkTableAt = kSpeechGroups * kSpeechLines;
+    inline constexpr int kTalkHeading = kTalkGroups * 2;
+    /// The most lines of a group a map is given (all of the game's would be
+    /// several hundred, and each a sound the map must name).
+    inline constexpr int kTalkLines = 8;
+
+    /// The game's name of each group ("!" before one line said as it is);
+    /// null for one that voice has none of.
+    inline const char *talkGroupName(int voice, int slot)
+    {
+        static const char *const kScientist[kTalkSlots] = {
+            "SC_ANSWER", "SC_QUESTION", "SC_IDLE",   "SC_STARE",  "SC_OK",     "SC_WAIT",   "SC_STOP",   "SC_SCARED",
+            "SC_HELLO",  "SC_PHELLO",   "SC_PIDLE",  "SC_PQUEST", "!SC_CUREA", "!SC_CUREB", "!SC_CUREC", "SC_SMELL",
+            "SC_WOUND",  "SC_MORTAL",   "SC_POK",    "SC_SCREAM", "SC_HEAL",   "SC_FEAR",   "SC_PLFEAR"};
+        static const char *const kBarney[kTalkSlots] = {
+            "BA_ANSWER", "BA_QUESTION", "BA_IDLE", "BA_STARE",  "BA_OK",     "BA_WAIT",   "BA_STOP",   "BA_SCARED",
+            "BA_HELLO",  nullptr,       nullptr,   "BA_PQUEST", "!BA_CUREA", "!BA_CUREB", "!BA_CUREC", "BA_SMELL",
+            "BA_WOUND",  "BA_MORTAL",   "BA_POK",  "BA_ATTACK", "BA_MAD",    "BA_SHOT",   "BA_KILL"};
+        if (slot < 0 || slot >= kTalkSlots)
+            return nullptr;
+        return voice == kVoiceScientist ? kScientist[slot] : (voice == kVoiceBarney ? kBarney[slot] : nullptr);
+    }
 
     enum class ItemKind : std::uint8_t
     {

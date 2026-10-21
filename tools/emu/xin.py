@@ -162,7 +162,10 @@ for command in sys.argv[1].split(';'):
                 whole = Image.open(probe).convert('L')
                 top = whole.crop((0, 120, 256, 247)).histogram()
                 pad = whole.crop((0, 400, 256, 440)).histogram()
-                if sum(top[40:]) > 2000 and sum(top[230:]) < 16000 and sum(pad[200:]) > 300:
+                # (Or, with a debug start, the readout written at the top
+                # of the touch screen.)
+                text = whole.crop((0, 247, 256, 300)).histogram()
+                if sum(top[40:]) > 2000 and sum(top[230:]) < 16000 and (sum(pad[200:]) > 300 or sum(text[200:]) > 300):
                     break
             except OSError:
                 pass

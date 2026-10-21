@@ -142,6 +142,60 @@ namespace
         check(fixed.count == 2 && fixed.at[0][2] == 80 && fixed.at[1][2] == 60, "a gun under a ceiling hangs below it");
     }
 
+    /// The guard close by: the frame's pressure, and a lack of room, do not
+    /// take him to his coarsest mesh (a DSi's 785, 349, 172, 120).
+    void testClose()
+    {
+        auto guard = [](bool close, std::int32_t far)
+        {
+            DrawCandidate one;
+            one.kind = kDrawPerson;
+            one.levels = 4;
+            const int p[4] = {785, 349, 172, 120};
+            for (int l = 0; l < 4; ++l)
+            {
+                one.polygons[l] = static_cast<std::uint16_t>(p[l]);
+                one.vertices[l] = static_cast<std::uint16_t>(p[l] * 8 / 5);
+            }
+            one.close = close;
+            one.far = far;
+            return one;
+        };
+        // A far tripmine (an enemy: drawn first) and the guard at arm's
+        // length, the frame under pressure: he keeps the level his distance
+        // asks for, or the next.
+        for (int pressure = 0; pressure <= 3; ++pressure)
+        {
+            DrawCandidate all[2] = {model(kDrawEnemy, 100, 2), guard(true, 60)};
+            all[0].far = 900;
+            const DrawPlan plan = planModels(all, 2, 8, DrawHeld(), pressure, kShare, kShareVertices, kWhole);
+            check(plan.drawn[1] && plan.level[1] <= 1, "a guard close by, a far enemy, any pressure: level 1 or finer");
+            check(pressure > 0 || plan.level[1] == 0, "... and with room, the game's own mesh");
+        }
+        // No room: the far ones give way first, the guard close by never
+        // past level 1.
+        {
+            DrawCandidate all[4] = {model(kDrawEnemy, 500, 4), model(kDrawEnemy, 500, 4), guard(true, 50),
+                                    guard(false, 1200)};
+            all[0].far = 700;
+            all[1].far = 300;
+            const DrawPlan plan = planModels(all, 4, 8, DrawHeld(), 2, 900, 2600, kWhole, 12, 0, 0);
+            check(plan.drawn[2] && plan.level[2] <= 1, "short of room, the guard close by stays at level 1");
+            check(plan.level[3] >= plan.level[1] && plan.level[0] >= plan.level[1],
+                  "... and the farther are made the coarser");
+        }
+        // Even less room: no enemy is left out for the guard's floor -- he
+        // gives it up first.
+        {
+            DrawCandidate all[3] = {model(kDrawEnemy, 500, 4), model(kDrawEnemy, 500, 4), guard(true, 50)};
+            all[0].far = 700;
+            all[1].far = 300;
+            const DrawPlan plan = planModels(all, 3, 8, DrawHeld(), 3, 450, 1300, kWhole, 12, 0, 0);
+            check(plan.drawn[0] && plan.drawn[1] && plan.cut[kDrawEnemy] == 0,
+                  "no enemy is left out to keep the guard's floor");
+        }
+    }
+
     void testWho()
     {
         // Eight props near, two headcrabs behind them, room for eight: the
@@ -273,6 +327,7 @@ int main()
     testClasses();
     testPoints();
     testWho();
+    testClose();
     if (g_failures == 0)
         std::printf("test_drawplan: ok\n");
     return g_failures == 0 ? 0 : 1;

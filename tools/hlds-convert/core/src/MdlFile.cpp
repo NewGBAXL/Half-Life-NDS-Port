@@ -283,6 +283,7 @@ namespace hlds
             seq.fps = r.f32(at + 32);
             seq.flags = r.i32(at + 36);
             seq.activity = r.i32(at + 40);
+            seq.actWeight = r.i32(at + 44);
             const int eventCount = r.i32(at + 48);
             const std::size_t eventIndex = static_cast<std::uint32_t>(r.i32(at + 52));
             seq.frameCount = r.i32(at + 56);

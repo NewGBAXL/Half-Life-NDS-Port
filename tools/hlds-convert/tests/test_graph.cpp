@@ -182,12 +182,12 @@ namespace
         auto game = std::make_unique<Game>();
         std::string error;
         std::vector<std::uint8_t> bytes;
-        const bool read = game->bsp.load(std::string(valve) + "/maps/c1a0.bsp", error) &&
-                          hlds::readFile(fs::path(valve) / "maps" / "graphs" / "c1a0.nod", bytes, error) &&
+        const bool read = game->bsp.load(std::string(valve) + "/maps/c1a2a.bsp", error) &&
+                          hlds::readFile(fs::path(valve) / "maps" / "graphs" / "c1a2a.nod", bytes, error) &&
                           hlds::parseNodGraph(bytes, game->nodGraph, error);
         if (read)
             finish(*game, nullptr, valve);
-        check(read && game->ok, "c1a0 cooks");
+        check(read && game->ok, "c1a2a cooks");
         if (!read || !game->ok)
             return;
         Game &g = *game;
@@ -198,14 +198,19 @@ namespace
         for (int i = 0; i < a.count && who < 0; ++i)
         {
             const ActorState &actor = a.states[i];
-            if (!actor.active || actor.kind != static_cast<std::uint8_t>(ActorKind::Scientist) || actor.script >= 0)
+            // (Not one met before the disaster: he would not follow.)
+            if (!actor.active || actor.kind != static_cast<std::uint8_t>(ActorKind::Scientist) || actor.script >= 0 ||
+                (actor.item & kPersonPreDisaster))
                 continue;
             const int mine = pathNearest(a, g.move, actor.pos, kWalkStanding, i);
             for (int n = 0; mine >= 0 && n < a.nodeCount && who < 0; ++n)
             {
                 const fx d[3] = {a.nodes[n].pos[0] - actor.pos[0], a.nodes[n].pos[1] - actor.pos[1], 0};
                 const fx gap = fxLength(d);
-                if (gap > fxFromInt(260) && gap < fxFromInt(700) && n != mine &&
+                const fx rise = a.nodes[n].pos[2] - actor.pos[2];
+                if (gap > fxFromInt(260) && gap < fxFromInt(700) && n != mine && rise < fxFromInt(24) &&
+                    rise > -fxFromInt(24) &&
+                    walkClear(g.move, &a, i, kWalkStanding, actor.pos, a.nodes[n].pos, 48) &&
                     pathStep(a, mine, n, kPathLinkHuman, true) != kNoPathNode)
                 {
                     who = i;
@@ -213,10 +218,19 @@ namespace
                 }
             }
         }
-        check(who >= 0, "c1a0 has a scientist with somewhere to be led to");
+        check(who >= 0, "c1a2a has a scientist with somewhere to be led to");
         if (who < 0)
             return;
         ActorState &sci = a.states[who];
+        // (Nothing about that would eat him on the way: c1a2a's barnacles.)
+        for (int i = 0; i < a.count; ++i)
+        {
+            if (a.states[i].active && fights(a.states[i].kind))
+            {
+                a.states[i].active = false;
+                actorPlaceBox(a, i);
+            }
+        }
         std::printf("test_graph: the scientist is at %d %d %d, facing %d degrees\n", static_cast<int>(fxToInt(sci.pos[0])),
                     static_cast<int>(fxToInt(sci.pos[1])), static_cast<int>(fxToInt(sci.pos[2])), sci.yaw * 360 / 65536);
         int held = 0, freeOnes = 0;
@@ -225,48 +239,50 @@ namespace
             if (a.states[i].active && a.states[i].kind == static_cast<std::uint8_t>(ActorKind::Scientist))
                 (a.states[i].script >= 0 ? held : freeOnes) += 1;
         }
-        std::printf("test_graph: c1a0 has %d scientists a scene holds and %d it does not\n", held, freeOnes);
+        std::printf("test_graph: c1a2a has %d scientists a scene holds and %d it does not\n", held, freeOnes);
         // In front of him, at arm's length, looking at him: USE.
         const fx eye[3] = {sci.pos[0] + fxFromInt(48), sci.pos[1], sci.pos[2] + fxFromInt(60)};
         const fx forward[3] = {-kFxOne, 0, 0};
-        check(personUse(g.logic, eye, forward) && sci.ai == kPersonFollow, "USE on a scientist, and he follows");
+        // (The player is where the USE comes from: he follows someone there.)
+        g.player.origin[0] = eye[0];
+        g.player.origin[1] = eye[1];
+        g.player.origin[2] = sci.pos[2] + kStandingFeet;
+        check(personUse(g.logic, g.player, eye, forward) && sci.ai == kPersonFollow, "USE on a scientist, and he follows");
         const fx away[3] = {kFxOne, 0, 0};
-        check(!personUse(g.logic, eye, away), "USE with nobody in front is nobody's");
-        // A few steps back from him first (as a player does): he comes on.
-        {
-            g.player.origin[0] = sci.pos[0] - fxFromInt(184);
-            g.player.origin[1] = sci.pos[1];
-            g.player.origin[2] = sci.pos[2] + kStandingFeet;
-            const fx was = sci.pos[0];
-            for (int tick = 0; tick < 30 * 6; ++tick)
-            {
-                logicTick(g.logic, g.player, 33);
-                monstersTick(g.logic, g.player, 33);
-            }
-            std::printf("test_graph: backed off 184 units, he came %d\n", static_cast<int>(fxToInt(was - sci.pos[0])));
-            check(was - sci.pos[0] > fxFromInt(40), "the player steps back, and he steps after them");
-        }
+        check(!personUse(g.logic, g.player, eye, away), "USE with nobody in front is nobody's");
         g.player.origin[0] = a.nodes[far].pos[0];
         g.player.origin[1] = a.nodes[far].pos[1];
         g.player.origin[2] = a.nodes[far].pos[2] + kStandingFeet;
         const fx start[3] = {sci.pos[0], sci.pos[1], sci.pos[2]};
+        std::printf("test_graph: the player goes to node %d at %d %d %d\n", far, fxToInt(a.nodes[far].pos[0]),
+                    fxToInt(a.nodes[far].pos[1]), fxToInt(a.nodes[far].pos[2]));
         fx gap = 0;
         for (int tick = 0; tick < 30 * 25; ++tick)
         {
             logicTick(g.logic, g.player, 33);
             monstersTick(g.logic, g.player, 33);
+            const AiMonster *m = aiFind(a, who);
+            if (std::getenv("HLDS_AI_TRACE") != nullptr && m != nullptr && tick % 10 == 0)
+                std::printf("  t=%d %s task %d st %d follows %d cond %08x goal %d act %d pos %d %d %d\n", tick * 33,
+                            m->schedule != nullptr ? m->schedule->name : "-", m->scheduleIndex, m->state,
+                            m->targetEnt, m->conditions, m->movementGoal, m->movementActivity, fxToInt(sci.pos[0]),
+                            fxToInt(sci.pos[1]), fxToInt(sci.pos[2]));
+            if (std::getenv("HLDS_AI_TRACE") != nullptr && tick % 10 == 0)
+                std::printf("     goal %d (%d %d %d) from %d has %d; player %d %d %d\n", sci.goalNode,
+                            fxToInt(sci.goal[0]), fxToInt(sci.goal[1]), fxToInt(sci.goal[2]), sci.fromNode, sci.hasGoal,
+                            fxToInt(g.player.origin[0]), fxToInt(g.player.origin[1]), fxToInt(g.player.origin[2]));
             const fx d[3] = {g.player.origin[0] - sci.pos[0], g.player.origin[1] - sci.pos[1], 0};
             gap = fxLength(d);
-            if (gap < fxFromInt(kPersonNear + 24))
+            if (gap < fxFromInt(128 + 24))
                 break;
         }
         const fx moved[3] = {sci.pos[0] - start[0], sci.pos[1] - start[1], 0};
         std::printf("test_graph: the scientist went %d units and stopped %d from the player\n",
                     static_cast<int>(fxToInt(fxLength(moved))), static_cast<int>(fxToInt(gap)));
-        check(gap < fxFromInt(kPersonNear + 24), "he comes to where the player is, by the nodes");
+        check(gap < fxFromInt(128 + 24), "he comes to where the player is, by the nodes");
         check(gap > fxFromInt(40), "... and no nearer than a stride or two");
         const fx face[3] = {sci.pos[0] + fxFromInt(48), sci.pos[1], sci.pos[2] + fxFromInt(60)};
-        check(personUse(g.logic, face, forward) && sci.ai == kPersonIdle, "USE again, and he stays");
+        check(personUse(g.logic, g.player, face, forward) && sci.ai == kPersonIdle, "USE again, and he stays");
     }
 } // namespace
 

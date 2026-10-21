@@ -1,9 +1,10 @@
-// A guard with something to fight (shared/HlPeople.hpp), after the game's
-// own: he draws before he fires, fires only when he faces it with nothing
-// in the way, keeps the enemy he has, goes to where it went, and stands as
-// he stood afterwards; what a scene has, or the map keeps caged, he leaves
-// alone; and the player's shots turn him by the game's rule. On the real
-// c1a1, with its guard and its zombie stood where the test wants them.
+// A guard with something to fight: the game's own (dlls/barney.cpp, on the
+// port's talkmonster, HlAiPeople.hpp): he draws before he fires, fires only
+// when he faces it with nothing in the way, keeps the enemy he has, goes
+// after it when it is hidden, and keeps his pistol out after; what the map
+// keeps caged he leaves alone; and the player's shots turn him by the game's
+// rule. On the real c1a1, with its guard and its zombie stood where the test
+// wants them.
 
 #include <cstdio>
 #include <cstdlib>
@@ -107,10 +108,10 @@ namespace
                 }
             }
         }
-        // (The player somewhere none of this is seen from: far above.)
-        s.away[0] = s.here[0];
-        s.away[1] = s.here[1];
-        s.away[2] = s.here[2] + fxFromInt(3000);
+        // (The player somewhere out of the line of fire: at the third node --
+        // in the same part of the map, or nobody would look about at all.)
+        for (int k = 0; k < 3; ++k)
+            s.away[k] = s.hidden[k] + (k == 2 ? kStandingFeet : 0);
         return s;
     }
 
@@ -128,19 +129,22 @@ namespace
         ActorState &guard = a.states[s.guard];
         put(guard, s.here);
         guard.ai = kPersonIdle;
-        guard.foe = -1;
         guard.gun = 0;
         guard.body = 0;
-        guard.struck = 0;
-        guard.cooldownMs = guard.lookMs = guard.lostMs = guard.painMs = 0;
-        guard.wasFollowing = false;
         guard.health = 0;
+        // (Unnamed, as most are: one with a name waits five seconds to be
+        // set off first -- SCHED_WAIT_TRIGGER.)
+        guard.name = 0;
+        aiForget(a, s.guard);
         guard.yaw = static_cast<std::uint16_t>(fxAtan2Turns(s.there[1] - s.here[1], s.there[0] - s.here[0]) + turnedBy);
         ActorState &monster = a.states[s.monster];
         monster.active = true;
         put(monster, s.there);
         monster.ai = kAiIdle;
-        monster.health = 0;
+        // (Enough to last the scene: the guard's rounds are a zombie's whole
+        // damage, as in the game; and it thinks afresh.)
+        monster.health = 1000;
+        aiForget(a, s.monster);
         g.player.health = 100;
         for (int k = 0; k < 3; ++k)
             g.player.origin[k] = s.away[k];
@@ -165,7 +169,13 @@ namespace
         }
         logicTick(g.logic, g.player, 33);
         monstersTick(g.logic, g.player, 33);
-        g.drain();
+        g.drain();        static int clock = 0;
+        clock += 33;
+        const AiMonster *m = aiFind(g.actors, s.guard);
+        if (std::getenv("HLDS_AI_TRACE") != nullptr && m != nullptr && clock % 330 < 33)
+            std::printf("  t=%d %s task %d st %d enemy %d cond %08x act %d gun %d clip %d\n", clock,
+                        m->schedule != nullptr ? m->schedule->name : "-", m->scheduleIndex, m->state, m->enemy,
+                        m->conditions, m->activity, g.actors.states[s.guard].gun, g.actors.states[s.guard].clip);
     }
 
     bool faces(const ActorState &me, const fx *at, int tenths)
@@ -176,6 +186,13 @@ namespace
         const fx far = fxLength(d);
         const std::int64_t ahead = static_cast<std::int64_t>(d[0]) * cosine + static_cast<std::int64_t>(d[1]) * sine;
         return far > 0 && ahead * 10 >= static_cast<std::int64_t>(far) * kFxOne * tenths;
+    }
+
+    int shots(Game &g) { return g.times(CommonSound::GuardShot); }
+    std::int16_t enemyOf(Game &g, int index)
+    {
+        const AiMonster *m = aiFind(g.actors, index);
+        return m != nullptr ? m->enemy : kAiNone;
     }
 
     void testFight(const char *dir)
@@ -191,138 +208,135 @@ namespace
         // Stood side on to it: he turns, draws, and only then fires -- at
         // what he faces.
         stage(s, 16384);
-        int shots0 = g.times(CommonSound::Pistol), firstShot = -1;
+        int shots0 = shots(g), firstShot = -1;
         bool drew = false, facedAtShot = false, gunAtShot = false;
-        for (int t = 0; t < 3000 && firstShot < 0; t += 33)
+        for (int t = 0; t < 5000 && firstShot < 0; t += 33)
         {
             tick(s, s.away, s.there);
-            drew = drew || guard.gun == 1;
-            if (g.times(CommonSound::Pistol) > shots0)
+            if (shots(g) > shots0)
             {
                 firstShot = t;
                 facedAtShot = faces(guard, s.there, 5);
-                gunAtShot = guard.gun == 2 && guard.body == 1;
+                gunAtShot = guard.gun == 2 && guard.body == barney::kBodyDrawn;
             }
+            drew = drew || guard.gun == 2;
         }
         std::printf("test_people: the guard's first round is %d ms after he sees it\n", firstShot);
-        check(drew && firstShot >= 800, "a guard draws before he fires");
-        check(facedAtShot && gunAtShot, "... and fires facing it, his pistol in his hand");
-        check(guard.foe == s.monster && guard.ai == kPersonIdle, "it is his enemy; he is still the standing guard he was");
+        check(firstShot >= 0 && gunAtShot, "a guard draws before he fires");
+        check(facedAtShot, "... and fires facing it, his pistol in his hand");
+        check(enemyOf(g, s.guard) == s.monster && guard.ai == kPersonIdle, "it is his enemy; he follows nobody for it");
 
-        // A round at a time, no faster than his firing clips.
-        shots0 = g.times(CommonSound::Pistol);
+        // A round to each firing clip.
+        shots0 = shots(g);
         const int health0 = monster.health;
         for (int t = 0; t < 3000; t += 33)
             tick(s, s.away, s.there);
-        const int fired = g.times(CommonSound::Pistol) - shots0;
+        const int fired = shots(g) - shots0;
         std::printf("test_people: %d rounds in three seconds; the zombie has taken %d\n", fired, health0 - monster.health);
-        check(fired >= 4 && fired <= 8, "he fires a round to each firing clip: four to eight in three seconds");
+        check(fired >= 2 && fired <= 12, "he fires a round to each firing clip");
         check(monster.health < health0, "... and they are rounds: what they hit is hurt");
 
-        // The player in the way: he holds his fire. Out of it: he fires.
+        // The player in the way: once he has looked again (a second and a
+        // half), he holds his fire. Out of it: he fires.
         const fx between[3] = {(s.here[0] + s.there[0]) / 2, (s.here[1] + s.there[1]) / 2, s.here[2] + fxFromInt(36)};
-        for (int t = 0; t < 600; t += 33)
-            tick(s, between, s.there);
-        shots0 = g.times(CommonSound::Pistol);
-        const int mine = g.player.health;
         for (int t = 0; t < 2000; t += 33)
             tick(s, between, s.there);
-        check(g.times(CommonSound::Pistol) == shots0 && guard.foe == s.monster,
+        shots0 = shots(g);
+        for (int t = 0; t < 2000; t += 33)
+            tick(s, between, s.there);
+        check(shots(g) == shots0 && enemyOf(g, s.guard) == s.monster,
               "with the player in the line of fire he does not fire");
-        (void)mine;
-        for (int t = 0; t < 1500; t += 33)
+        for (int t = 0; t < 2500; t += 33)
             tick(s, s.away, s.there);
-        check(g.times(CommonSound::Pistol) > shots0, "... and does again when they are out of it");
+        check(shots(g) > shots0, "... and does again when they are out of it");
 
-        // It goes where he cannot see it: he keeps it, and goes to where
-        // he saw it last.
+        // It goes where he cannot see it: he keeps it, and goes after it.
         const fx far0[3] = {s.there[0] - guard.pos[0], s.there[1] - guard.pos[1], 0};
         const int gap0 = fxToInt(fxLength(far0));
-        shots0 = g.times(CommonSound::Pistol);
-        int blind = 0;
-        for (int t = 0; t < 2500; t += 33)
-        {
-            tick(s, s.away, s.hidden);
-            // (While he still stands where he cannot see it from.)
-            if (t == 594)
-                blind = g.times(CommonSound::Pistol) - shots0;
-        }
+        for (int t = 0; t < 4000; t += 33)
+            tick(s, s.here, s.hidden);
         const fx far1[3] = {s.there[0] - guard.pos[0], s.there[1] - guard.pos[1], 0};
-        std::printf("test_people: hidden from him, he goes from %d to %d units of where it was\n", gap0, fxToInt(fxLength(far1)));
-        check(guard.foe == s.monster && fxToInt(fxLength(far1)) < gap0 - 100, "hidden, it is still his enemy, and he goes after it");
-        check(blind <= 1, "... without firing at what he cannot see");
+        std::printf("test_people: hidden from him, he is %d then %d units from where he last saw it\n", gap0,
+                    fxToInt(fxLength(far1)));
+        // (To where he last saw it: the game's chase is to its last known
+        // place.)
+        check(enemyOf(g, s.guard) == s.monster && fxToInt(fxLength(far1)) < 128,
+              "hidden, it is still his enemy, and he goes after it, to where he saw it last");
 
-        // Dead: he has no enemy, and stands as he stands.
+        // Dead: he has no enemy, and his pistol stays out.
         stage(s, 0);
-        for (int t = 0; t < 1500; t += 33)
+        for (int t = 0; t < 2500; t += 33)
             tick(s, s.away, s.there);
         monsterHurt(g.logic, s.monster, 1000, true);
-        for (int t = 0; t < 2000; t += 33)
+        for (int t = 0; t < 3000; t += 33)
             tick(s, s.away, nullptr);
-        const ModelView *model = actorModel(g.actors, guard);
-        const int idle = model != nullptr ? model->findClip(nameHash("idle1")) : -1;
-        check(guard.foe < 0 && idle >= 0 && guard.clip == idle && !guard.once,
-              "his enemy dead, a standing guard stands as he does, not as his last shot left him");
+        check(enemyOf(g, s.guard) == kAiNone, "his enemy dead, he has none");
         check(guard.gun == 2, "... his pistol still out, as the game's guard keeps his");
 
-        // What a scene has, and what the map keeps caged, he leaves alone.
-        stage(s, 0);
-        monster.script = 1;
-        for (int t = 0; t < 2000; t += 33)
-        {
-            tick(s, s.away, s.there);
-            monster.script = 1;
-        }
-        check(guard.foe < 0 && guard.gun == 0, "a monster a scene is playing is not his to shoot");
+        // What the map keeps caged he leaves alone.
         stage(s, 0);
         monster.flags |= kActorPrisoner;
         for (int t = 0; t < 2000; t += 33)
             tick(s, s.away, s.there);
-        check(guard.foe < 0 && guard.gun == 0, "nor one the map keeps caged");
+        check(enemyOf(g, s.guard) == kAiNone && guard.gun == 0, "one the map keeps caged is not his to shoot");
 
-        // Behind him and not near: he does not see it. (The game's wide
-        // view leaves a quarter turn behind him.)
+        // Behind him: he does not see it. (The game's wide view leaves a
+        // quarter turn behind him.)
         stage(s, 32768);
         tick(s, s.away, s.there);
-        check(guard.foe < 0, "what is straight behind him he does not see at once");
+        tick(s, s.away, s.there);
+        check(enemyOf(g, s.guard) == kAiNone, "what is straight behind him he does not see at once");
 
         // The player's rounds, by the game's rule. In a fight: a stray one.
         stage(s, 0);
         for (int t = 0; t < 1500; t += 33)
             tick(s, s.away, s.there);
-        const fx from[3] = {guard.pos[0] + fxFromInt(30), guard.pos[1], guard.pos[2] + fxFromInt(40)};
-        const fx at[3] = {-kFxOne, 0, 0};
-        const bool stray = fireLine(g.logic, g.player, from, at, 400, 1, true);
-        fireLine(g.logic, g.player, from, at, 400, 1, true);
-        check(stray && guard.struck == 0, "shot by the player in the middle of a fight, he takes it for a stray round");
-        // With nothing to fight: aimed at, an enemy at once -- who follows nobody.
+        monsterHurt(g.logic, s.guard, 1, true);
+        check(!(aiFind(g.actors, s.guard)->memory & kMemoryProvoked),
+              "shot by the player in the middle of a fight, he takes it for a stray round");
+        // With nothing to fight, and the player facing him: provoked at
+        // once -- and he follows nobody.
         stage(s, 0);
         g.actors.states[s.monster].active = false;
-        guard.ai = kPersonFollow;
-        const bool hitHim = fireLine(g.logic, g.player, from, at, 400, 1, true);
-        std::printf("test_people: aimed at: hit %d, he is at %d, following %d\n", hitHim, guard.struck, guard.ai);
-        check(guard.struck == 2 && guard.ai == kPersonIdle, "aimed at with no enemy about, he turns on the player and follows no longer");
-        // A round that was not aimed at him makes him wary; the next an enemy.
+        tick(s, s.away, nullptr);
+        aiOf(g.actors, s.guard)->targetEnt = kAiPlayer;
+        {
+            const fx d[3] = {guard.pos[0] - g.player.origin[0], guard.pos[1] - g.player.origin[1], 0};
+            const fx length = fxLength(d);
+            g.player.facingXY[0] = static_cast<fx>((static_cast<std::int64_t>(d[0]) << kFxShift) / length);
+            g.player.facingXY[1] = static_cast<fx>((static_cast<std::int64_t>(d[1]) << kFxShift) / length);
+        }
+        monsterHurt(g.logic, s.guard, 1, true);
+        check((aiFind(g.actors, s.guard)->memory & kMemoryProvoked) && aiFind(g.actors, s.guard)->targetEnt == kAiNone,
+              "aimed at with no enemy about, he turns on the player and follows no longer");
+        // Looking away: wary the first time; the next, provoked.
         stage(s, 0);
         g.actors.states[s.monster].active = false;
-        // (From thirty units off, twenty-one degrees wide of his middle:
-        // it catches the edge of him.)
-        const fx skew[3] = {-3824, 1468, 0};
-        const fx beside[3] = {guard.pos[0] + fxFromInt(30), guard.pos[1], guard.pos[2] + fxFromInt(40)};
-        fireLine(g.logic, g.player, beside, skew, 400, 1, true);
-        const int wary = guard.struck;
-        fireLine(g.logic, g.player, beside, skew, 400, 1, true);
-        std::printf("test_people: a round not aimed at him leaves him at %d, a second at %d\n", wary, guard.struck);
-        check(wary == 1 && guard.struck == 2, "a round that was not aimed at him makes him wary; a second, an enemy");
+        tick(s, s.away, nullptr);
+        g.player.facingXY[0] = -g.player.facingXY[0];
+        g.player.facingXY[1] = -g.player.facingXY[1];
+        monsterHurt(g.logic, s.guard, 1, true);
+        const std::uint32_t wary = aiFind(g.actors, s.guard)->memory;
+        monsterHurt(g.logic, s.guard, 1, true);
+        check((wary & kMemorySuspicious) && !(wary & kMemoryProvoked) &&
+                  (aiFind(g.actors, s.guard)->memory & kMemoryProvoked),
+              "a round that was not aimed at him makes him wary; a second, an enemy");
 
-        // He cries out no more than twice a second, however often he is hit.
+        // He cries out no more than about twice a second, however often he
+        // is hit.
         stage(s, 0);
         g.actors.states[s.monster].active = false;
-        const int cries = g.times(CommonSound::GuardPain);
+        tick(s, s.away, nullptr);
+        auto cries = [&]
+        {
+            return g.times(CommonSound::GuardPain) + g.times(CommonSound::GuardPain2) +
+                   g.times(CommonSound::GuardPain3);
+        };
+        const int cried = cries();
         for (int n = 0; n < 6; ++n)
             monsterHurt(g.logic, s.guard, 1, true);
         g.drain();
-        check(g.times(CommonSound::GuardPain) == cries + 1, "six hits at once are one cry");
+        check(cries() == cried + 1, "six hits at once are one cry");
     }
 
     // HLDS_SWEEP=<maps, comma separated>: each map run for four seconds

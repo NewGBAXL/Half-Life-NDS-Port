@@ -120,10 +120,13 @@ namespace
         }
         for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
             all = all && has(std::string("mdl/") + view.modelRefs[i].name + ".hmd");
+        // (The words of what its people say are in the common archive.)
+        std::vector<char> talk;
+        hlds::talkWords(view, talk);
         for (std::uint32_t i = 0; i < view.soundCount; ++i)
         {
             const std::string name = view.sounds[i].name;
-            all = all && (name.empty() || !fs::exists(stage / "snd" / (name + ".hsn")) ||
+            all = all && (name.empty() || talk[i] != 0 || !fs::exists(stage / "snd" / (name + ".hsn")) ||
                           has("snd/" + name + ".hsn"));
         }
         check(all, "all that the level names is there, under the console's names");

@@ -39,6 +39,8 @@ namespace hldata
             for (int i = 0; i < 3; ++i)
                 w.actors->noise[i] = at[i];
             w.actors->noiseMs = 400;
+            // (Heard by the monsters for three seconds: CGrenade::Explode.)
+            aiSound(*w.actors, kSoundCombat, at, kNormalExplosionVolume, 3000);
         }
         if (hurts && w.actors != nullptr)
             radiusDamage(w, player, at, size, size * 5 / 2, -1);

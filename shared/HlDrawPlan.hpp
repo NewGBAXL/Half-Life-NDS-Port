@@ -133,6 +133,9 @@ namespace hldata
     /// world's far end.
     inline constexpr int kDrawGrowPolygons = 300;
     inline constexpr int kDrawGrowVertices = 850;
+    /// Close to the eye (DrawCandidate::close): within so many times a
+    /// model's radius.
+    inline constexpr int kDrawClose = 5;
 
     /// One actor in view. They are given in the order they would be drawn
     /// (drawBefore).
@@ -141,6 +144,11 @@ namespace hldata
         std::uint8_t kind = kDrawProp; ///< kDraw*
         std::uint8_t levels = 1;
         std::uint8_t want = 0; ///< the level its distance asks for
+        /// Close to the eye: big in the picture, where a coarse mesh shows.
+        /// The frame's pressure does not make it coarser, and a lack of room
+        /// no coarser than level 1 (an enemy or one of the people).
+        bool close = false;
+        std::int32_t far = 0; ///< how far off it is (whole units): the farthest give way first
         std::uint16_t polygons[kDrawLevels] = {};
         std::uint16_t vertices[kDrawLevels] = {};
     };
@@ -195,6 +203,27 @@ namespace hldata
             return vertices ? held.vertices[plan.heldLevel] : held.polygons[plan.heldLevel];
         };
 
+        // The nearest of the enemies and the people: whatever the order
+        // they are drawn in (an enemy's before a person's), it is the one
+        // whose detail is seen most.
+        int nearest = -1;
+        for (int i = 0; i < count; ++i)
+        {
+            if (all[i].kind <= kDrawPerson && (nearest < 0 || all[i].far < all[nearest].far))
+                nearest = i;
+        }
+        if (nearest < 0)
+            nearest = 0;
+        // How coarse an enemy or a person may be made for want of room:
+        // close to the eye, level 1 at the coarsest.
+        auto floorOf = [&](int i) -> int
+        {
+            const DrawCandidate &one = all[i];
+            if (one.close && one.kind <= kDrawPerson)
+                return one.levels > 1 ? 1 : 0;
+            return one.levels - 1;
+        };
+
         // Who has a place at all: the first `limit`; and every enemy.
         int kept = 0;
         for (int i = 0; i < count; ++i)
@@ -210,11 +239,11 @@ namespace hldata
             int level = one.want < one.levels ? one.want : one.levels - 1;
             // The game's own mesh is for whoever is nearest, in a frame
             // with room.
-            if (level == 0 && one.levels > 1 && one.polygons[0] > whole && (kept > 0 || pressure > 0))
+            if (level == 0 && one.levels > 1 && one.polygons[0] > whole && (i != nearest || pressure > 0))
                 level = 1;
-            // (Coarser again for each step of pressure, for all but the
-            // nearest.)
-            if (kept > 0)
+            // (Coarser again for each step of pressure -- not the nearest,
+            // nor one close to the eye.)
+            if (i != nearest && !one.close)
                 level = level + pressure < one.levels ? level + pressure : one.levels - 1;
             plan.level[i] = static_cast<std::uint8_t>(level);
             ++kept;
@@ -235,21 +264,21 @@ namespace hldata
         int capPolygons = sharePolygons, capVertices = shareVertices;
         auto over = [&]() { return sum(false, kDrawPerson) > capPolygons || sum(true, kDrawPerson) > capVertices; };
         // 1. The far ones coarser, a step at a time, the farthest first;
-        //    the nearest last of them.
+        //    the nearest last of them -- and none close to the eye past
+        //    its floor.
         while (over())
         {
-            int who = -1, first = -1;
+            int who = -1;
             for (int i = 0; i < count; ++i)
             {
-                if (!plan.drawn[i] || all[i].kind > kDrawPerson)
+                if (!plan.drawn[i] || all[i].kind > kDrawPerson || i == nearest || plan.level[i] >= floorOf(i))
                     continue;
-                if (first < 0)
-                    first = i;
-                if (plan.level[i] + 1 < all[i].levels && i != first)
-                    who = i; // (the last found is the farthest, and a person before an enemy)
+                if (who < 0 || all[i].far >= all[who].far) // (of the same, the last in order)
+                    who = i;
             }
-            if (who < 0 && first >= 0 && plan.level[first] + 1 < all[first].levels)
-                who = first;
+            if (who < 0 && plan.drawn[nearest] && all[nearest].kind <= kDrawPerson &&
+                plan.level[nearest] < floorOf(nearest))
+                who = nearest;
             if (who < 0)
                 break;
             ++plan.level[who];
@@ -281,16 +310,39 @@ namespace hldata
         //    alone being more than can be had -- the farthest enemy.
         for (const int kind : {static_cast<int>(kDrawPerson), static_cast<int>(kDrawEnemy)})
         {
+            // (Before an enemy is left out of the picture -- it still
+            // fights -- whoever is close to the eye gives up the floor of
+            // its detail: the farthest first.)
+            while (kind == kDrawEnemy && over())
+            {
+                int who = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (plan.drawn[i] && all[i].kind <= kDrawPerson && plan.level[i] + 1 < all[i].levels &&
+                        (who < 0 || all[i].far >= all[who].far))
+                        who = i;
+                }
+                if (who < 0)
+                    break;
+                ++plan.level[who];
+            }
             while (over())
             {
                 int who = -1;
                 for (int i = 0; i < count; ++i)
                 {
-                    if (plan.drawn[i] && all[i].kind == kind)
+                    if (plan.drawn[i] && all[i].kind == kind && (who < 0 || all[i].far >= all[who].far))
                         who = i;
                 }
                 if (who < 0)
                     break;
+                // (One close to the eye, still at its floor: coarser before
+                // it is gone.)
+                if (plan.level[who] + 1 < all[who].levels)
+                {
+                    ++plan.level[who];
+                    continue;
+                }
                 plan.drawn[who] = false;
                 ++plan.cut[all[who].kind];
             }

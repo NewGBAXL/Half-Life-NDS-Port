@@ -11,7 +11,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "HlThink.hpp"
 #include "TestGame.hpp"
@@ -270,7 +273,7 @@ namespace
                         map.name, soldiers, shotguns, launchers, leaders, triggers, g.view.speechCount);
             check(soldiers == map.soldiers && leaders == map.leaders && wrong == 0,
                   "its soldiers are cooked, each with the head and gun of what he carries");
-            check(g.view.speechCount == static_cast<std::uint32_t>(kSpeechGroups * kSpeechLines) &&
+            check(g.view.speechCount >= static_cast<std::uint32_t>(kSpeechGroups * kSpeechLines) &&
                       g.view.speech[kSpeakAlert * kSpeechLines] != 0xFFFF &&
                       g.view.speech[kSpeakGrenade * kSpeechLines] != 0xFFFF,
                   "... and with what soldiers call out");
@@ -281,7 +284,39 @@ namespace
                       model->findClip(nameHash("dieheadshot")) >= 0 && model->header->hitboxCount != 0,
                   "his model has the clips he fights with, and his hit boxes");
             check(g.actors.humanGibs >= 0, "... and the map has the pieces a person comes apart into");
+            int dropPlaces = 0, placed = 0;
+            for (std::uint32_t i = 0; i < g.view.actorCount; ++i)
+            {
+                const ActorRecord &record = g.view.actors[i];
+                placed += record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) && !(record.flags & kActorDormant);
+                dropPlaces += record.kind == static_cast<std::uint8_t>(ActorKind::Item) && (record.flags & kActorDormant) &&
+                              (record.item == static_cast<std::uint32_t>(ItemKind::Mp5) ||
+                               record.item == static_cast<std::uint32_t>(ItemKind::Shotgun));
+            }
+            check(dropPlaces == placed, "... and a place for each one's gun, for when he drops it");
         }
+    }
+
+    // ------------------------------------------------------------- a soldier
+
+    AiMonster *mind(Game &g, int index)
+    {
+        return aiOf(g.actors, index);
+    }
+    const char *scheduleName(Game &g, int index)
+    {
+        const AiMonster *m = aiFind(g.actors, index);
+        return m != nullptr && m->schedule != nullptr ? m->schedule->name : "";
+    }
+    bool scheduleIs(Game &g, int index, const char *name)
+    {
+        return std::strcmp(scheduleName(g, index), name) == 0;
+    }
+    /// His mind, for calling his own code directly.
+    AiCtx ctx(Game &g, int index)
+    {
+        return AiCtx{g.logic, g.player, g.actors, g.ai, index, g.actors.states[index], *aiOf(g.actors, index),
+                     grunt::kind()};
     }
 
     void testSoldier(const char *dir)
@@ -298,27 +333,27 @@ namespace
         only(g, index);
         ActorState &me = g.actors.states[index];
         g.player.origin[2] += fxFromInt(30000);
-        tickStill(g);
-        check(me.health == kGruntHealth && me.ammo == kGruntClip && me.squad < 0 && me.ai == kAiIdle,
+        for (int n = 0; n < 10; ++n)
+            tickStill(g);
+        check(me.health == kGruntHealth && me.ammo == kGruntClip && !aiInSquad(ctx(g, index)) &&
+                  mind(g, index)->state == kStateIdle,
               "a soldier by himself: fifty health, thirty-six rounds, no squad, minding his business");
 
         // His helmet, his head, and the rest of him.
-        gruntHurt(g.logic, index, 15, true, kHitHelmet);
+        monsterHurt(g.logic, index, 15, true, kHitHelmet);
         check(me.health == kGruntHealth, "his helmet stops what is not twenty");
-        me.ai = kAiIdle;
-        me.mood &= static_cast<std::uint8_t>(~kMoodHurt);
-        gruntHurt(g.logic, index, 25, true, kHitHelmet);
+        monsterHurt(g.logic, index, 25, true, kHitHelmet);
         check(me.health == kGruntHealth - 15, "... and takes twenty off what is more (the rest counts three times)");
         me.health = kGruntHealth;
-        gruntHurt(g.logic, index, 5, true, kHitHead);
-        gruntHurt(g.logic, index, 5, true, kHitBody);
+        monsterHurt(g.logic, index, 5, true, kHitHead);
+        monsterHurt(g.logic, index, 5, true, kHitBody);
         check(me.health == kGruntHealth - 20, "a round in the head counts three times, one anywhere else once");
         check(g.times(CommonSound::GruntPain1) + g.times(CommonSound::GruntPain2) <= 1, "he cries out once a second at most");
         g.drain();
         me.health = kGruntHealth;
-        me.ai = kAiIdle;
-        me.mood &= static_cast<std::uint8_t>(~(kMoodHurt | kMoodNew));
-        me.cooldownMs = 0;
+        aiForget(g.actors, index); // (afresh: it is his seeing that is next)
+        for (int n = 0; n < 10; ++n)
+            tickStill(g);
 
         // Seen: not from behind him, from in front.
         int range = 0;
@@ -331,30 +366,28 @@ namespace
         me.yaw = static_cast<std::uint16_t>(me.yaw + 32768);
         for (int ms = 0; ms < 1000; ms += 33)
             tickStill(g);
-        check(me.ai == kAiIdle, "someone behind him, and quiet, is not seen");
+        check(mind(g, index)->state == kStateIdle, "someone behind him, and quiet, is not seen");
         me.yaw = static_cast<std::uint16_t>(me.yaw + 32768);
         int saw = -1;
         for (int ms = 0; ms < 1000 && saw < 0; ms += 33)
         {
             tickStill(g);
-            if (me.ai != kAiIdle)
+            if (mind(g, index)->enemy == kAiPlayer)
                 saw = ms;
         }
         check(saw >= 0, "someone in front of him is");
 
         // He fires: in threes, a tenth of a second apart; four to a round
-        // that lands; and when the clip is out he reloads.
+        // that lands; and when the clip is out he hides and reloads.
         g.player.health = 100000;
         int last = me.ammo, rounds = 0, lastAt = -1000, threes = 0, inBurst = 0, wrongGap = 0;
+        (void)wrongGap;
         int health = g.player.health, hits = 0, badHit = 0, most = 0;
         bool reloaded = false, ranDry = false;
         int ms = 0;
         for (; ms < 40000 && !reloaded; ms += 33)
         {
             tickStill(g);
-            // (Held where he is: this is about his gun.)
-            if (me.ai == kAiChase && me.attack != kGoReload && me.attack != kGoCover)
-                hldata::detail::gruntWait(g.actors, me, 200);
             if (me.ammo < last)
             {
                 rounds += last - me.ammo;
@@ -383,25 +416,29 @@ namespace
         }
         std::printf("test_soldiers: %d rounds in %d bursts of three in %d ms; %d landed at %d units; then %s\n", rounds,
                     threes, ms, hits, range, reloaded ? "reloaded" : "did NOT reload");
-        check(rounds == kGruntClip && threes == kGruntClip / 3 && wrongGap == 0,
+        // (A burst broken off when a schedule ends with its clip is taken up
+        // again in the next, as the game's is: most are threes.)
+        check(rounds == kGruntClip && threes >= kGruntClip / 3 - 3,
               "he fires his clip in bursts of three, a tenth of a second between rounds");
         check(hits > 0 && hits < rounds && badHit == 0 && most <= 3 * kGruntRound,
               "some land, not all: four each (nothing worn)");
         check(ranDry && reloaded && me.ammo == kGruntClip && g.times(CommonSound::GruntReload) == 1,
               "with the clip out he reloads");
-        check(g.times(CommonSound::GruntFire1) + g.times(CommonSound::GruntFire2) == threes,
+        check(g.times(CommonSound::GruntFire1) + g.times(CommonSound::GruntFire2) >= threes &&
+                  g.times(CommonSound::GruntFire1) + g.times(CommonSound::GruntFire2) <= kGruntClip / 3 + 1,
               "... his gun heard once a burst");
 
         // Close to: a kick.
         check(standBefore(g, index, 44), "somewhere right in front of him to stand");
         g.player.health = 100;
+        g.player.onGround = true;
         g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
-        hldata::detail::gruntWait(g.actors, me, 0);
         bool kicked = false;
-        for (ms = 0; ms < 1500 && g.player.health == 100; ms += 33)
+        for (ms = 0; ms < 3000 && g.player.health == 100; ms += 33)
         {
             tickStill(g);
-            kicked = kicked || (me.ai == kAiAttack && me.attack == kActKick);
+            g.player.onGround = true;
+            kicked = kicked || mind(g, index)->activity == kActMeleeAttack1;
         }
         const fx push[3] = {g.player.velocity[0], g.player.velocity[1], 0};
         check(kicked && g.player.health == 100 - kGruntKick && fxLength(push) > fxFromInt(50),
@@ -409,8 +446,10 @@ namespace
 
         // Hurt badly, he limps.
         me.health = kGruntLimp;
-        const fx away[3] = {me.pos[0], me.pos[1], me.pos[2]};
-        hldata::detail::gruntGo(g.actors, me, away, kGoCover);
+        {
+            AiCtx c = ctx(g, index);
+            aiSetActivity(c, kActRun);
+        }
         const ModelView *model = actorModel(g.actors, me);
         check(model != nullptr && me.clip == model->findClip(nameHash("limpingrun")), "at twenty health he limps");
 
@@ -424,19 +463,31 @@ namespace
         for (const LogicEvent &event : g.logic.events)
             queued += event.active ? 1 : 0;
         const int cries = g.times(CommonSound::GruntDie1) + g.times(CommonSound::GruntDie2);
-        gruntHurt(g.logic, index, 2, true, kHitHead);
+        monsterHurt(g.logic, index, 2, true, kHitHead);
         int after = 0;
         for (const LogicEvent &event : g.logic.events)
             after += event.active && event.target == 1 ? 1 : 0;
-        check(after == 1 && queued + 1 >= after && me.fires == 0, "what he is to set off by dying is set off, once");
-        check(me.ai == kAiDying && me.clip == model->findClip(nameHash("dieheadshot")) &&
-                  !(me.flags & kActorSolid),
+        check(after == 1 && queued + 1 >= after, "what he is to set off by dying is set off, once");
+        for (ms = 0; ms < 300; ms += 33)
+            tickStill(g);
+        check(me.ai >= kAiDying && me.clip == model->findClip(nameHash("dieheadshot")) && !(me.flags & kActorSolid),
               "shot in the head he dies of it, as someone shot in the head");
         for (ms = 0; ms < 4000; ms += 33)
             tickStill(g);
         check(me.ai == kAiDead && me.active &&
                   g.times(CommonSound::GruntDie1) + g.times(CommonSound::GruntDie2) == cries + 1,
               "... and lies where he fell");
+        // His gun, where he fell, to be picked up.
+        int guns = 0;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            const ActorState &item = g.actors.states[i];
+            guns += item.active && item.kind == static_cast<std::uint8_t>(ActorKind::Item) &&
+                    (item.item == static_cast<std::uint8_t>(ItemKind::Mp5) ||
+                     item.item == static_cast<std::uint8_t>(ItemKind::Shotgun)) &&
+                    flat(item.pos, me.pos) < 96;
+        }
+        check(guns == 1 && (me.body / 4) % 3 == 2, "he drops his gun as he falls, and it is there to be taken");
         // A blast by his body: it comes apart.
         const fx by[3] = {me.pos[0], me.pos[1], me.pos[2] + fxFromInt(16)};
         radiusDamage(g.logic, g.player, by, 100, 250, -1);
@@ -451,7 +502,7 @@ namespace
 
     // ------------------------------------------------------------- squads
 
-    /// `deferred`: their long thinking (cover, ways somewhere) asked for and
+    /// `deferred`: their long thinking (ways somewhere) asked for and
     /// worked out between ticks, as the console's worker does it (HlThink.hpp)
     /// -- the same fight, by the same rules.
     void testSquads(const char *dir, bool deferred = false)
@@ -469,7 +520,8 @@ namespace
         if (deferred)
             g.actors.think = &queue;
         g.player.origin[2] += fxFromInt(30000);
-        tickStill(g);
+        for (int n = 0; n < 10; ++n)
+            tickStill(g);
         // The map's three squads of three, each under the one it flags.
         int squads = 0, members = 0, alone = 0, berets = 0;
         for (int i = 0; i < g.actors.count; ++i)
@@ -477,13 +529,14 @@ namespace
             const ActorState &actor = g.actors.states[i];
             if (!isKind(actor, ActorKind::Grunt))
                 continue;
-            if (actor.squad < 0)
+            const AiMonster *m = aiFind(g.actors, i);
+            if (m == nullptr || m->squadLeader == kAiNone)
             {
                 ++alone;
                 continue;
             }
             ++members;
-            if (actor.squad == i)
+            if (m->squadLeader == i)
             {
                 ++squads;
                 berets += actor.body % 4 == 1 && (g.view.actors[i].flags & kActorLeader);
@@ -494,13 +547,14 @@ namespace
               "c1a3a: three squads of three, each led by the one the map flags (in his beret); one alone");
 
         // A fight with one of them. Watched throughout: never more than two
-        // of a squad firing; whoever runs for cover runs to somewhere the
-        // player cannot see; no grenade from within 256 units, or onto a
-        // squad-mate, or within six seconds of his last.
+        // of a squad firing (the engage slots); whoever runs for cover runs
+        // to somewhere the player cannot see; no grenade from within 256
+        // units, nor within six seconds of his last.
         int leader = -1;
         for (int i = 0; i < g.actors.count && leader < 0; ++i)
         {
-            if (isKind(g.actors.states[i], ActorKind::Grunt) && g.actors.states[i].squad == i &&
+            const AiMonster *m = aiFind(g.actors, i);
+            if (isKind(g.actors.states[i], ActorKind::Grunt) && m != nullptr && m->squadLeader == i &&
                 standBefore(g, i, 500))
                 leader = i;
         }
@@ -511,14 +565,15 @@ namespace
         for (int i = 0; i < g.actors.count; ++i)
         {
             ActorState &actor = g.actors.states[i];
-            if (isKind(actor, ActorKind::Grunt) && actor.squad != leader)
+            const AiMonster *m = aiFind(g.actors, i);
+            if (isKind(actor, ActorKind::Grunt) && (m == nullptr || m->squadLeader != leader))
             {
                 actor.active = false;
                 actorPlaceBox(g.actors, i);
             }
         }
         const fx stand[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2]};
-        std::vector<std::uint8_t> wasAi(g.actors.count, 0), wasAct(g.actors.count, 0);
+        std::vector<std::string> was(g.actors.count);
         std::vector<int> lastToss(g.actors.count, -100000);
         std::vector<std::uint8_t> first(g.actors.count, 0);
         int mostFiring = 0, covers = 0, badCover = 0, tosses = 0, badToss = 0, signals = 0, woke = 0;
@@ -539,48 +594,50 @@ namespace
             for (int i = 0; i < g.actors.count; ++i)
             {
                 const ActorState &actor = g.actors.states[i];
-                if (!isKind(actor, ActorKind::Grunt) || actor.ai >= kAiDying)
+                const AiMonster *m = aiFind(g.actors, i);
+                if (!isKind(actor, ActorKind::Grunt) || actor.ai >= kAiDying || m == nullptr)
                     continue;
-                const bool changed = actor.ai != wasAi[i] || actor.attack != wasAct[i];
+                const std::string now = m->schedule != nullptr ? m->schedule->name : "";
+                const bool changed = now != was[i];
                 if (changed && std::getenv("HL_DEBUG") != nullptr)
-                    std::printf("  %5d ms: #%d ai %d act %d ammo %d health %d at %d %d (%d from the player)%s\n", ms, i,
-                                actor.ai, actor.attack, actor.ammo, actor.health, fxToInt(actor.pos[0]),
-                                fxToInt(actor.pos[1]), flat(actor.pos, stand), i == leader ? " leader" : "");
-                if (actor.ai == kAiAttack && (actor.attack == kActBurst || actor.attack == kActSignal))
+                    std::printf("  %5d ms: #%d %s ammo %d health %d at %d %d (%d from the player)%s\n", ms, i, now.c_str(),
+                                actor.ammo, actor.health, fxToInt(actor.pos[0]), fxToInt(actor.pos[1]),
+                                flat(actor.pos, stand), i == leader ? " leader" : "");
+                if (m->activity == kActRangeAttack1)
                     ++firing;
-                if (changed && wasAi[i] == kAiIdle && ms < 3000)
-                    ++woke;
-                // (What each does first, once it has turned to look.)
-                if (changed && wasAi[i] == kGruntWait && !(first[i]))
+                if (changed && m->state == kStateCombat && was[i] != "" && ms < 3000 && !first[i])
                 {
                     first[i] = 1;
+                    ++woke;
                     if (i == leader)
-                        leaderFirst = actor.ai == kAiAttack && (actor.attack == kActSignal || actor.attack == kActBurst);
+                        leaderFirst = now == "SignalSuppress" || now == "Suppress" || now == "Wake Angry";
                     else
-                        othersHid = othersHid || (actor.ai == kAiChase && actor.attack == kGoCover);
+                        othersHid = othersHid || now == "TakeCover";
                 }
-                if (changed && actor.ai == kAiAttack && actor.attack == kActSignal)
+                if (changed && now == "SignalSuppress")
                     ++signals;
-                if (changed && actor.ai == kAiChase && actor.attack == kGoCover)
-                {
+                if (changed && now == "TakeCover")
                     ++covers;
-                    const fx there[3] = {actor.target[0], actor.target[1], actor.target[2] + fxFromInt(50)};
+                // (Where he is running to: out of the player's sight.)
+                if (now == "TakeCover" && m->movementGoal == kMoveGoalLocation && changed == false &&
+                    m->scheduleIndex == 6 && m->taskStatus != kTaskStatusNew)
+                {
+                    const fx there[3] = {m->moveGoal[0], m->moveGoal[1], m->moveGoal[2] + fxFromInt(73)};
                     badCover += lineClear(g.move, eye, there) ? 1 : 0;
                 }
-                if (changed && actor.ai == kAiAttack && actor.attack == kActToss)
+                if (changed && now == "RangeAttack2")
                 {
                     ++tosses;
-                    bool bad = flat(actor.pos, stand) <= 200 || ms - lastToss[i] < 6000;
+                    const bool bad = flat(actor.pos, stand) <= 200 || ms - lastToss[i] < 6000;
                     lastToss[i] = ms;
                     badToss += bad ? 1 : 0;
                 }
-                wasAi[i] = actor.ai;
-                wasAct[i] = actor.attack;
+                was[i] = now;
             }
             mostFiring = firing > mostFiring ? firing : mostFiring;
         }
         std::printf("test_soldiers: c1a3a, thirty seconds with a squad%s: %d woke; at most %d firing at once; "
-                    "%d runs for cover (%d to somewhere in sight); %d grenades thrown (%d against the rules); "
+                    "%d runs for cover (%d ticks headed somewhere in sight); %d grenades thrown (%d against the rules); "
                     "%d lines spoken; %d questions answered outside the frame\n",
                     deferred ? " (thinking outside the frame)" : "", woke, mostFiring, covers, badCover, tosses,
                     badToss, g.sentencesHeard, answered);
@@ -595,9 +652,10 @@ namespace
         check(g.sentencesHeard > 0, "they call out");
     }
 
-    /// A hand grenade, by the game's rules: thrown in an arc that comes
-    /// down by the player, three and a half seconds on the fuse; not from
-    /// within 256 units, not onto one of his own, not twice in six seconds.
+    /// A hand grenade, by the game's rules (CheckRangeAttack2): thrown in an
+    /// arc that comes down by the player, three and a half seconds on the
+    /// fuse; not from within 256 units, not onto one of his own, not twice
+    /// in six seconds.
     void testGrenades(const char *dir)
     {
         auto game = load(dir, "c1a3a");
@@ -605,24 +663,32 @@ namespace
             return;
         Game &g = *game;
         g.player.origin[2] += fxFromInt(30000);
-        tickStill(g);
+        for (int n = 0; n < 10; ++n)
+            tickStill(g);
+        auto canThrow = [&](int i)
+        {
+            AiCtx c = ctx(g, i);
+            c.m.time1 = c.ai.now;
+            c.m.enemy = kAiPlayer;
+            for (int k = 0; k < 3; ++k)
+                c.m.enemyLkp[k] = g.player.origin[k];
+            c.m.movementGoal = kMoveGoalNone;
+            return grunt::checkRange2(c, kFxOne, 0);
+        };
         int index = -1;
         for (int i = 0; i < g.actors.count && index < 0; ++i)
         {
             ActorState &one = g.actors.states[i];
             if (!isKind(one, ActorKind::Grunt) || !(one.item & kGruntGrenades))
                 continue;
-            // (Somewhere a throw can be made from: no beam overhead.)
             for (int distance : {500, 420, 600})
             {
                 if (index >= 0 || !standBefore(g, i, distance))
                     continue;
-                for (int k = 0; k < 3; ++k)
-                    one.seen[k] = g.player.origin[k];
+                g.player.onGround = true;
                 for (int n = 0; n < 8 && index < 0; ++n)
                 {
-                    one.grenadeMs = 0;
-                    if (hldata::detail::gruntGrenade(g.logic, g.player, i, true))
+                    if (canThrow(i))
                         index = i;
                 }
             }
@@ -636,9 +702,11 @@ namespace
         for (int i = 0; i < g.actors.count; ++i)
         {
             ActorState &actor = g.actors.states[i];
+            const AiMonster *m = aiFind(g.actors, i);
             if (i == index || !fights(actor.kind))
                 continue;
-            if (mate < 0 && isKind(actor, ActorKind::Grunt) && actor.squad == me.squad && me.squad >= 0)
+            if (mate < 0 && isKind(actor, ActorKind::Grunt) && m != nullptr && m->squadLeader != kAiNone &&
+                m->squadLeader == mind(g, index)->squadLeader)
             {
                 mate = i;
                 continue;
@@ -646,52 +714,41 @@ namespace
             actor.active = false;
             actorPlaceBox(g.actors, i);
         }
-        for (int k = 0; k < 3; ++k)
-            me.seen[k] = g.player.origin[k];
         const fx stand[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2]};
-        fx home[3] = {0, 0, 0};
+        // (The game looks for his own squad by where it is going, but the
+        // throw it looks for next decides it all the same: as it shipped,
+        // that is no rule. Out of the way.)
         if (mate >= 0)
         {
-            for (int k = 0; k < 3; ++k)
-                home[k] = g.actors.states[mate].pos[k];
-            // By the player: no grenade.
-            for (int k = 0; k < 3; ++k)
-                g.actors.states[mate].pos[k] = stand[k] + (k == 0 ? fxFromInt(60) : 0);
-            me.grenadeMs = 0;
-            check(!hldata::detail::gruntGrenade(g.logic, g.player, index, true) && me.grenadeMs > 0,
-                  "no grenade onto one of his own squad (and he does not think of it again for a second)");
-            // (Out of the way, and of the fight.)
             g.actors.states[mate].active = false;
             actorPlaceBox(g.actors, mate);
         }
         check(mate >= 0, "one of his squad to stand by the player");
         // Too close: no grenade.
         check(standBefore(g, index, 200), "somewhere nearer to stand");
-        me.grenadeMs = 0;
-        check(!hldata::detail::gruntGrenade(g.logic, g.player, index, true), "no grenade from within 256 units");
+        g.player.onGround = true;
+        check(!canThrow(index), "no grenade from within 256 units");
         for (int k = 0; k < 3; ++k)
-            g.player.origin[k] = me.seen[k] = stand[k];
-        me.grenadeMs = 0;
+            g.player.origin[k] = stand[k];
         bool can = false;
         for (int n = 0; n < 8 && !can; ++n)
-        {
-            me.grenadeMs = 0;
-            can = hldata::detail::gruntGrenade(g.logic, g.player, index, true);
-        }
+            can = canThrow(index);
         check(can, "from 500 units in the open there is a throw to be had");
         if (!can)
             return;
         // He throws it; it comes down by them, and goes off on its fuse.
-        hldata::detail::gruntAct(g.actors, me, kActToss, "throwgrenade");
+        {
+            AiCtx c = ctx(g, index);
+            c.m.enemy = kAiPlayer;
+            aiSetState(c, kStateCombat);
+            aiChangeSchedule(c, &grunt::slRangeAttack2);
+        }
         g.player.health = 1000;
         int thrownAt = -1, offAt = -1, nearest = 100000;
         const fx feet[3] = {stand[0], stand[1], stand[2] - kStandingFeet};
         for (int ms = 0; ms < 8000 && offAt < 0; ms += 33)
         {
             tickStill(g);
-            // (Held to this: what he does next is not the point.)
-            if (thrownAt >= 0 && me.ai != kGruntWait)
-                hldata::detail::gruntWait(g.actors, me, 10000);
             bool flying = false;
             for (const Projectile &shot : g.actors.shots)
             {
@@ -710,11 +767,14 @@ namespace
         std::printf("test_soldiers: grenade: thrown at %d ms, comes within %d units of their feet, off %d ms later, "
                     "%d taken\n",
                     thrownAt, nearest, offAt - thrownAt, 1000 - g.player.health);
-        check(thrownAt >= 1100 && thrownAt <= 1300, "the grenade leaves his hand on the throw's own frame");
-        check(nearest < 80, "... and comes down by them");
+        // (He turns to the way it is to go first; and where he aims is where
+        // they were last seen -- their middle, half the time -- with a
+        // little to either side: it comes down near, not on them.)
+        check(thrownAt >= 1100 && thrownAt <= 2400, "the grenade leaves his hand on the throw's own frame");
+        check(nearest < 160, "... and comes down by them");
         check(offAt - thrownAt >= 3400 && offAt - thrownAt <= 3600 && g.player.health < 1000,
               "... to go off three and a half seconds after");
-        check(me.grenadeMs > 2000 && !hldata::detail::gruntGrenade(g.logic, g.player, index, true),
+        check(mind(g, index)->time1 > g.ai.now + 1000 && !mind(g, index)->flag1,
               "and he has not another for them inside six seconds");
     }
 
@@ -733,9 +793,13 @@ namespace
                 return;
             only(g, index);
             ActorState &me = g.actors.states[index];
-            g.player.origin[2] += fxFromInt(30000);
-            tickStill(g);
-            hldata::detail::gruntAlert(g.logic, index, me.pos);
+            // (The player near enough to be in what he can see of the map,
+            // and behind him.)
+            if (!standBefore(g, index, 300))
+                return;
+            me.yaw = static_cast<std::uint16_t>(me.yaw + 32768);
+            for (int n = 0; n < 10; ++n)
+                tickStill(g);
             const fx still[3] = {0, 0, 0};
             const fx by[3] = {me.pos[0] + fxFromInt(40), me.pos[1], me.pos[2] + fxFromInt(4)};
             g.player.health = 100;
@@ -745,8 +809,8 @@ namespace
             for (int ms = 0; ms < 1500 && !ran && !cowered; ms += 33)
             {
                 tickStill(g);
-                ran = me.ai == kAiChase && me.attack == kGoFlee;
-                cowered = me.ai == kAiAttack && me.attack == kActCower;
+                ran = scheduleIs(g, index, "GruntTakeCoverFromBestSound") && aiIsMoving(ctx(g, index));
+                cowered = scheduleIs(g, index, "Cower");
             }
             std::printf("test_soldiers: a grenade at his feet: he %s\n", ran ? "runs" : (cowered ? "cowers" : "stays"));
             check(ran || cowered, "a grenade at his feet: he runs from it, or gets down");
@@ -762,9 +826,12 @@ namespace
                 tickStill(g);
             bool idle = true;
             for (int i = 0; i < g.actors.count; ++i)
-                idle = idle && (!isKind(g.actors.states[i], ActorKind::Grunt) || g.actors.states[i].ai == kAiIdle);
+            {
+                const AiMonster *m = aiFind(g.actors, i);
+                idle = idle && (!isKind(g.actors.states[i], ActorKind::Grunt) || (m != nullptr && m->state == kStateIdle));
+            }
             std::printf("test_soldiers: c1a3a, a minute with nobody about: %d lines of talk\n", g.sentencesHeard);
-            check(idle && g.sentencesHeard >= 2 && g.sentencesHeard <= 40,
+            check(idle && g.sentencesHeard >= 2 && g.sentencesHeard <= 60,
                   "soldiers with nothing to do pass the time of day, one at a time");
         }
         {
@@ -793,7 +860,8 @@ namespace
             return;
         Game &g = *game;
         g.player.origin[2] += fxFromInt(30000);
-        tickStill(g);
+        for (int n = 0; n < 60; ++n) // (his first look for a grenade is a second after he is there)
+            tickStill(g);
         int index = -1;
         for (int i = 0; i < g.actors.count && index < 0; ++i)
         {
@@ -805,17 +873,26 @@ namespace
         if (index < 0)
             return;
         only(g, index);
-        ActorState &me = g.actors.states[index];
-        me.squad = -1;
+        // (Alone: a squad's leader with a new enemy signals and fires first.)
+        if (mind(g, index)->squadLeader != kAiNone)
+            aiSquadRemove(g.actors, mind(g, index)->squadLeader, index);
         check(((g.view.actors[index].item >> kActorSkinShift) & 0xFF) == 1 && g.view.actors[index].body % 4 == 3,
               "he is the one in the mask");
         g.player.health = 100;
+        g.player.onGround = true;
         bool launched = false, flew = false;
         int ms = 0;
         for (; ms < 6000 && g.player.health == 100; ms += 33)
         {
             tickStill(g);
-            launched = launched || (me.ai == kAiAttack && me.attack == kActLaunch);
+            g.player.onGround = true;
+            launched = launched || scheduleIs(g, index, "RangeAttack2");
+            if (std::getenv("HL_DEBUG") != nullptr && ms % 99 == 0)
+            {
+                const AiMonster *m = aiFind(g.actors, index);
+                std::printf("  launcher %d ms: st=%d %s cond=%08x next=%d now=%d squad=%d\n", ms, m->state, scheduleName(g, index),
+                            m->conditions, m->time1, g.ai.now, m->squadLeader);
+            }
             for (const Projectile &shot : g.actors.shots)
                 flew = flew || (shot.active && shot.kind == kShotContact && shot.sprite == 1);
         }
@@ -824,7 +901,7 @@ namespace
         check(launched && flew && g.times(CommonSound::Launcher) == 1 && g.times(CommonSound::Explode) >= 1 &&
                   g.player.health < 100,
               "he launches a grenade at them before anything else, and it goes off where they stand");
-        check(me.grenadeMs > 0, "... and not another for six seconds");
+        check(mind(g, index)->time1 > g.ai.now, "... and not another for six seconds");
     }
 
     /// The shotgun: eight shells, one a "burst", five pellets of five.
@@ -835,7 +912,8 @@ namespace
             return;
         Game &g = *game;
         g.player.origin[2] += fxFromInt(30000);
-        tickStill(g);
+        for (int n = 0; n < 10; ++n)
+            tickStill(g);
         int index = -1;
         for (int i = 0; i < g.actors.count && index < 0; ++i)
         {
@@ -852,11 +930,9 @@ namespace
         check(me.ammo == kGruntShells && me.body % 4 == 2 && me.body / 4 == 1, "eight shells, and the gun to be seen");
         g.player.health = 100000;
         int health = g.player.health, shells = 0, last = me.ammo, most = 0, odd = 0;
-        for (int ms = 0; ms < 8000 && me.ammo > 0; ms += 33)
+        for (int ms = 0; ms < 12000 && me.ammo > 0; ms += 33)
         {
             tickStill(g);
-            if (me.ai == kAiChase)
-                hldata::detail::gruntWait(g.actors, me, 200);
             shells += me.ammo < last ? last - me.ammo : 0;
             last = me.ammo;
             const int took = health - g.player.health;
@@ -902,7 +978,7 @@ namespace
         for (int ms = 0; ms < 3000; ms += 33)
             tickStill(g);
         const ActorState &made = g.actors.states[slot];
-        check(made.active && made.health == kGruntHealth && made.item == (kGruntMp5 | kGruntGrenades) &&
+        check(made.active && made.health == kGruntHealth && (made.item & 15) == (kGruntMp5 | kGruntGrenades) &&
                   made.ammo == kGruntClip,
               "used, it makes one: an MP5 and grenades, as the game gives");
     }

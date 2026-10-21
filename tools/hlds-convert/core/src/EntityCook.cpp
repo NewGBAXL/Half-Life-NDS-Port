@@ -92,6 +92,7 @@ namespace hlds
             std::vector<std::string> clips; ///< what it needs without being told
             std::string startClip;         ///< the clip it starts in; empty: the model's first
             bool firstSequence = false;
+            bool activities = false; ///< every sequence with an activity (HlAi.hpp chooses by them)
             bool solid = true;
             ItemKind item = ItemKind::None;
             /// For what a monstermaker makes: how many places are kept for
@@ -142,6 +143,14 @@ namespace hlds
             {"weapon_hornetgun", ItemKind::Hornetgun, "models/w_hgun.mdl"},
             {"weaponbox", ItemKind::Weaponbox, "models/w_weaponbox.mdl"},
         };
+
+        /// One of the people (talkmonster.cpp's): given chosen clips, not
+        /// every one their model has.
+        bool isPersonKind(ActorKind kind)
+        {
+            return kind == ActorKind::Scientist || kind == ActorKind::Guard || kind == ActorKind::Sitter ||
+                   kind == ActorKind::Gman || kind == ActorKind::Generic;
+        }
 
         ActorInfo actorOf(const Entity &entity)
         {
@@ -213,7 +222,7 @@ namespace hlds
             else if (cls == "monster_houndeye")
             {
                 info = {true, ActorKind::Houndeye, "models/houndeye.mdl",
-                        {"idle1", "run", "attack", "flinch_small", "die"}, "idle1"};
+                        {"idle1", "run", "attack", "flinch_small", "die", "madidle"}, "idle1"};
             }
             else if (cls == "monster_miniturret" || cls == "monster_sentry" || cls == "monster_turret")
             {
@@ -233,7 +242,8 @@ namespace hlds
                 std::vector<std::string> clips = {"idle1", "combatidle", "crouching_idle", "run", "limpingrun",
                                                   "smflinch", "frontkick", "diesimple", "dieback1", "diebackwards",
                                                   "dieforward", "dieheadshot", "diegutshot", "cower",
-                                                  "victorydance", "advance_signal", "flank_signal", "drop_grenade"};
+                                                  "victorydance", "advance_signal", "flank_signal", "drop_grenade",
+                                                  "barnacled1", "barnacled2", "barnacled3", "barnacled4"};
                 if (weapons & 8)
                     clips.insert(clips.end(), {"standing_shotgun", "crouching_shotgun", "reload_shotgun"});
                 else
@@ -262,11 +272,25 @@ namespace hlds
             }
             else if (cls == "monster_scientist")
             {
-                info = {true, ActorKind::Scientist, "models/scientist.mdl", {"idle1", "walk", "run", "diesimple"}, "idle1"};
+                // (What his schedules ask for, by what each clip is for:
+                // standing, going, going scared, flinching, crouching in
+                // fear, his panic, his needle and its shot, his deaths and
+                // the barnacle's -- not every one of his model's, which
+                // would be three times the memory.)
+                info = {true, ActorKind::Scientist, "models/scientist.mdl",
+                        {"idle1", "walk", "walk_scared", "run", "run1", "flinch", "flinch1", "crouchstand",
+                         "crouch_idle", "panic", "pull_needle", "return_needle", "give_shot", "diesimple",
+                         "dieforward1", "diebackward", "headshot", "gutshot", "barnacled1", "barnacled2",
+                         "barnacled3", "barnacled4"},
+                        "idle1"};
             }
             else if (cls == "monster_barney")
             {
-                info = {true, ActorKind::Guard, "models/barney.mdl", {"idle1", "walk", "run", "diesimple", "shootgun", "shootgun2", "draw"}, "idle1"};
+                info = {true, ActorKind::Guard, "models/barney.mdl",
+                        {"idle1", "walk", "run", "diesimple", "diecrump", "dieforward", "diebackward", "diegutshot",
+                         "shootgun", "shootgun2", "draw", "disarm", "smlflinch", "barnaclehit", "barnaclepull",
+                         "barnaclecrunch", "barnaclechew"},
+                        "idle1"};
             }
             else if (cls == "monster_gman")
             {
@@ -308,6 +332,11 @@ namespace hlds
                 info.solid = !(cls == "monster_generic" &&
                                (static_cast<int>(numberKey(entity, "spawnflags")) & 4));
             }
+            // (The monsters that think as the game's do choose their clips by
+            // what they are for: all of those.)
+            // (People are given the clips their schedules ask for, above.)
+            if (info.is && actorThinks(static_cast<std::uint8_t>(info.kind)) && !isPersonKind(info.kind))
+                info.activities = true;
             // Only models, not sprites or brush models given by name.
             if (info.is && (info.file.size() < 5 || info.file.substr(info.file.size() - 4) != ".mdl"))
                 info.is = false;
@@ -458,6 +487,7 @@ namespace hlds
                 continue;
             ModelNeed &need = needOf(info.file);
             need.firstSequence = need.firstSequence || info.firstSequence;
+            need.activities = need.activities || info.activities;
             for (const std::string &clip : info.clips)
                 add(need, clip);
         }
@@ -480,6 +510,22 @@ namespace hlds
                                                            : (cls == "env_shooter" ? shootModel(entity) : "");
             if (thrown.size() > 4 && thrown.substr(thrown.size() - 4) == ".mdl")
                 needOf(thrown).firstSequence = true;
+        }
+        // What a soldier drops when he dies (his gun; a launcher's grenades).
+        for (const Entity &entity : entities)
+        {
+            if (lowered(entity.className()) != "monster_human_grunt")
+                continue;
+            const int weapons = static_cast<int>(numberKey(entity, "weapons"));
+            add(needOf((weapons & 8) ? "models/w_shotgun.mdl" : "models/w_9mmar.mdl"), "idle");
+            if (weapons & 4)
+                add(needOf("models/w_argrenade.mdl"), "idle");
+        }
+        // ... and what a guard drops: his pistol.
+        for (const Entity &entity : entities)
+        {
+            if (lowered(entity.className()) == "monster_barney")
+                add(needOf("models/w_9mmhandgun.mdl"), "idle");
         }
         if (aliens)
             needOf("models/agibs.mdl").firstSequence = true;
@@ -536,9 +582,12 @@ namespace hlds
             double origin[3] = {0, 0, 0};
             entity.vec3("origin", origin);
             // The same test the DS makes when the player crosses
-            // (kVisitorRange).
-            if (!info.is || name.empty() || std::fabs(origin[0] - mark[0]) > 2048 ||
-                std::fabs(origin[1] - mark[1]) > 2048 || std::fabs(origin[2] - mark[2]) > 2048)
+            // (kVisitorRange) -- but one of the people may be following the
+            // player, from anywhere in that map, named or not.
+            const bool follower = info.kind == ActorKind::Scientist || info.kind == ActorKind::Guard;
+            if (!info.is || (!follower && (name.empty() || std::fabs(origin[0] - mark[0]) > 2048 ||
+                                           std::fabs(origin[1] - mark[1]) > 2048 ||
+                                           std::fabs(origin[2] - mark[2]) > 2048)))
                 continue;
             ModelNeed *need = nullptr;
             for (ModelNeed &have : needs)
@@ -560,13 +609,14 @@ namespace hlds
                     need->clips.push_back(clip);
             };
             need->firstSequence = need->firstSequence || info.firstSequence;
+            need->activities = need->activities || info.activities;
             for (const std::string &clip : info.clips)
                 add(clip);
             add("walk");
             add("run");
             for (const Entity &script : entities)
             {
-                if (!isScript(std::string(script.className())) ||
+                if (name.empty() || !isScript(std::string(script.className())) ||
                     lowered(script.value("m_iszEntity")) != name)
                     continue;
                 add(lowered(script.value("m_iszPlay")));
@@ -1593,6 +1643,13 @@ namespace hlds
                     record.flags |= kLogicUseOnly;
                 if (spawnflags & 4)
                     record.flags |= kLogicToggle; // can be played again
+                // The rest of what the game's scripts are told (scripted.h).
+                record.pad = static_cast<std::uint16_t>(
+                    (spawnflags & (kScriptLeaveCorpse | kScriptNoInterrupt | kScriptOverrideState |
+                                   kScriptNoScriptMovement)) |
+                    (cls == "aiscripted_sequence" ? kScriptAi : 0) |
+                    (cls == "aiscripted_sequence" && numberKey(entity, "m_iFinishSchedule") == 1 ? kScriptAmbush
+                                                                                                   : 0));
             }
             else if (cls == "monstermaker" && actorOf(entity).is)
             {
@@ -1715,28 +1772,47 @@ namespace hlds
                         std::clamp(std::ceil(origin[a] + radius), -32768.0, 32767.0));
                 }
             }
-            else if (cls == "scripted_sentence" && named)
+            else if (cls == "scripted_sentence")
             {
-                // Somebody says something, and the target fires as they
-                // start.
+                // Somebody says something (when there is someone able to),
+                // and the target fires as they start (scripted.cpp's
+                // CScriptedSentence).
                 make = true;
                 const int index = sentenceIndex(std::string(entity.value("sentence")));
                 if (index >= 0)
                 {
-                    record.kind = static_cast<std::uint8_t>(LogicKind::Ambient);
+                    record.kind = static_cast<std::uint8_t>(LogicKind::Sentence);
                     for (int a = 0; a < 3; ++a)
                         record.move[a] = fxFromDouble(origin[a]);
                     record.extra[0] = static_cast<std::uint32_t>(index);
-                    record.extra[1] = kRadiusEverywhere;
-                    record.extra[2] = static_cast<std::uint32_t>(std::clamp(
-                        std::lround(numberKey(entity, "volume", 10) * 12.7), 0L, 127L));
-                    record.extra[3] = 1;
-                    // Who says it, where the map names them: the line is
-                    // then heard from where they stand (and is theirs, not
-                    // the voice that is heard everywhere).
-                    const std::string speaker(entity.value("entity"));
-                    if (!speaker.empty() && speaker.rfind("monster_", 0) != 0)
+                    record.extra[1] = static_cast<std::uint32_t>(
+                        std::clamp(std::lround(numberKey(entity, "duration") * 1000.0), 0L, 600000L));
+                    // (The game's volume is tenths; none at all is full.)
+                    const double volume = numberKey(entity, "volume") * 0.1;
+                    record.extra[2] = static_cast<std::uint32_t>(
+                        volume <= 0 ? 127L : std::clamp(std::lround(volume * 127.0), 0L, 127L));
+                    record.extra[3] = static_cast<std::uint32_t>(
+                        std::clamp(std::lround(numberKey(entity, "refire") * 1000.0), 0L, 600000L));
+                    record.waitMs = static_cast<std::int32_t>(std::clamp(numberKey(entity, "radius"), 0.0, 32000.0));
+                    // How far it carries: the game's attenuations (IDLE,
+                    // STATIC, NORM, NONE), as distances.
+                    static const std::int16_t kCarries[] = {kRadiusSmall, kRadiusMedium, kRadiusLarge,
+                                                            kRadiusEverywhere};
+                    const int attenuation = static_cast<int>(numberKey(entity, "attenuation"));
+                    record.mins[0] = kCarries[attenuation >= 1 && attenuation <= 3 ? attenuation : 0];
+                    const std::string listener = lowered(entity.value("listener"));
+                    record.mins[1] = static_cast<std::int16_t>(listener.empty() || listener == "player" ? 0 : nameId(listener));
+                    record.mins[2] = listener == "player" ? 1 : 0;
+                    record.maxs[0] = static_cast<std::int16_t>(spawnflags & 15);
+                    // Who says it: someone by name, or the nearest of a
+                    // class within the radius.
+                    const std::string speaker = lowered(entity.value("entity"));
+                    if (kindOfClass(speaker) >= 0)
+                        record.damage = static_cast<std::uint16_t>(kindOfClass(speaker) + 1);
+                    else if (!speaker.empty())
                         record.netName = nameId(speaker);
+                    if (!named)
+                        record.flags |= kLogicStartOpen;
                 }
                 else
                 {
@@ -2346,6 +2422,40 @@ namespace hlds
                 if (spawnflags & 128)
                     actor.flags |= kActorWaitScript;
             }
+            else if (actorThinks(actor.kind) && info.spare == 0)
+            {
+                // A monster as the game has it: its squad (or whom it calls
+                // for help), what it sets off and when, and its flags --
+                // waits to be seen, says nothing, waits for its script,
+                // leads its squad; an alien slave waits to be provoked.
+                const int spawnflags = static_cast<int>(numberKey(entity, "spawnflags"));
+                const std::uint32_t squad = nameId(entity.value("netname"));
+                const int condition = std::clamp(static_cast<int>(numberKey(entity, "TriggerCondition")), 0, 15);
+                if (condition != 0)
+                    actor.target = nameId(entity.value("TriggerTarget"));
+                actor.item |= (static_cast<std::uint32_t>(condition) << kGruntTriggerShift) |
+                              (squad << kActorSquadShift);
+                if (spawnflags & 1)
+                    actor.flags |= kActorWaitSeen;
+                if (spawnflags & 2)
+                    actor.flags |= kActorGag;
+                if (spawnflags & 32)
+                    actor.flags |= kActorLeader;
+                if (spawnflags & 128)
+                    actor.flags |= kActorWaitScript;
+                if (info.kind == ActorKind::Slave && (spawnflags & 64))
+                    actor.flags |= kActorCeiling; // (HlAiMonsters.hpp: slave::kActorWaitProvoked)
+                // One of the people before the disaster: will not follow.
+                if (spawnflags & 256)
+                    actor.item |= kPersonPreDisaster;
+                // (Luther's head is darker: the model's second skin.)
+                if (info.kind == ActorKind::Scientist && actor.body % 4 == 2)
+                    actor.item |= 1u << kActorSkinShift;
+            }
+            else if (info.kind == ActorKind::Sitter && actor.body % 4 == 2)
+            {
+                actor.item |= 1u << kActorSkinShift;
+            }
             else if (actorClass == "monster_hgrunt_dead")
             {
                 // The game's four: a soldier or his officer, with a gun or
@@ -2397,6 +2507,65 @@ namespace hlds
                     out.actors.push_back(actor);
             }
             out.actors.push_back(actor);
+        }
+        // (After everything else, so that no other actor is moved: what a
+        // soldier drops when he dies -- his gun, and a launcher's grenades --
+        // where he stands, there but not yet: HlGrunt.hpp finds them by
+        // that place.)
+        for (const Entity &entity : entities)
+        {
+            if (lowered(entity.className()) != "monster_human_grunt")
+                continue;
+            int weapons = static_cast<int>(numberKey(entity, "weapons"));
+            weapons = weapons == 0 ? 3 : (weapons & 15);
+            double origin[3] = {0, 0, 0};
+            entity.vec3("origin", origin);
+            const bool shotgun = (weapons & 8) != 0;
+            const struct
+            {
+                bool wanted;
+                const char *model;
+                ItemKind item;
+            } kDrops[] = {{true, shotgun ? "w_shotgun" : "w_9mmar", shotgun ? ItemKind::Shotgun : ItemKind::Mp5},
+                          {(weapons & 4) != 0, "w_argrenade", ItemKind::ArGrenades}};
+            for (const auto &drop : kDrops)
+            {
+                const auto found = std::find(models.begin(), models.end(), std::string(drop.model));
+                if (!drop.wanted || found == models.end())
+                    continue;
+                ActorRecord item{};
+                item.model = static_cast<std::uint16_t>(found - models.begin());
+                for (int a = 0; a < 3; ++a)
+                    item.origin[a] = fxFromDouble(origin[a]);
+                item.kind = static_cast<std::uint8_t>(ActorKind::Item);
+                item.clip = nameHash("idle");
+                item.flags = kActorDormant;
+                item.light = 24;
+                item.item = static_cast<std::uint32_t>(drop.item);
+                out.actors.push_back(item);
+            }
+        }
+        // (And after even those: a guard's pistol, likewise -- barney.cpp's
+        // DropItem when he is killed. HlAiPeople.hpp finds it by his place.)
+        for (const Entity &entity : entities)
+        {
+            if (lowered(entity.className()) != "monster_barney")
+                continue;
+            const auto found = std::find(models.begin(), models.end(), std::string("w_9mmhandgun"));
+            if (found == models.end())
+                continue;
+            double origin[3] = {0, 0, 0};
+            entity.vec3("origin", origin);
+            ActorRecord item{};
+            item.model = static_cast<std::uint16_t>(found - models.begin());
+            for (int a = 0; a < 3; ++a)
+                item.origin[a] = fxFromDouble(origin[a]);
+            item.kind = static_cast<std::uint8_t>(ActorKind::Item);
+            item.clip = nameHash("idle");
+            item.flags = kActorDormant;
+            item.light = 24;
+            item.item = static_cast<std::uint32_t>(ItemKind::Glock);
+            out.actors.push_back(item);
         }
 
         // Lists. A multi_manager's outputs are known; a multisource's inputs
@@ -2531,9 +2700,15 @@ namespace hlds
         {
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
                 actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
+            {
                 use(CommonSound::ScientistPain, CommonSound::ScientistDie);
+                use(CommonSound::ScientistPain2, CommonSound::ScientistPain5);
+            }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Guard))
+            {
                 use(CommonSound::GuardPain, CommonSound::GuardDie);
+                use(CommonSound::GuardPain2, CommonSound::GuardShot);
+            }
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Headcrab))
                 use(CommonSound::HeadcrabAlert, CommonSound::HeadcrabBite);
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))
@@ -2566,13 +2741,56 @@ namespace hlds
                 soldiers = true;
             }
         }
+        // What the people say (the game's talkmonster groups): for each voice
+        // whose model the map has (its own people, and those who may come in
+        // from next door), a few of each group's lines.
+        bool voices[kVoices] = {
+            std::find(models.begin(), models.end(), "scientist") != models.end(),
+            std::find(models.begin(), models.end(), "barney") != models.end()};
+        const bool talk = voices[kVoiceScientist] || voices[kVoiceBarney];
         // What soldiers call out: the first few of each of the game's lists.
+        if (soldiers || talk)
+            out.speech.assign(kSpeechGroups * kSpeechLines, 0xFFFF);
+        if (talk)
+        {
+            // (Each group's heading, then its lines.)
+            std::vector<std::uint16_t> lines;
+            std::vector<std::uint16_t> heading(kTalkHeading, 0);
+            for (int voice = 0; voice < kVoices; ++voice)
+            {
+                for (int slot = 0; slot < kTalkSlots; ++slot)
+                {
+                    const int g = voice * kTalkSlots + slot;
+                    heading[g * 2] = static_cast<std::uint16_t>(lines.size());
+                    const char *group = talkGroupName(voice, slot);
+                    if (!voices[voice] || group == nullptr)
+                        continue;
+                    if (group[0] == '!')
+                    {
+                        const int index = sentenceIndex(group + 1);
+                        if (index >= 0)
+                            lines.push_back(static_cast<std::uint16_t>(index));
+                    }
+                    else
+                    {
+                        for (int n = 0; n < 32 && static_cast<int>(lines.size()) - heading[g * 2] < kTalkLines; ++n)
+                        {
+                            const int index = sentenceIndex(std::string(group) + std::to_string(n));
+                            if (index >= 0)
+                                lines.push_back(static_cast<std::uint16_t>(index));
+                        }
+                    }
+                    heading[g * 2 + 1] = static_cast<std::uint16_t>(lines.size() - heading[g * 2]);
+                }
+            }
+            out.speech.insert(out.speech.end(), heading.begin(), heading.end());
+            out.speech.insert(out.speech.end(), lines.begin(), lines.end());
+        }
         if (soldiers)
         {
             static const char *const kGroups[kSpeechGroups] = {"HG_GREN",   "HG_ALERT", "HG_COVER", "HG_THROW",
                                                                "HG_TAUNT",  "HG_CHARGE", "HG_IDLE",  "HG_QUEST",
                                                                "HG_ANSWER", "HG_CLEAR", "HG_CHECK"};
-            out.speech.assign(kSpeechGroups * kSpeechLines, 0xFFFF);
             for (int g = 0; g < kSpeechGroups; ++g)
             {
                 int kept = 0;
