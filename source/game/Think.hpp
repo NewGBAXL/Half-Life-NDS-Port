@@ -16,6 +16,13 @@ namespace hlrt
     public:
         /// Once, after the 3D engine is up: the worker.
         void start();
+        /// ... and again each time the engine is brought up again (which
+        /// ends every worker it had: Global::InitVideo).
+        void restart()
+        {
+            started_ = false;
+            start();
+        }
         /// A map is set up: its actors ask, the worker answers.
         void attach(hldata::LogicWorld &w);
         /// The map is being left: what is being worked out is finished at

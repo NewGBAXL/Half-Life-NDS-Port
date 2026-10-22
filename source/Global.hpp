@@ -34,9 +34,38 @@ public:
     /// IRQs, clock and FAT: everything but the picture. Call once at startup.
     void Init();
 
-    /// The 3D engine. Call after Init().
-    void InitVideo();
+    /// How the picture is drawn. One pass, at sixty a second; or, on a DSi
+    /// and for the heaviest maps only (levelIsHeavy), two: each half of the
+    /// screen a pass of its own -- a whole budget of polygons each -- at
+    /// thirty, the picture put together in main memory and shown from there
+    /// a line at a time (NEA's two-pass DMA mode: 192 KB of RAM, video bank D
+    /// for the capture and F for the line; textures keep A, B and C).
+    enum class Video
+    {
+        SinglePass,
+        TwoPassDma,
+    };
+    Video video = Video::SinglePass;
+    bool twoPass = false;
+
+    /// The 3D engine, drawing as `want` says. Call after Init(); and again
+    /// to change how it draws -- which ends everything it had (textures,
+    /// palettes, its workers): the caller forgets and loads again. (Two-pass
+    /// when the RAM for it cannot be had is one pass.)
+    void InitVideo(Video want = Video::SinglePass);
     bool videoReady() const { return videoReady_; }
+
+    /// One picture of `draw` (NEA_Process, or the two-pass one in two-pass),
+    /// and how many it takes to be what the whole screen shows.
+    void process(void (*draw)());
+    int processFramesWhole() const { return twoPass ? 6 : 2; }
+
+    /// The moment what is drawn is drawn at: the vertical blanks of the
+    /// frame's first pass (latchDrawClock, once a frame) -- the same for
+    /// both halves of a two-pass picture, so nothing that moves with time
+    /// (an animated texture, a sprite's frame) differs between them.
+    static std::uint32_t drawClock();
+    static void latchDrawClock();
 
     /// Vertical blanks since boot: the game's clock. Sixty to the second.
     static std::uint32_t vblanks();

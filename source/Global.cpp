@@ -31,6 +31,29 @@ std::uint32_t Global::vblanks()
     return vblankCount;
 }
 
+namespace
+{
+    std::uint32_t drawClockAt = 0;
+}
+
+std::uint32_t Global::drawClock()
+{
+    return drawClockAt;
+}
+
+void Global::latchDrawClock()
+{
+    drawClockAt = vblankCount;
+}
+
+void Global::process(void (*draw)())
+{
+    if (twoPass)
+        NEA_ProcessTwoPass(draw);
+    else
+        NEA_Process(draw);
+}
+
 void Global::Init()
 {
     // First, before anything is timed against the CPU: every later measurement
@@ -58,10 +81,17 @@ void Global::Init()
 
 }
 
-void Global::InitVideo()
+void Global::InitVideo(Video want)
 {
     videoReady_ = true;
-    NEA_Init3D();
+    // Two-pass keeps two pictures in main memory: with no room for them, it
+    // says so -- and the engine has to be brought up again, as one pass.
+    if (want == Video::TwoPassDma && NEA_Init3D_TwoPass_DMA() != 0)
+        want = Video::SinglePass;
+    if (want == Video::SinglePass)
+        NEA_Init3D();
+    video = want;
+    twoPass = want != Video::SinglePass;
     // NEA puts the 3D screen on top by default; said explicitly because the
     // whole control scheme depends on the touch screen NOT being the 3D one.
     NEA_MainScreenSetOnTop();
@@ -79,15 +109,19 @@ void Global::InitVideo()
     // texture has a palette of its own. The banks must be defined explicitly:
     // "all of them" would hand Bank D to the texture allocator, and Bank D
     // is held back. Every map fits without it. (Compressed textures live in
-    // Banks A and C with their indexes in Bank B.)
+    // Banks A and C with their indexes in Bank B.) In two-pass D is where each
+    // half is captured: the engine's own, and FrameFreeze needs none -- the
+    // picture is in main memory already.
     NEA_TextureSystemReset(512, 1024, NEA_VRAM_ABC);
-    vramSetBankD(VRAM_D_LCD);
+    if (!twoPass)
+        vramSetBankD(VRAM_D_LCD);
 
     // The projection the world is drawn through. NEA rebuilds it every frame
     // from these, so they are set once.
     NEA_SetFov(hlrt::Camera::kFovDegrees);
-    // The worker that thinks for the actors while a frame waits.
-    hlrt::think.start();
+    // The worker that thinks for the actors while a frame waits. (Bringing
+    // the engine up again ended the one there was.)
+    hlrt::think.restart();
     NEA_ClippingPlanesSetI(hlrt::Camera::kNearClip, hlrt::Camera::kFarClip);
     NEA_ClearColorSet(RGB15(0, 0, 0), 31, 63);
 

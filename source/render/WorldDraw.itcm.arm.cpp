@@ -319,7 +319,7 @@ namespace hlrt
     // has a one.
     void WorldDraw::sway()
     {
-        const auto phase = static_cast<std::uint16_t>(Global::vblanks() * 273u);
+        const auto phase = static_cast<std::uint16_t>(Global::drawClock() * 273u);
         fx sine, cosine;
         fxSinCos(phase, sine, cosine);
         glMatrixMode(GL_TEXTURE);
@@ -352,8 +352,8 @@ namespace hlrt
             // with the models: the world has what both leave.)
             effectDraw.gather(modelPolygons_, modelVertices_);
             // (... and the head-up display, which is drawn over it all.)
-            modelPolygons_ += HudDraw::kPolygons;
-            modelVertices_ += HudDraw::kVertices;
+            modelPolygons_ += hudDraw.polygons();
+            modelVertices_ += hudDraw.vertices();
             // (... and room for the lamp's light: as much as it lit the pass
             // before and a little more -- all it may have, the pass it comes on.)
             lampPolygons_ = lampVertices_ = 0;

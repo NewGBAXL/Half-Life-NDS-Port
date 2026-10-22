@@ -49,9 +49,11 @@ namespace hlrt
         }
         /// What a pass left out that should not be: enemies in view not
         /// drawn, and effects (blood, a flash) in view not taken.
-        void losses(int enemies, int effects)
+        void losses(int enemies, int effects, int seenEnemies = 0, int hidden = 0)
         {
+            map_.modelsHidden += static_cast<std::uint32_t>(hidden);
             map_.enemiesCut += enemies != 0;
+            map_.enemiesSeenCut += seenEnemies != 0;
             map_.effectsRefused += static_cast<std::uint32_t>(effects);
         }
         const Frame &last() const { return last_; }
@@ -80,6 +82,8 @@ namespace hlrt
             std::uint32_t cut = 0;     ///< passes cut off at a distance
             std::uint32_t pressed = 0; ///< passes with the small and far left out
             std::uint32_t enemiesCut = 0;     ///< passes with an enemy in view not drawn
+            std::uint32_t enemiesSeenCut = 0; ///< ... one not behind a wall
+            std::uint32_t modelsHidden = 0;   ///< models in view behind a wall, not drawn (all passes)
             std::uint32_t effectsRefused = 0; ///< effects in view not taken, in all
         };
         Frame last_;

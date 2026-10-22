@@ -2,6 +2,7 @@
 // alive and in view always is; what gives way is what matters least; and a
 // barnacle is in view by its tongue as much as by its mouth.
 
+#include <array>
 #include <cstdio>
 
 #include "HlDrawPlan.hpp"
@@ -196,6 +197,64 @@ namespace
         }
     }
 
+    /// An enemy behind a wall gives way before one that is seen -- made
+    /// coarser first, and left out first, though it is nearer.
+    void testHidden()
+    {
+        auto three = []()
+        {
+            std::array<DrawCandidate, 3> all = {model(kDrawEnemy, 500, 4), model(kDrawEnemy, 500, 4),
+                                                model(kDrawEnemy, 500, 4)};
+            all[0].far = 300;
+            all[1].far = 200;
+            all[1].hidden = true; // (nearer, but behind a wall)
+            all[2].far = 900;
+            return all;
+        };
+        {
+            auto all = three();
+            const DrawPlan plan = planModels(all.data(), 3, 8, DrawHeld(), 0, 1000, 3000, kWhole, 12, 0, 0);
+            check(plan.drawn[0] && plan.drawn[1] && plan.drawn[2] && plan.cut[kDrawEnemy] == 0,
+                  "with room for all three at a coarser level, none is left out");
+            check(plan.level[1] > plan.level[0], "... and the one behind a wall is made coarser first");
+        }
+        {
+            auto all = three();
+            const DrawPlan plan = planModels(all.data(), 3, 8, DrawHeld(), 0, 300, 900, kWhole, 12, 0, 0);
+            check(!plan.drawn[1] && plan.drawn[0] && plan.drawn[2], "room for two: the one behind a wall goes");
+            check(plan.cut[kDrawEnemy] == 1 && plan.cutSeen == 0, "... and no enemy that can be seen is left out");
+        }
+        {
+            auto all = three();
+            all[1].hidden = false;
+            const DrawPlan plan = planModels(all.data(), 3, 8, DrawHeld(), 0, 300, 900, kWhole, 12, 0, 0);
+            check(!plan.drawn[2] && plan.cutSeen == 1, "all seen: the farthest goes, and is counted as seen");
+        }
+    }
+
+    /// Behind a wall: hidden after two looks in a row, seen again at the
+    /// first clear one; at most so many looks a frame.
+    void testHiddenCache()
+    {
+        std::uint8_t run = 0;
+        std::uint16_t lookedAt = 0;
+        int lines = 10;
+        bool wall = true;
+        auto clear = [&]() { return !wall; };
+        check(!drawHidden(run, lookedAt, 8, lines, clear) && run == 1, "one look behind a wall: not yet hidden");
+        check(drawHidden(run, lookedAt, 9, lines, clear) && run == 2, "... two in a row: hidden");
+        wall = false;
+        check(!drawHidden(run, lookedAt, 10, lines, clear) && run == 0, "... seen at the first clear look");
+        // Seen: not looked at again for eight frames.
+        lines = 10;
+        wall = true;
+        check(!drawHidden(run, lookedAt, 12, lines, clear) && lines == 10, "seen: no look for a while");
+        check(!drawHidden(run, lookedAt, 18, lines, clear) && lines == 9 && run == 1, "... then looked at again");
+        // No looks left this frame: it keeps what it was.
+        lines = 0;
+        check(!drawHidden(run, lookedAt, 19, lines, clear) && run == 1, "no looks left: as it was");
+    }
+
     void testWho()
     {
         // Eight props near, two headcrabs behind them, room for eight: the
@@ -328,6 +387,8 @@ int main()
     testPoints();
     testWho();
     testClose();
+    testHidden();
+    testHiddenCache();
     if (g_failures == 0)
         std::printf("test_drawplan: ok\n");
     return g_failures == 0 ? 0 : 1;

@@ -289,6 +289,19 @@ namespace hlrt
                 decalPalette_ = palette;
             }
         }
+        // In two-pass, a texture of the display's pictures as well (drawn as
+        // quads: drawQuads).
+        if (global.twoPass && material_ == nullptr && global.hasFat)
+        {
+            NEA_Material *material = nullptr;
+            NEA_Palette *palette = nullptr;
+            if (TextureCache::loadFile(global.commonPath(kHudAtlasFile).c_str(), false, kHudAtlasWidth, kHudAtlasHeight,
+                                       1, material, palette))
+            {
+                material_ = material;
+                palette_ = palette;
+            }
+        }
         // The display's pictures: read, not uploaded (its sprites are made
         // from them: draw()).
         if (atlas_ || !global.hasFat)
@@ -310,6 +323,7 @@ namespace hlrt
         // (NEA has let go of them itself, with everything else.)
         lampMaterial_ = nullptr;
         decalMaterial_ = decalPalette_ = nullptr;
+        material_ = palette_ = nullptr;
         loadingMaterial_ = loadingPalette_ = nullptr;
         loadingShown = nullptr;
     }
@@ -325,9 +339,31 @@ namespace hlrt
         extra_ = extra;
     }
 
+    int HudDraw::polygons() const
+    {
+        return global.twoPass ? kPolygons3D : 0;
+    }
+    int HudDraw::vertices() const
+    {
+        return global.twoPass ? kVertices3D : 0;
+    }
+
     void HudDraw::draw()
     {
-        compose();
+        if (global.twoPass)
+        {
+            // (No sprites of ours: bank F is the engine's line.)
+            for (int n = 0; n < kSprites; ++n)
+                hide(n);
+            flashColour = 0;
+            for (std::uint16_t &c : painColour)
+                c = 0;
+            drawQuads();
+        }
+        else
+        {
+            compose();
+        }
         const int state = enterCriticalSection();
         std::memcpy(shown, shadow, sizeof(shown));
         shownFlash = flashColour;
@@ -496,6 +532,135 @@ namespace hlrt
             sprite(6, 128 - 16, 96 - 16, 0, 2, 0, 32, kBankWhite);
     }
 
+    /// The display as 3D quads, in front of everything, from the display's
+    /// texture: as it was drawn before it was sprites (the game's own way --
+    /// its pictures added to the picture, their brightness their alpha).
+    void HudDraw::drawQuads()
+    {
+        if (screenFade.curtained() || frameFreeze.frozen())
+            return;
+        // Being hurt, which wants no suit: the screen reddened all over, and
+        // a red bar on each side of its middle the hurt came from.
+        if (flash_ > 0 || pain_[0] > 0 || pain_[1] > 0 || pain_[2] > 0 || pain_[3] > 0)
+        {
+            GFX_TEX_FORMAT = 0;
+            beginFlat();
+            auto plain = [](int x, int y, int w, int h)
+            {
+                GFX_BEGIN = GL_QUADS;
+                corner(x, y, 0, 0);
+                corner(x, y + h, 0, 0);
+                corner(x + w, y + h, 0, 0);
+                corner(x + w, y, 0, 0);
+            };
+            if (flash_ > 0)
+            {
+                NEA_PolyFormat(1 + flash_ * 13 / 256, 61, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                               static_cast<NEA_OtherFormatEnum>(0));
+                GFX_COLOR = RGB15(31, 0, 0);
+                plain(0, 0, 256, 192);
+            }
+            static constexpr std::int16_t kMarks[4][4] = {{104, 52, 48, 5}, {166, 72, 5, 48}, {104, 135, 48, 5}, {85, 72, 5, 48}};
+            GFX_COLOR = kRed;
+            for (int n = 0; n < 4; ++n)
+            {
+                if (pain_[n] <= 0)
+                    continue;
+                NEA_PolyFormat(1 + pain_[n] * 24 / 256, 60 - n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                               static_cast<NEA_OtherFormatEnum>(0));
+                plain(kMarks[n][0], kMarks[n][1], kMarks[n][2], kMarks[n][3]);
+            }
+            GFX_COLOR = 0x7FFF;
+        }
+        if (material_ == nullptr || !suit_)
+            return;
+        NEA_MaterialUse(static_cast<NEA_Material *>(material_));
+        // (No fog, no lights; number 63 of the polygons that blend.)
+        NEA_PolyFormat(31, 63, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+        beginFlat();
+        auto picture = [](int x, int y, UiRect from) { quad(x, y, from.w, from.h, from); };
+        auto number = [&](int right, int y, int value)
+        {
+            value = value < 0 ? 0 : (value > 999 ? 999 : value);
+            int x = right;
+            do
+            {
+                x -= kHudDigitWidth;
+                picture(x, y, hudDigit(value % 10));
+                value /= 10;
+            } while (value != 0);
+            return x;
+        };
+        // Health and armour.
+        GFX_COLOR = health_ < 25 ? kRed : kOrange;
+        picture(6, 170, kHudCross);
+        number(62, 170, health_);
+        GFX_COLOR = kOrange;
+        picture(70, 168, armor_ > 0 ? kHudSuitFull : kHudSuitEmpty);
+        number(128, 170, armor_);
+        // The lamp: its outline, as much of it filled as there is in it, its
+        // beam while alight; dim while out, red when nearly empty.
+        if (lampSuit_)
+        {
+            GFX_COLOR = lampPercent_ < 20 ? kRed : (lampOn_ ? kOrange : kDim);
+            const int x = 256 - 8 - kHudLampBeam.w - kHudLampFull.w, y = 6;
+            picture(x, y, kHudLampEmpty);
+            const int full = kHudLampFull.w * lampPercent_ / 100;
+            if (full > 0)
+            {
+                UiRect part = kHudLampFull;
+                part.x = static_cast<std::uint8_t>(part.x + part.w - full);
+                part.w = static_cast<std::uint8_t>(full);
+                quad(x + kHudLampFull.w - full, y, full, part.h, part);
+            }
+            if (lampOn_)
+                picture(x + kHudLampFull.w, y, kHudLampBeam);
+            GFX_COLOR = kOrange;
+        }
+        // What is in hand (as compose() has it).
+        const bool gun = weapon_ == kWeaponGlock || weapon_ == kWeaponShotgun || weapon_ == kWeaponMp5 ||
+                         weapon_ == kWeaponPython || weapon_ == kWeaponCrossbow || weapon_ == kWeaponRpg;
+        const bool counted = weapon_ == kWeaponGrenade || weapon_ == kWeaponSatchel || weapon_ == kWeaponTripmine ||
+                             weapon_ == kWeaponSnark || weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ||
+                             weapon_ == kWeaponHornetgun;
+        if (gun || counted)
+        {
+            const UiRect icon = weapon_ == kWeaponShotgun    ? kHudAmmoBuck
+                                : weapon_ == kWeaponPython   ? kHudAmmo357
+                                : weapon_ == kWeaponGrenade  ? kHudAmmoGrenade
+                                : weapon_ == kWeaponCrossbow ? kHudAmmoBolt
+                                : weapon_ == kWeaponSatchel  ? kHudAmmoSatchel
+                                : weapon_ == kWeaponTripmine ? kHudAmmoTripmine
+                                : weapon_ == kWeaponSnark    ? kHudAmmoSnark
+                                : weapon_ == kWeaponRpg      ? kHudAmmoRocket
+                                : weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ? kHudAmmoUranium
+                                : weapon_ == kWeaponHornetgun ? kHudAmmoHornet
+                                                             : kHudAmmo9mm;
+            picture(236, 169, icon);
+            if (gun)
+            {
+                const int at = number(232, 170, spare_);
+                number(at - 10, 170, clip_);
+            }
+            else
+            {
+                number(232, 170, clip_);
+            }
+            if (extra_ >= 0)
+            {
+                picture(236, 148, kHudAmmoAr);
+                number(232, 149, extra_);
+            }
+        }
+        // The crosshair, for what is aimed.
+        if (gun && game.crosshair)
+        {
+            GFX_COLOR = 0x7FFF;
+            picture(128 - kHudCrosshair.w / 2, 96 - kHudCrosshair.h / 2, kHudCrosshair);
+        }
+        GFX_COLOR = 0x7FFF;
+    }
+
     void HudDraw::onVblank()
     {
         auto *oam = reinterpret_cast<volatile std::uint16_t *>(0x07000000) + kFirstSprite * 4;
@@ -523,11 +688,12 @@ namespace hlrt
             loadingPalette_ = palette;
         }
         loadingShown = static_cast<NEA_Material *>(loadingMaterial_);
-        // Enough pictures of it that it is what the whole screen shows.
-        for (int n = 0; n < 2; ++n)
+        // Enough pictures of it that it is what the whole screen shows (both
+        // halves of it, in two-pass).
+        for (int n = 0; n < global.processFramesWhole(); ++n)
         {
             NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
-            NEA_Process(drawLoading);
+            global.process(drawLoading);
         }
         NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
         // What is on the screen now is kept as a picture (FrameFreeze), as

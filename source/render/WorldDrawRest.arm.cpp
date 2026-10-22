@@ -857,7 +857,7 @@ namespace hlrt
         if (stats_.budgetHit)
         {
             easyPasses_ = 0;
-            if (++cutPasses_ >= 6)
+            if (++cutPasses_ >= 3)
             {
                 cutPasses_ = 0;
                 if (pressure_ < 3)
@@ -891,8 +891,9 @@ namespace hlrt
             }
         }
         // The fog: whole a little short of where the view is cut off. In at
-        // once (a quarter of the way each pass), out slowly; with nothing
-        // cut off it goes out until it is no fog at all.
+        // once -- all the way, the pass after a cut, so the cut's edge shows
+        // for one pass, not for several -- out slowly; with nothing cut off
+        // it goes out until it is no fog at all.
         {
             // (As the player has it: none; only where a view is cut; or
             // always there, at their distance -- and nearer for a cut.
@@ -918,7 +919,9 @@ namespace hlrt
             {
                 fogEnd_ = kNoFog; // (switched off: gone at once)
             }
-            if (want < fogEnd_)
+            if (want < fogEnd_ && stats_.budgetHit)
+                fogEnd_ = want;
+            else if (want < fogEnd_)
                 fogEnd_ -= (fogEnd_ - want + 3) / 4;
             else if (want > fogEnd_)
                 fogEnd_ += (fogEnd_ >> 7) + 1;
@@ -967,16 +970,19 @@ namespace hlrt
         int vertices = stats_.vertices - stats_.hwVertices;
         polygons = polygons < 0 ? 0 : polygons;
         vertices = vertices < 0 ? 0 : vertices;
-        const int p = polygons < unusedPolygons_ ? polygons : unusedPolygons_;
-        const int v = vertices < unusedVertices_ ? vertices : unusedVertices_;
-        unusedPolygons_ = polygons;
-        unusedVertices_ = vertices;
-        sparePolygons_ = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
-        spareVertices_ = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
-        sparePolygons_ = sparePolygons_ * spareQuarters_ / 4;
-        spareVertices_ = spareVertices_ * spareQuarters_ / 4;
+        // (Of the half just drawn: each half's room is its own.)
+        int &unusedP = unusedPolygons_[pass_], &unusedV = unusedVertices_[pass_];
+        int &spareP = sparePolygons_[pass_], &spareV = spareVertices_[pass_];
+        const int p = polygons < unusedP ? polygons : unusedP;
+        const int v = vertices < unusedV ? vertices : unusedV;
+        unusedP = polygons;
+        unusedV = vertices;
+        spareP = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
+        spareV = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
+        spareP = spareP * spareQuarters_ / 4;
+        spareV = spareV * spareQuarters_ / 4;
         // None of it while the hardware is complaining.
         if (held_ > 0)
-            sparePolygons_ = spareVertices_ = 0;
+            spareP = spareV = 0;
     }
 } // namespace hlrt

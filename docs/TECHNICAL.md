@@ -44,6 +44,23 @@ Milestone 11, "levels of detail".
   are rejected on the CPU, surface by surface; the hardware's own test is off,
   because it goes by a polygon's first three vertices and misjudges very thin
   ones; the converter orders every polygon so that those three make a real corner.
+- On a DSi, a HEAVY map is drawn in two passes instead (NEA's two-pass DMA
+  mode): each half of the screen is a pass of its own, with a whole budget,
+  at 30 fps. Each half is captured to Bank D and copied into a picture in
+  main memory (192 KB, which a DSi has to spare), and that picture is shown
+  a line at a time through Bank F by DMA. Textures keep Banks A, B and C,
+  so streaming is unchanged. The mode is chosen when a map is loaded and
+  never changed within one: changing it brings the 3D engine up again, which
+  costs a load's worth of reloading (and the frozen picture: such a load is
+  black). The title and the menus are drawn in one pass. Bank F is the
+  display line's, so the head-up display there is drawn as 3D quads (the
+  pass has room for it) instead of the sprites it is everywhere else. What
+  changes the picture -- the game's step, what is written to video memory,
+  the clock animations go by -- comes between pictures only, so both halves
+  show one moment.
+- A model in view that is behind a wall is not drawn: a line from the eye to
+  its middle, top and bottom, a few a frame, kept per model (hidden after
+  two looks in a row, seen again at the first clear one).
 - On a DSi the world's surfaces go to the geometry engine as one display
   list, fed by the DSi's own DMA (NDMA) while the processor works out where
   the models' bones are. (Not while the DSP option is on: a DMA to the

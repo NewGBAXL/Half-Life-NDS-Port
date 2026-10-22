@@ -30,6 +30,10 @@ namespace hlrt
         /// pose, not what there is room to draw.
         static constexpr int kMaxDrawn = 16;
         int cutOf(int kind) const { return cutClass_[kind & 3]; }
+        /// The enemies left out that could have been seen (not behind a wall).
+        int seenEnemiesCut() const { return seenCut_; }
+        /// How many in view were behind a wall this pass, and not drawn.
+        int hidden() const { return hidden_; }
         int grown() const { return grown_; }
         bool strained() const { return strained_; }
         void setLimit(int limit) { limit_ = limit < 1 ? 1 : (limit > kMaxDrawn ? kMaxDrawn : limit); }
@@ -107,6 +111,13 @@ namespace hlrt
         /// effects give way.
         int cutClass_[4] = {};
         int grown_ = 0;
+        int seenCut_ = 0;
+        /// Per actor (by its index, as lastLevel_): how many looks in a row
+        /// found it behind a wall (2: hidden), and the frame of the last.
+        std::uint8_t hiddenRun_[256] = {};
+        std::uint16_t hiddenLook_[256] = {};
+        std::uint16_t planFrame_ = 0;
+        int hidden_ = 0;
         bool strained_ = false;
         bool heldDrawn_ = false;
     };

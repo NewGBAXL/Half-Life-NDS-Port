@@ -153,10 +153,35 @@ namespace hldata
         /// The frame's pressure does not make it coarser, and a lack of room
         /// no coarser than level 1 (an enemy or one of the people).
         bool close = false;
+        /// Nothing seen of it from the eye: behind a wall or a door, though
+        /// in the view's cone. Of the enemies, one so is made coarser, and
+        /// left out, before one that is seen (ModelDraw looks, when a pass
+        /// has lately been short of room).
+        bool hidden = false;
         std::int32_t far = 0; ///< how far off it is (whole units): the farthest give way first
         std::uint16_t polygons[kDrawLevels] = {};
         std::uint16_t vertices[kDrawLevels] = {};
     };
+
+    /// Whether a model in view is behind a wall (ModelDraw), kept per
+    /// actor: `run`, how many looks in a row found it so (2: hidden);
+    /// `lookedAt`, the frame of the last. Looked at again this frame if it
+    /// was not seen last time (so it shows the frame it comes into sight)
+    /// or not for eight frames -- while `linesLeft` lasts; `clear()` is one
+    /// look (a line from the eye to it). True: hidden, not to be drawn.
+    template <class Clear>
+    inline bool drawHidden(std::uint8_t &run, std::uint16_t &lookedAt, std::uint16_t frame, int &linesLeft,
+                           Clear &&clear)
+    {
+        const bool again = run != 0 || static_cast<std::uint16_t>(frame - lookedAt) >= 8;
+        if (again && linesLeft > 0)
+        {
+            --linesLeft;
+            lookedAt = frame;
+            run = clear() ? 0 : static_cast<std::uint8_t>(run < 2 ? run + 1 : 2);
+        }
+        return run >= 2;
+    }
 
     struct DrawHeld
     {
@@ -174,6 +199,7 @@ namespace hldata
         std::uint8_t heldLevel = 0;
         int polygons = 0, vertices = 0; ///< of everything drawn, the weapon with it
         int cut[kDrawClasses] = {};     ///< left out, by what they are
+        int cutSeen = 0;                ///< ... of the enemies, those not hidden
         int grown = 0;                  ///< polygons over the share
         /// An enemy or a person had to be made room for: the frame's
         /// effects give way next (stains, pieces).
@@ -211,10 +237,14 @@ namespace hldata
         // The nearest of the enemies and the people: whatever the order
         // they are drawn in (an enemy's before a person's), it is the one
         // whose detail is seen most.
+        // (Of those that can be seen: one behind a wall has no detail to
+        // show.)
         int nearest = -1;
         for (int i = 0; i < count; ++i)
         {
-            if (all[i].kind <= kDrawPerson && (nearest < 0 || all[i].far < all[nearest].far))
+            if (all[i].kind <= kDrawPerson &&
+                (nearest < 0 || all[nearest].hidden > all[i].hidden ||
+                 (all[nearest].hidden == all[i].hidden && all[i].far < all[nearest].far)))
                 nearest = i;
         }
         if (nearest < 0)
@@ -278,7 +308,10 @@ namespace hldata
             {
                 if (!plan.drawn[i] || all[i].kind > kDrawPerson || i == nearest || plan.level[i] >= floorOf(i))
                     continue;
-                if (who < 0 || all[i].far >= all[who].far) // (of the same, the last in order)
+                // (What cannot be seen first; then the farthest -- of the
+                // same, the last in order.)
+                if (who < 0 || all[i].hidden > all[who].hidden ||
+                    (all[i].hidden == all[who].hidden && all[i].far >= all[who].far))
                     who = i;
             }
             if (who < 0 && plan.drawn[nearest] && all[nearest].kind <= kDrawPerson &&
@@ -318,6 +351,22 @@ namespace hldata
             // (Before an enemy is left out of the picture -- it still
             // fights -- whoever is close to the eye gives up the floor of
             // its detail: the farthest first.)
+            // (... but before that, an enemy that cannot be seen is let go,
+            // the farthest first: nothing is lost to the picture.)
+            while (kind == kDrawEnemy && over())
+            {
+                int who = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (plan.drawn[i] && all[i].kind == kDrawEnemy && all[i].hidden &&
+                        (who < 0 || all[i].far >= all[who].far))
+                        who = i;
+                }
+                if (who < 0)
+                    break;
+                plan.drawn[who] = false;
+                ++plan.cut[kDrawEnemy];
+            }
             while (kind == kDrawEnemy && over())
             {
                 int who = -1;
@@ -333,10 +382,14 @@ namespace hldata
             }
             while (over())
             {
+                // (One that cannot be seen goes first, whatever its
+                // distance: what is behind a wall is not missed.)
                 int who = -1;
                 for (int i = 0; i < count; ++i)
                 {
-                    if (plan.drawn[i] && all[i].kind == kind && (who < 0 || all[i].far >= all[who].far))
+                    if (plan.drawn[i] && all[i].kind == kind &&
+                        (who < 0 || all[i].hidden > all[who].hidden ||
+                         (all[i].hidden == all[who].hidden && all[i].far >= all[who].far)))
                         who = i;
                 }
                 if (who < 0)
@@ -350,6 +403,8 @@ namespace hldata
                 }
                 plan.drawn[who] = false;
                 ++plan.cut[all[who].kind];
+                if (all[who].kind == kDrawEnemy && !all[who].hidden)
+                    ++plan.cutSeen;
             }
         }
 

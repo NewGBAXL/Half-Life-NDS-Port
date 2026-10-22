@@ -192,7 +192,7 @@ namespace hlrt
 
     HL_ARM void TextureCache::frame()
     {
-        tick_ = Global::vblanks() / 6;
+        tick_ = Global::drawClock() / 6;
     }
 
     bool TextureCache::loadOne(unsigned index)

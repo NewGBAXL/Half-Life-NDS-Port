@@ -91,13 +91,14 @@ namespace hlrt
             return false;
         std::fprintf(file,
                      "%s %s %s passes %lu slow %lu longest %d poly %d vert %d lines %d "
-                     "underflow %d overflow %d cut %lu pressed %lu enemies-cut %lu effects-refused %lu\n",
+                     "underflow %d overflow %d cut %lu pressed %lu enemies-cut %lu enemies-seen-cut %lu effects-refused %lu models-hidden %lu\n",
                      map, global.isDSi ? "DSi" : "DS", mode,
                      static_cast<unsigned long>(map_.frames), static_cast<unsigned long>(map_.slow),
                      map_.vblanks, map_.polygons, map_.vertices, map_.lowLines, map_.underflows,
                      map_.overflows, static_cast<unsigned long>(map_.cut),
                      static_cast<unsigned long>(map_.pressed), static_cast<unsigned long>(map_.enemiesCut),
-                     static_cast<unsigned long>(map_.effectsRefused));
+                     static_cast<unsigned long>(map_.enemiesSeenCut),
+                     static_cast<unsigned long>(map_.effectsRefused), static_cast<unsigned long>(map_.modelsHidden));
         return std::fclose(file) == 0;
     }
 } // namespace hlrt

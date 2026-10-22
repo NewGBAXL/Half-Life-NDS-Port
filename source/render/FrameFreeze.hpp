@@ -23,6 +23,7 @@ namespace hlrt
 
     private:
         bool frozen_ = false;
+        bool twoPass_ = false; ///< frozen in two-pass: nothing was captured, nothing to put back
         unsigned long savedControl_ = 0;
         unsigned short savedBg0_ = 0;
     };

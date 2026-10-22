@@ -46,7 +46,7 @@ namespace hlrt
         {
         case 0:
             std::snprintf(line, sizeof(line), "%-8s %-3s fps %2d cpu %3d%%", mapName_,
-                          global.isDSi ? "DSi" : "DS",
+                          global.twoPass ? "2P" : (global.isDSi ? "DSi" : "DS"),
                           static_cast<int>(NEA_GetFPS()), static_cast<int>(NEA_GetCPUPercent()));
             break;
         case 1:

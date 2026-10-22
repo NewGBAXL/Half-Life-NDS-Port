@@ -197,7 +197,7 @@ namespace hlrt
         void lightning(const SpriteRef &ref, const fx *a, const fx *b, int w, int noise)
         {
             fx from[3] = {a[0], a[1], a[2]};
-            const int frame = ref.frames > 1 ? static_cast<int>(Global::vblanks() / 3 % ref.frames) : 0;
+            const int frame = ref.frames > 1 ? static_cast<int>(Global::drawClock() / 3 % ref.frames) : 0;
             for (int piece = 1; piece <= 4; ++piece)
             {
                 fx to[3];
@@ -412,7 +412,7 @@ namespace hlrt
             }
             items_[slot] = Item{distance, static_cast<std::uint16_t>(n), kGlow};
         }
-        jitterSeed = Global::vblanks() * 2654435761u + 1;
+        jitterSeed = Global::drawClock() * 2654435761u + 1;
         return count_;
     }
 
@@ -887,7 +887,7 @@ namespace hlrt
         if (shot.kind == kShotSpit)
         {
             if (const SpriteRef *ref = sprite(CommonSprite::Spit, 31))
-                picture(*ref, static_cast<int>(Global::vblanks() / 4 % ref->frames), shot.pos, camera.right,
+                picture(*ref, static_cast<int>(Global::drawClock() / 4 % ref->frames), shot.pos, camera.right,
                         camera.up, 7, 7);
             else
             {
@@ -899,7 +899,7 @@ namespace hlrt
         {
             // Something thrown out that is a sprite (sparks, embers).
             if (const SpriteRef *ref = sprite(shot.sprite, 31, 0x7FFF))
-                picture(*ref, static_cast<int>(Global::vblanks() / 4 % ref->frames), shot.pos, camera.right,
+                picture(*ref, static_cast<int>(Global::drawClock() / 4 % ref->frames), shot.pos, camera.right,
                         camera.up, ref->worldWidth / 4 + 1, ref->worldHeight / 4 + 1);
         }
         else if (shot.kind == kShotBolt)
@@ -923,7 +923,7 @@ namespace hlrt
             // larger (HlAliens.hpp).
             const int size = shot.kind == kShotHeadBall ? 12 : 8;
             if (const SpriteRef *ref = sprite(CommonSprite::Glow, 31, RGB15(31, 24, 12)))
-                picture(*ref, static_cast<int>(Global::vblanks() / 4 % ref->frames), shot.pos, camera.right,
+                picture(*ref, static_cast<int>(Global::drawClock() / 4 % ref->frames), shot.pos, camera.right,
                         camera.up, size, size);
             else
             {
@@ -1001,7 +1001,7 @@ namespace hlrt
         case kEffectBeam:
             // The gauss's and the egon's: in their colours, fading out.
             if (const SpriteRef *ref = sprite(CommonSprite::Beam, left, effect.colour))
-                beam(*ref, static_cast<int>(Global::vblanks() / 2 % (ref->frames > 0 ? ref->frames : 1)), effect.a,
+                beam(*ref, static_cast<int>(Global::drawClock() / 2 % (ref->frames > 0 ? ref->frames : 1)), effect.a,
                      effect.b, effect.size * 16);
             break;
         case kEffectMuzzle:

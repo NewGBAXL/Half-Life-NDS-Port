@@ -306,6 +306,10 @@ namespace hlrt
         int looked = 0;
         for (int c = 0; c < kDrawClasses; ++c)
             cutClass_[c] = 0;
+        // (The lines of sight this frame may cost: HlWalk.hpp's lineClear.)
+        ++planFrame_;
+        hidden_ = 0;
+        int linesLeft = isDSiMode() ? 10 : 6;
         for (int i = 0; actors.states != nullptr && i < actors.count; ++i)
         {
             const ActorState &actor = actors.states[i];
@@ -326,6 +330,7 @@ namespace hlrt
             // its middle and head are in places the eye cannot see, its sides
             // may be in one that it can (a wide one at a doorway).
             const bool enemy = drawClass(actor) == kDrawEnemy;
+            const int ownPoints = points.count; // (its own: middle, head, down its tongue)
             if (enemy && points.count + 4 <= DrawPoints::kMost)
             {
                 const int half = model->header->radius / 2;
@@ -357,6 +362,40 @@ namespace hlrt
                 const std::int32_t most = ax > ay ? (ax > az ? ax : az) : (ay > az ? ay : az);
                 const std::int32_t one = most + (ax + ay + az - most) / 2;
                 far = one < far ? one : far;
+            }
+            // Behind a wall, though in a place the eye's can see: not drawn.
+            // A line from the eye to its middle, its top and its bottom (a
+            // barnacle's tongue end) -- seen if any is clear. A few lines a
+            // frame, kept per actor: one hidden is looked at again every
+            // frame (it shows the frame it comes into sight), the rest every
+            // eighth; and hidden only after two looks in a row. Never what is
+            // close to the eye, nor what a script has.
+            if (far > static_cast<std::int32_t>(model->header->radius) * kDrawClose &&
+                !(actor.script >= 0 && actor.scriptPhase != kActorFree))
+            {
+                auto clear = [&]()
+                {
+                    const int ends[3] = {0, ownPoints > 1 ? 1 : 0, ownPoints - 1};
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        if (k > 0 && ends[k] == ends[k - 1])
+                            continue;
+                        const std::int16_t *p = points.at[ends[k]];
+                        const fx to[3] = {fxFromInt(p[0]), fxFromInt(p[1]), fxFromInt(p[2])};
+                        if (lineClear(game.world, camera.pos, to))
+                            return true;
+                    }
+                    return false;
+                };
+                if (drawHidden(hiddenRun_[i & 255], hiddenLook_[i & 255], planFrame_, linesLeft, clear))
+                {
+                    ++hidden_;
+                    continue;
+                }
+            }
+            else
+            {
+                hiddenRun_[i & 255] = 0;
             }
             const int kind = drawClass(actor);
             int at = looked < kLooked ? looked : kLooked - 1;
@@ -442,6 +481,9 @@ namespace hlrt
             // fills much of the picture and a coarse mesh shows.)
             one.far = reach[n];
             one.close = reach[n] <= static_cast<std::int32_t>(model.header->radius) * kDrawClose;
+            // (Once not seen, not yet twice: the first to give way if room
+            // is short.)
+            one.hidden = !one.close && hiddenRun_[seen[n] & 255] != 0;
             for (int l = 0; l < levels; ++l)
             {
                 int p = 0, v = 0;
@@ -502,6 +544,9 @@ namespace hlrt
             level_[kept] = static_cast<std::uint8_t>(level);
             order[kept++] = seen[n];
         }
+        // (What was left out while they were looked over is not known to be
+        // hidden: counted as seen.)
+        seenCut_ = cutClass_[kDrawEnemy] + chosen.cutSeen;
         for (int c = 0; c < kDrawClasses; ++c)
         {
             cutClass_[c] += chosen.cut[c];
@@ -689,7 +734,7 @@ namespace hlrt
             {
                 // (Its legs going, at the clip's own rate.)
                 const std::uint32_t whole = static_cast<std::uint32_t>(model.clips[0].frameCount - 1) << 8;
-                thing.frame = static_cast<std::uint32_t>(Global::vblanks() * model.clips[0].fps / 60) % whole;
+                thing.frame = static_cast<std::uint32_t>(Global::drawClock() * model.clips[0].fps / 60) % whole;
             }
             fx dir[3] = {shot.velocity[0], shot.velocity[1], shot.velocity[2]};
             for (int k = 0; k < 3; ++k)

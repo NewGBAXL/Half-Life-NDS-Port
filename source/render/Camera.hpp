@@ -29,6 +29,16 @@ namespace hlrt
         std::int32_t dist;
     };
 
+    /// Which part of the screen the cull planes enclose: in two-pass, each
+    /// pass draws one half, and what is in the other is not sent at all --
+    /// which is where the mode's room comes from (Global::Video).
+    enum class ViewHalf
+    {
+        Whole,
+        Left,
+        Right,
+    };
+
     class Camera
     {
     public:
@@ -89,8 +99,11 @@ namespace hlrt
         /// Recompute the vectors, the matrix and the cull planes (for the whole
         /// screen) from pos, yaw and pitch.
         void update();
-        /// Rebuild only the cull planes (the matrix is as it was).
-        void buildPlanes();
+        /// Rebuild only the cull planes (the matrix is as it was): for the
+        /// whole screen, or the half a two-pass pass draws. (The matrix is
+        /// the same for both: the engine narrows the projection, not the
+        /// view.)
+        void buildPlanes(ViewHalf half = ViewHalf::Whole);
         /// Load the view matrix into the geometry engine's modelview.
         void apply() const;
 

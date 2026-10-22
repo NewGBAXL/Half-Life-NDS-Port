@@ -22,9 +22,13 @@ namespace hlrt
     {
     public:
         /// What it costs a frame, at most: taken off the world's budget.
-        /// (Nothing: it is not 3D.)
-        static constexpr int kPolygons = 0;
-        static constexpr int kVertices = 0;
+        /// Nothing, as sprites; in two-pass, where video bank F is the
+        /// engine's (Global::Video), it is drawn as quads, a pass's worth of
+        /// them at most.
+        static constexpr int kPolygons3D = 48;
+        static constexpr int kVertices3D = 192;
+        int polygons() const;
+        int vertices() const;
         /// ... and what the lamp's light may cost besides, while it is
         /// alight: the surfaces in its beam are drawn twice.
         static constexpr int kLampPolygons = 120;
@@ -63,6 +67,7 @@ namespace hlrt
 
     private:
         void compose(); ///< draw()'s work, into the sprites' copy
+        void drawQuads(); ///< ... in two-pass: as 3D quads, each pass
 
     public:
         /// The marks' texture (an NEA_Material: HlUi.hpp, kDecalAtlasFile),
@@ -95,6 +100,7 @@ namespace hlrt
 
     private:
         bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
+        void *material_ = nullptr; ///< ... and, in two-pass, a texture (drawQuads)
         void *lampMaterial_ = nullptr;
         void *decalMaterial_ = nullptr;
         void *decalPalette_ = nullptr;
