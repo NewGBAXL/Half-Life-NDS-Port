@@ -61,6 +61,16 @@ namespace hlds
     std::vector<BrushInfo> analyseBrushes(const BspFile &bsp, const std::vector<Entity> &entities)
     {
         std::vector<BrushInfo> brushes;
+        // The names an env_render shows (an amount above 0, and the amount
+        // not left as it is: flag 2): c1a0d's burst stew, unseen until its
+        // microwave goes off.
+        std::vector<std::string> shown;
+        for (const Entity &entity : entities)
+        {
+            if (entity.className() == "env_render" && !(intKey(entity, "spawnflags") & 2) &&
+                intKey(entity, "renderamt") > 0 && !entity.value("target").empty())
+                shown.emplace_back(entity.value("target"));
+        }
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
@@ -123,6 +133,16 @@ namespace hlds
                     info.alpha = alpha;
                 }
                 break;
+            }
+            // Shown later by an env_render: drawn as it will be shown (as made,
+            // the amount being the env_render's business), and unseen until
+            // then.
+            if (info.renderClass == RenderClass::Hidden && !entity.value("targetname").empty() &&
+                std::find(shown.begin(), shown.end(), std::string(entity.value("targetname"))) != shown.end())
+            {
+                info.renderClass = RenderClass::Opaque;
+                info.alpha = 31;
+                info.startsUnseen = true;
             }
             brushes.push_back(std::move(info));
         }

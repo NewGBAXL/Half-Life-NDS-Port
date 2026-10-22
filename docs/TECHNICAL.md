@@ -255,9 +255,17 @@ Milestone 11, "levels of detail".
 - The HEV suit is taken where the game has it (it is what opens the way on),
   and armour is for someone wearing it.
 - The seated and the dead are let down onto what is under them, as the game
-  lets them down (a scientist at a desk in the low box he is given, onto the
-  floor his chair stands on; a body, and furniture, as a point); a scientist
-  at a desk goes between his five ways of sitting.
+  lets them down (a scientist at a desk, and an item, in the low box the game
+  drops them in, onto what is under them whether it is the world or a brush --
+  a chair is often a func_wall, and c1a0d's suit stands in a case too low for
+  the player's box; a body, and furniture, as a point); a scientist at a desk
+  goes between his five ways of sitting.
+- USE takes the first of what is faced as squarely, as the game does: c1a0d's
+  microwave is five buttons in one box, each locked until the one before it
+  is pressed.
+- A `+a` texture has its `+0` pictures as its other face, as a `+0` has its
+  `+a` ones, and a brush unseen until an `env_render` shows it is cooked,
+  unseen.
 - People sent somewhere by a script walk there as the monsters walk: round
   what is in the way, by the map's path nodes. Only those the landmark can
   see cross a level change, and only if there is room for them on the other

@@ -41,6 +41,9 @@ namespace hlds
         std::uint16_t colour = 0;  ///< RGB555, for RenderClass::Colour
         bool solid = true;         ///< the player collides with it
         bool startsOff = false;    ///< a func_wall_toggle that begins switched off
+        /// Unseen to begin with (an amount of 0) but named by an env_render
+        /// that shows it: cooked as drawn, and kept unseen until then.
+        bool startsUnseen = false;
         bool hasPivot = false;     ///< it has an "origin": it was built to turn
         double origin[3] = {0, 0, 0};
 

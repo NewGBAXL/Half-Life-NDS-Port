@@ -744,7 +744,8 @@ namespace hlds
             record.colour = info.colour;
             record.flags = static_cast<std::uint8_t>((info.solid ? kBrushSolid : 0) |
                                                      (info.hasPivot ? kBrushHasPivot : 0) |
-                                                     (info.startsOff ? kBrushStartsOff : 0));
+                                                     (info.startsOff ? kBrushStartsOff : 0) |
+                                                     (info.startsUnseen ? kBrushStartsUnseen : 0));
             record.logic = kNoLogic;
             // A func_water is a door whose "skin" says what it is full of
             // (-3 water, -4 slime, -5 lava) -- and so is anything else made

@@ -51,7 +51,11 @@ namespace hlds
         }
         else if (name[1] >= 'a' && name[1] <= 'j')
         {
+            // (... whose other face is the +0 cycle, as the game has it both
+            // ways: a button that starts lit -- c1a0d's over the suit -- goes
+            // out when it is pressed.)
             family.frames = run(bsp, '+', 'a', 10, stem);
+            family.other = run(bsp, '+', '0', 10, stem);
         }
         // (A cycle that does not start at its first picture, or a name that
         // is no cycle's: the texture as it is.)

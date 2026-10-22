@@ -633,6 +633,28 @@ namespace hldata
         return true;
     }
 
+    /// Let a small thing down onto what is under it -- the world, a brush
+    /// (a chair is a func_wall), anyone already placed -- as the game drops
+    /// what is 36 units tall or less: in its crouched box, whose middle is 18
+    /// above the feet (an item's 16-unit box is given that hull too). From a
+    /// unit above its feet to 256 below; left where it is if nothing is there.
+    inline void actorToFloorSmall(const MoveWorld &world, ActorState &actor)
+    {
+        fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(18 + 1)};
+        const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(18 - 256)};
+        Trace tr = traceAll(world, true, from, to);
+        // Started inside something (the cubicle round c1a0d's second sitter):
+        // the game's trace goes on out of it to what is under it; this one
+        // stops where it starts, so it is started again a little lower.
+        for (int step = 0; step < 16 && tr.startSolid; ++step)
+        {
+            from[2] -= fxFromInt(4);
+            tr = traceAll(world, true, from, to);
+        }
+        if (!tr.startSolid && !tr.allSolid && tr.fraction < kFractionOne)
+            actor.pos[2] = tr.endPos[2] - fxFromInt(18);
+    }
+
     /// Set one actor to how its record starts it: where it stands (let down
     /// onto the floor under it), which way it faces, in which clip.
     inline void actorSetup(ActorWorld &a, int index, const ActorRecord &record, const MoveWorld &world)
@@ -668,9 +690,9 @@ namespace hldata
         // Onto the floor, as the game drops what it spawns -- each kind as
         // the game does it. A body, and a piece of furniture, fall as a
         // point (they have no size there until they have landed); someone
-        // sitting comes down in the low box he is given, onto the floor his
-        // chair is on; a cycler and what hangs from a ceiling stay put; the
-        // rest come down in the box they walk about in.
+        // sitting, and an item, come down in the low box they are given,
+        // onto the chair or the shelf; a cycler and what hangs from a ceiling
+        // stay put; the rest come down in the box they walk about in.
         const bool point = record.kind == static_cast<std::uint8_t>(ActorKind::Pose) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Furniture);
         const bool stays = record.kind == static_cast<std::uint8_t>(ActorKind::Cycler) ||
@@ -687,14 +709,12 @@ namespace hldata
         {
             pointToFloor(world, actor.pos, fxFromInt(256));
         }
-        else if (record.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
+        else if (record.kind == static_cast<std::uint8_t>(ActorKind::Sitter) ||
+                 record.kind == static_cast<std::uint8_t>(ActorKind::Item))
         {
-            const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(18 + 1)};
-            const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(18 - 256)};
-            // (18: that box's middle above its feet.)
-            const Trace tr = traceHull(world.crouched, from, to);
-            if (!tr.allSolid && tr.fraction < kFractionOne)
-                actor.pos[2] = tr.endPos[2] - fxFromInt(18);
+            // (Onto the chair, not through it to the floor -- c1a0d's -- and
+            // onto the floor of a case too low for the player: its suit.)
+            actorToFloorSmall(world, actor);
         }
         else if (!actorToFloor(world, actor, fxFromInt(1), fxFromInt(256)))
         {

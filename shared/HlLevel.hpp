@@ -323,6 +323,8 @@ namespace hldata
     /// be seen from is not known ahead of time, so it is tested against the
     /// view alone.
     inline constexpr std::uint8_t kBrushRoams = 16;
+    /// Not seen until an env_render shows it (HlLogic's `look`).
+    inline constexpr std::uint8_t kBrushStartsUnseen = 32;
 
     /// One brush entity: a piece of the map that is its own object -- a door,
     /// a grate, a pane of glass, an invisible wall.

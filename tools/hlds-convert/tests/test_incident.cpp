@@ -241,6 +241,39 @@ namespace
         check(differ == 0, "... and switched back, they are as they were");
     }
 
+    /// c1a0d: those sitting are on their seats (func_walls, at -252), not on
+    /// the floor under them (-288) with their legs through it; and the suit
+    /// is down on the floor of its case (-280), too low a place for the
+    /// player's box -- the game drops both in a small box, onto brushes too.
+    void testPlacedOnWhatIsUnder(const char *dir)
+    {
+        const std::unique_ptr<Game> game = load(dir, "c1a0d");
+        if (game == nullptr)
+            return;
+        Game &g = *game;
+        int sitters = 0, seated = 0;
+        bool suit = false;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            const ActorState &a = g.actors.states[i];
+            const int z = fxToInt(a.pos[2]);
+            if (a.kind == static_cast<std::uint8_t>(ActorKind::Sitter))
+            {
+                ++sitters;
+                seated += z >= -254 && z <= -250;
+                std::printf("test_incident: c1a0d's sitter %d at z %d\n", i, z);
+            }
+            if (a.kind == static_cast<std::uint8_t>(ActorKind::Item) && fxToInt(a.pos[0]) == -3648 &&
+                fxToInt(a.pos[1]) == 960)
+            {
+                std::printf("test_incident: c1a0d's suit at z %d\n", z);
+                suit = z >= -282 && z <= -278;
+            }
+        }
+        check(sitters == 2 && seated == 2, "c1a0d's two who sit are on their seats");
+        check(suit, "... and the suit is on the floor of its case");
+    }
+
     /// The microwave of c1a0d: five presses, and it goes.
     void testMicrowave(const char *dir)
     {
@@ -269,20 +302,26 @@ namespace
         int presses = 0;
         bool broke = false;
         const int sentences = g.sentencesHeard;
+        // Pressed as the player presses: USE from in front of it, which finds
+        // whatever it finds. The five are one box, each locked until the one
+        // before it fires -- the first of them in the map's order is the one
+        // to take, and once pressed it has gone into the wall.
+        const fx at[3] = {fxFromInt(-2158), fxFromInt(1210), fxFromInt(-238)};
+        const fx eye[3] = {fxFromInt(-2190), fxFromInt(1178), fxFromInt(-230)};
+        fx forward[3] = {at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]};
+        const fx length = fxLength(forward);
+        for (fx &k : forward)
+            k = static_cast<fx>((static_cast<std::int64_t>(k) << kFxShift) / length);
         for (int step = 1; step <= 5; ++step)
         {
             char name[16];
             std::snprintf(name, sizeof(name), "beep%dms", step);
             const int target = nameOf(g, name);
-            int button = -1;
-            for (std::uint32_t i = 0; i < v.logicCount; ++i)
+            const int button = logicFindUsable(g.logic, eye, forward);
+            if (button < 0 || v.logic[button].kind != static_cast<std::uint8_t>(LogicKind::Button) ||
+                v.logic[button].target != target || target == 0)
             {
-                if (v.logic[i].kind == static_cast<std::uint8_t>(LogicKind::Button) && v.logic[i].target == target && target != 0)
-                    button = static_cast<int>(i);
-            }
-            if (button < 0)
-            {
-                std::printf("test_incident: no button fires %s\n", name);
+                std::printf("test_incident: press %d does not find the button that fires %s\n", step, name);
                 continue;
             }
             ++presses;
@@ -297,7 +336,8 @@ namespace
         }
         std::printf("test_incident: the microwave: %d of 5 buttons pressed, %d marks left, %s, %d sentences\n", presses,
                     live() - before, broke ? "the stew burst" : "nothing burst", g.sentencesHeard - sentences);
-        check(presses == 5, "its five buttons are there to press");
+        check(presses == 5, "its five buttons are pressed in turn, from where the player stands");
+        check(g.sentencesHeard > sentences, "... and the scientist by it says what he says");
         check(live() - before >= 3, "after the fifth press its marks are on the wall");
         check(broke, "... and what was in it has burst");
     }
@@ -577,6 +617,7 @@ int main()
         testValve(dir);
         testLights(dir);
         testMicrowave(dir);
+        testPlacedOnWhatIsUnder(dir);
         testScenes(dir);
         testTripmine(dir);
     }

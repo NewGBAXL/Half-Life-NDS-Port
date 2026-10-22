@@ -66,8 +66,10 @@ namespace
                 sitters.push_back(i);
                 const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + kCrouchedFeet + fxFromInt(1)};
                 const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + kCrouchedFeet - fxFromInt(64)};
-                const Trace tr = traceHull(g.move.crouched, from, to);
-                air = tr.allSolid ? 0 : fxToInt(actor.pos[2] + kCrouchedFeet - tr.endPos[2]);
+                // (What is under him counts whatever it is: his chair is often a
+                // func_wall.)
+                const Trace tr = traceAll(g.move, true, from, to);
+                air = tr.allSolid || tr.startSolid ? 0 : fxToInt(actor.pos[2] + kCrouchedFeet - tr.endPos[2]);
             }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Pose))
             {

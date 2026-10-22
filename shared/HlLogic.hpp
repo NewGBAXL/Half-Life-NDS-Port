@@ -3318,7 +3318,7 @@ namespace hldata
         for (int b = 0; b < w.brushCount; ++b)
         {
             w.brushStates[b].active = (w.brushes[b].flags & kBrushStartsOff) == 0;
-            w.brushStates[b].look = 0;
+            w.brushStates[b].look = (w.brushes[b].flags & kBrushStartsUnseen) ? kBrushUnseen : 0;
             w.brushStates[b].frame = 0;
             w.brushStates[b].scroll = 0;
             logicPlaceBrush(w, b, w.brushes[b].origin);
@@ -3947,7 +3947,11 @@ namespace hldata
                                           static_cast<std::int64_t>(to[2]) * forward[2]) /
                                          distance);
             }
-            if (facing >= bestFacing)
+            // (Of two faced as squarely, the first, as the game takes them:
+            // c1a0d's microwave is five buttons in one box, each locked until
+            // the one before it is pressed -- and pressed, it is gone into the
+            // wall, and the next is the first.)
+            if (best < 0 ? facing >= bestFacing : facing > bestFacing)
             {
                 bestFacing = facing;
                 best = i;

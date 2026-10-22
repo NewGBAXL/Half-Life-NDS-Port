@@ -14,6 +14,7 @@
 // along to the next map, with his health.
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -199,6 +200,79 @@ namespace
         tick(g);
         check(aiFind(g.actors, sci)->targetEnt == kAiNone, "... and he does not follow");
         check(saidOf(g, kVoiceScientist, kTalkDecline, from) == 1, "... and says not now");
+    }
+
+    /// c1a0d's 'coffee', held at the coffee machine by a script: USE from in
+    /// front of him gets "not now", as from any scientist of before.
+    void testBusy(const char *dir)
+    {
+        auto game = load(dir, "c1a0d");
+        if (!game)
+        {
+            check(false, "c1a0d cooks");
+            return;
+        }
+        Game &g = *game;
+        const std::uint32_t hash = nameHash("coffee");
+        int sci = -1;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            const ActorState &a = g.actors.states[i];
+            if (a.active && a.name != 0 && g.view.nameHashes[a.name] == hash)
+                sci = i;
+        }
+        check(sci >= 0, "c1a0d has the scientist at the coffee");
+        if (sci < 0)
+            return;
+        for (int t = 0; t < 30 * 3; ++t)
+            tick(g); // (into his script, at the machine)
+        {
+            const ActorState &a = g.actors.states[sci];
+            std::printf("test_talk: coffee at %d %d %d yaw %d\n", fxToInt(a.pos[0]), fxToInt(a.pos[1]), fxToInt(a.pos[2]), a.yaw * 360 / 65536);
+        }
+        // (He stands at the machine, against the counter: the nearest place
+        // the player can stand, whichever side that is.)
+        int room = 0;
+        {
+            const ActorState &a = g.actors.states[sci];
+            fx best[3] = {0, 0, 0};
+            for (int dx = -96; dx <= 96; dx += 4)
+            {
+                for (int dy = -96; dy <= 96; dy += 4)
+                {
+                    const int d2 = dx * dx + dy * dy;
+                    if (d2 < 32 * 32 || (room != 0 && d2 >= room * room))
+                        continue;
+                    const fx at[3] = {a.pos[0] + fxFromInt(dx), a.pos[1] + fxFromInt(dy), a.pos[2] + kStandingFeet};
+                    if (!positionFree(g.move, false, at))
+                        continue;
+                    room = static_cast<int>(std::lround(std::sqrt(static_cast<double>(d2))));
+                    for (int k = 0; k < 3; ++k)
+                        best[k] = at[k];
+                }
+            }
+            if (room != 0)
+            {
+                for (int k = 0; k < 3; ++k)
+                    g.player.origin[k] = best[k];
+                g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+            }
+        }
+        std::printf("test_talk: the player stands %d from him, at %d %d\n", room, fxToInt(g.player.origin[0]), fxToInt(g.player.origin[1]));
+        if (room == 0)
+        {
+            check(false, "... with room by him");
+            return;
+        }
+        for (int t = 0; t < 30 * 6; ++t)
+            tick(g);
+        const std::size_t from = g.said.size();
+        // (Nothing cleared first: as the player finds him.)
+        const bool reached = use(g, sci);
+        std::printf("test_talk: from there USE %s him\n", reached ? "reaches" : "does not reach");
+        check(reached, "USE reaches the scientist at the coffee");
+        tick(g);
+        check(saidOf(g, kVoiceScientist, kTalkDecline, from) == 1, "... and he says he is busy");
     }
 
     void testFollow(const char *dir)
@@ -891,6 +965,7 @@ int main()
     {
         testTable(valve);
         testDecline(valve);
+        testBusy(valve);
         testFollow(valve);
         testGuard(valve);
         testGuardFights(valve);
