@@ -685,6 +685,12 @@ namespace
             {
                 if (index >= 0 || !standBefore(g, i, distance))
                     continue;
+                // (In the open on the level: c1a3a has crates standing in
+                // pits, whose tops are not where a throw across the yard
+                // is had.)
+                const int rise = fxToInt(g.player.origin[2] - kStandingFeet - one.pos[2]);
+                if (rise < -8 || rise > 8)
+                    continue;
                 g.player.onGround = true;
                 for (int n = 0; n < 8 && index < 0; ++n)
                 {

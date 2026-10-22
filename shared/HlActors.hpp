@@ -619,14 +619,16 @@ namespace hldata
 
     /// Stand an actor on the ground under it: looked for from `up` above its
     /// feet to `down` below them, as something the player's size (whose
-    /// middle is 36 units above its feet). False, with the actor left where
-    /// it is, if there is no ground in that reach or it stands where such a
+    /// middle is 36 units above its feet). The ground is whatever is there --
+    /// the world or a brush: c1a0d's scientist at the cart stands on a floor
+    /// of grates (func_walls) over a pit. False, with the actor left where it
+    /// is, if there is no ground in that reach or it stands where such a
     /// thing does not fit.
     inline bool actorToFloor(const MoveWorld &world, ActorState &actor, fx up, fx down)
     {
         const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36) + up};
         const fx to[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36) - down};
-        const Trace tr = traceHull(world.standing, from, to);
+        const Trace tr = traceAll(world, false, from, to);
         if (tr.startSolid || tr.allSolid || tr.fraction >= kFractionOne)
             return false;
         actor.pos[2] = tr.endPos[2] - fxFromInt(36);

@@ -272,6 +272,32 @@ namespace
         }
         check(sitters == 2 && seated == 2, "c1a0d's two who sit are on their seats");
         check(suit, "... and the suit is on the floor of its case");
+        // The scientist at the cart walks to it across a floor of grates
+        // (func_walls over a pit): he stays on them, not in the pit under
+        // them with his head at the player's feet.
+        const std::uint32_t hash = nameHash("cartguy");
+        int cart = -1;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            if (g.actors.states[i].name != 0 && g.view.nameHashes[g.actors.states[i].name] == hash)
+                cart = i;
+        }
+        check(cart >= 0, "c1a0d has the scientist at the cart");
+        if (cart < 0)
+            return;
+        // (His trigger: walked into by the player.)
+        logicFire(g.logic, g.player, static_cast<std::uint16_t>(nameOf(g, "cartstudy")), -1, kUseOn, 0);
+        int lowest = 0;
+        for (int n = 0; n < 30 * 40; ++n)
+        {
+            g.frame();
+            const int zNow = fxToInt(g.actors.states[cart].pos[2]);
+            lowest = std::min(lowest, zNow);
+        }
+        const ActorState &a = g.actors.states[cart];
+        std::printf("test_incident: c1a0d's cart scientist at %d %d %d, lowest %d\n", fxToInt(a.pos[0]), fxToInt(a.pos[1]),
+                    fxToInt(a.pos[2]), lowest);
+        check(lowest >= -290, "... and the scientist at the cart walks on its grates, not under them");
     }
 
     /// The microwave of c1a0d: five presses, and it goes.
