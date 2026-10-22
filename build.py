@@ -10,13 +10,13 @@
 # by tools/hlds-convert from the player's own copy of Half-Life and read from
 # the SD card under _nds/hl_nds/data/ at runtime.
 #
-# There is no NitroFS image yet: architectds errors on an empty input
-# directory, and nothing in resources/ exists until the bottom-screen art does.
-# When it does:
-#   nitrofs = NitroFS()
-#   nitrofs.add_grit(['resources/bottom/'], out_dir='bottom/')
-#   nitrofs.generate_image()
-# and add `nitrofs` to the NdsRom binaries.
+# THE GAME is a dynamic library apart, as hl.dll is on the PC: the monsters,
+# the weapons, the logic, the saves' map state (dll/hl/, and the shared
+# headers it instantiates). It is built against the ELF below and carried in
+# the ROM's NitroFS as dsl/hl.dsl; the engine loads it at startup and the two
+# speak through the tables in source/game/GameApi.hpp. HL_DSL is defined in
+# its build: there the engine's objects and hot code are reached through the
+# engine's table.
 #
 # HOT CODE: a source named Foo.arm.cpp is built as ARM instead of Thumb
 # (architectds), and one named Foo.itcm.arm.cpp is ALSO placed in the 32 KB
@@ -75,8 +75,33 @@ arm7 = Arm7BinaryDefault(
     elf_path='${BLOCKSDSEXT}/dswifi_dl/sys/arm7/arm7_dswifi_dl_maxmod.elf'
 )
 
+hl = Arm9DynamicLibrary(
+    name='hl',
+    main_binary=arm9,
+    sourcedirs=['dll/hl'],
+    includedirs=['source', 'shared', 'thirdparty'],
+    # (What Arm9Binary defines by itself, as well: libnds's and the engine's
+    # headers lay their structures out by them, and the library reads the
+    # engine's.)
+    defines=['__NDS__', '__BLOCKSDS__', 'ARM9', 'NEA_MAXMOD', 'HL_HW_MATH', 'HL_DSL'] + profile,
+    # (Only their headers: the library links nothing of its own. What it
+    # calls of libc and the rest is the ELF's, by address.)
+    libdirs=[
+        '${BLOCKSDS}/libs/libnds',
+        '${BLOCKSDS}/libs/maxmod',
+        '${BLOCKSDSEXT}/dswifi_dl',
+        '${BLOCKSDSEXT}/nitro-engine-advanced',
+    ],
+    cxxflags='-Wall -O2 -std=gnu++26 -D_LITTLE_ENDIAN -include yas/detail/config/endian.hpp',
+)
+hl.generate_dsl()
+
+nitrofs = NitroFS()
+nitrofs.add_arm9_dsl(hl)
+nitrofs.generate_image()
+
 nds = NdsRom(
-    binaries=[arm9, arm7],
+    binaries=[arm9, arm7, hl, nitrofs],
     nds_path='half-life-nds-port.nds',
     game_icon="Logo.bmp",
     game_title='HALF-LIFE DS',

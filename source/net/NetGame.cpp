@@ -8,6 +8,7 @@
 #include "Global.hpp"
 #include "data/LevelFile.hpp"
 #include "game/Game.hpp"
+#include "game/GameApi.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "net/NetLink.hpp"
@@ -204,7 +205,7 @@ namespace hlrt
             if (std::strcmp(view.modelRefs[m].name, "player") == 0)
                 model = static_cast<int>(m);
         }
-        netStart(match_, game.logic, player.state, static_cast<int>(view.actorCount), model, spawns_.data(),
+        gameApi.netStart(match_, game.logic, player.state, static_cast<int>(view.actorCount), model, spawns_.data(),
                  static_cast<int>(spawns_.size()), tokenOfThisConsole());
         phase_ = Phase::Playing;
 
@@ -305,7 +306,7 @@ namespace hlrt
         int from = 0;
         for (int size; (size = netlink::take(bytes, from)) > 0;)
         {
-            netRead(match_, bytes, size, from);
+            gameApi.netRead(match_, bytes, size, from);
             ++heard_;
         }
 
@@ -315,7 +316,7 @@ namespace hlrt
         {
             static LogicWorld none;
             static PlayerState nobody;
-            netLobby(match_, none, nobody);
+            gameApi.netLobby(match_, none, nobody);
             send();
         }
 
@@ -358,14 +359,14 @@ namespace hlrt
     {
         if (phase_ != Phase::Playing)
             return;
-        netTick(match_, game.logic, player.state, yaw, pitch, did, lamp, ms);
+        gameApi.netTick(match_, game.logic, player.state, yaw, pitch, did, lamp, ms);
         send();
     }
 
     void NetGame::used(int index)
     {
         if (phase_ == Phase::Playing)
-            netUsed(match_, index);
+            gameApi.netUsed(match_, index);
     }
 
     bool NetGame::notice(char *line, int room)

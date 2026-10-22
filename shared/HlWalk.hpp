@@ -842,6 +842,12 @@ namespace hldata
     /// straight walk is looked for from further off, since it need be found
     /// only once -- the plan is made again only on reaching a node or on
     /// being held up.
+#ifdef HL_DSL
+    // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
+    int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
+                        fx speed, int ms, const PlayerState *player, fx half, fx height,
+                        bool still = false);
+#else
     HL_HOT int walkTick(ActorWorld &a, const MoveWorld &world, int index, int small, const fx *dest,
                         fx speed, int ms, const PlayerState *player, fx half, fx height,
                         bool still = false)
@@ -956,4 +962,5 @@ namespace hldata
         }
         return kWalkBlocked;
     }
+#endif
 } // namespace hldata

@@ -10,7 +10,7 @@
 #include <NEAMain.h>
 #include <NEAThread.h>
 
-#include "HlThink.hpp"
+#include "game/GameApi.hpp"
 
 namespace hlrt
 {
@@ -41,7 +41,7 @@ namespace hlrt
                 if (world != nullptr && !queue.abort)
                 {
                     busy = true;
-                    const bool did = hldata::thinkRunOne(*world);
+                    const bool did = gameApi.thinkRunOne(*world, pause);
                     busy = false;
                     if (did)
                     {
@@ -65,7 +65,6 @@ namespace hlrt
             return;
         NEA_ThreadSetFrameBudget(64);
         mainThread = cothread_get_current();
-        hldata::thinkYield = pause;
         task = NEA_TaskSubmit(work, nullptr, nullptr);
         started_ = task != nullptr;
     }
@@ -80,7 +79,7 @@ namespace hlrt
         if (queue.slots == nullptr)
             return;
         queue.count = w.actors->count;
-        hldata::thinkClear(queue);
+        gameApi.thinkClear(queue);
         queue.deferred = started_;
         queue.abort = false;
         w.actors->think = &queue;

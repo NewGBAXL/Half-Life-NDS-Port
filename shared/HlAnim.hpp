@@ -209,6 +209,11 @@ namespace hldata
     /// values, a turn as 65536 to the circle and a slide as units in Q12.
     /// As the game sets them, except that there a setting is kept as one
     /// byte: here it is as fine as it is given.
+#ifdef HL_DSL
+    // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
+    void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
+                          const std::int32_t *controls = nullptr);
+#else
     HL_HOT void poseModel(const ModelView &model, int clip, std::uint32_t frame, BoneMatrix *out,
                           const std::int32_t *controls = nullptr)
     {
@@ -283,6 +288,7 @@ namespace hldata
             }
         }
     }
+#endif
 
     /// Where the model's attachment `which` is, in the model's space (Q12
     /// units), posed as `bones` have it. False if it has no such.

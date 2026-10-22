@@ -770,6 +770,10 @@ namespace hldata
 
     /// Advance one actor's clip by `ms`. Returns the frame it was at before
     /// (Q8), for whoever watches for the clip's events.
+#ifdef HL_DSL
+    // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
+    std::uint32_t actorAdvance(const ActorWorld &a, ActorState &actor, int ms);
+#else
     HL_HOT std::uint32_t actorAdvance(const ActorWorld &a, ActorState &actor, int ms)
     {
         const std::uint32_t before = actor.frame;
@@ -802,6 +806,7 @@ namespace hldata
         }
         return before;
     }
+#endif
 
     /// How fast `clip` of the actor's model carries it, in Q12 units a
     /// second: its stride over its length. `fallback` if it says nothing.

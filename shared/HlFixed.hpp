@@ -53,7 +53,8 @@ extern "C" std::uint32_t hlHwSqrt64(std::uint64_t value); // source/HwMath.s
 // how important it sounds. tools/arm9-report.sh lists what is there, byte by
 // byte, and with --check says if one of these is not.
 #ifndef HL_HOT
-#if defined(__arm__) && defined(HL_HW_MATH)
+// (Not in the game library, HL_DSL: a library has no ITCM of its own.)
+#if defined(__arm__) && defined(HL_HW_MATH) && !defined(HL_DSL)
 // (A section each, by a number: two kinds of function -- one the linker
 // merges, one it does not -- cannot share one.)
 #define HL_HOT_TEXT2(n) #n

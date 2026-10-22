@@ -386,6 +386,10 @@ namespace hldata
 
     /// Move the player's origin from `start` towards `end` through the world
     /// and every solid brush.
+#ifdef HL_DSL
+    // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
+    Trace traceAll(const MoveWorld &world, bool crouched, const fx *start, const fx *end);
+#else
     HL_HOT Trace traceAll(const MoveWorld &world, bool crouched, const fx *start, const fx *end)
     {
         Trace best = traceHull(crouched ? world.crouched : world.standing, start, end);
@@ -502,6 +506,7 @@ namespace hldata
         }
         return best;
     }
+#endif
 
     /// May the player's origin be at `p`: not in the world's solid, and not
     /// inside any solid brush? This is the question for "is there room to

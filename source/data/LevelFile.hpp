@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The cooked level in memory.
 //
 // A level is one heap block: load() reads its pieces out of the map's archive
@@ -47,5 +49,5 @@ namespace hlrt
         std::size_t size_ = 0;
     };
 
-    extern Level level;
+    HL_ENGINE_OBJECT(Level, level);
 } // namespace hlrt

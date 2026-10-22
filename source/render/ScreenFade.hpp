@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The top screen's brightness, which three things want a say in: a fade the
 // map has asked for, the dimness of being under water, and the curtain that
 // is down while a map is loaded (the 3D picture left on the screen is drawn
@@ -32,5 +34,5 @@ namespace hlrt
         void apply();
     };
 
-    extern ScreenFade screenFade;
+    HL_ENGINE_OBJECT(ScreenFade, screenFade);
 } // namespace hlrt

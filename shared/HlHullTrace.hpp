@@ -200,6 +200,10 @@ namespace hldata
 #endif
 
     /// Move a point from `start` towards `end` through `hull`.
+#ifdef HL_DSL
+    // (In the game library, the engine's own, in ITCM: game/GameApi.hpp.)
+    Trace traceHull(const Hull &hull, const fx *start, const fx *end);
+#else
     HL_HOT Trace traceHull(const Hull &hull, const fx *start, const fx *end)
     {
 #if !defined(__arm__)
@@ -219,6 +223,7 @@ namespace hldata
         }
         return trace;
     }
+#endif
 
     /// True when a point may stand at `p` in `hull`.
     HL_HOT bool hullPositionFree(const Hull &hull, const fx *p)

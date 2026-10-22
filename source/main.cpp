@@ -13,6 +13,7 @@
 #include "data/TextureCache.hpp"
 #include "data/TextureStream.hpp"
 #include "game/Game.hpp"
+#include "game/GameApi.hpp"
 #include "game/Input.hpp"
 #include "game/Player.hpp"
 #include "game/SaveGame.hpp"
@@ -574,7 +575,7 @@ namespace
                 {
                     if (hldata::fights(static_cast<std::uint8_t>(kind)) &&
                         kind != static_cast<int>(hldata::ActorKind::Player))
-                        killed += hldata::killAllOfKind(hlrt::game.logic, static_cast<hldata::ActorKind>(kind));
+                        killed += hlrt::gameApi.killAllOfKind(hlrt::game.logic, static_cast<hldata::ActorKind>(kind));
                 }
             }
             else
@@ -582,7 +583,7 @@ namespace
                 const hldata::ActorKind kind = hldata::kindOfName(line.args[0]);
                 if (kind == hldata::ActorKind::Count)
                     return "killall <monster> (or monsters)";
-                killed = hldata::killAllOfKind(hlrt::game.logic, kind);
+                killed = hlrt::gameApi.killAllOfKind(hlrt::game.logic, kind);
             }
             std::snprintf(said, sizeof(said), "%d killed", killed);
             return said;
@@ -685,6 +686,10 @@ int main(int argc, char *argv[])
     // photograph of it, and the .elf, say which line.
     defaultExceptionHandler();
     global.Init();
+    // The game library, first: before anything else takes the heap, so that
+    // it sits next to the program (GameDll.arm.cpp).
+    const char *gameWhy = nullptr;
+    const bool gameOk = hlrt::loadGame(&gameWhy);
     // (Before the first load, which is timed too.)
     hlrt::DebugLog::Perf::begin();
     hlrt::DebugLog::Perf::markStack();
@@ -713,6 +718,8 @@ int main(int argc, char *argv[])
         const std::string advice = (dataWhy.empty() ? std::string() : dataWhy + " ") + Global::DataStatusHint(status);
         haltWith("Cannot start:", Global::DataStatusTitle(status), advice.c_str());
     }
+    if (!gameOk)
+        haltWith("Cannot start:", "The game (dsl/hl.dsl) cannot be loaded.", gameWhy);
 
     hlrt::bottomScreen.create();
     hlrt::hudDraw.load();

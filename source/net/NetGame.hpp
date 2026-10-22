@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // A game between consoles, on this one: the radio (NetLink) joined to the
 // match (shared/HlNetGame.hpp) and to the game.
 //
@@ -100,5 +102,5 @@ namespace hlrt
         void lost(const char *why);
     };
 
-    extern NetGame netGame;
+    HL_ENGINE_OBJECT(NetGame, netGame);
 } // namespace hlrt

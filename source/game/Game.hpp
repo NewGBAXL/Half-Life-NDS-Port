@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The running map: everything about it that changes.
 //
 // The level file is read-only tables. This holds the other half -- where each
@@ -191,5 +193,5 @@ namespace hlrt
         hldata::Arrival came_;
     };
 
-    extern Game game;
+    HL_ENGINE_OBJECT(Game, game);
 } // namespace hlrt

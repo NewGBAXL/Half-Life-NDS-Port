@@ -8,9 +8,17 @@
 #     instruction), and which of those helpers are the hardware's (HwMath.s);
 #   - which of the game's functions are Thumb.
 #
+# And the game library, build/hl/hl.elf (dsl/hl.dsl in the ROM: see
+# source/game/GameApi.hpp), the same way -- the game's functions are there now
+# -- with what the library must not have: Thumb code (an ARM-to-Thumb jump in
+# it goes through a linker stub the loader cannot move), anything of the
+# engine taken by its name rather than through the engine's table, and the
+# game's code left behind in the ELF.
+#
 # usage: tools/arm9-report.sh [--check] [--summary] [arm9.elf]
 #   --check    fail if a function of the hot list below calls a helper it
-#              should not, or the ITCM is over its budget
+#              should not, the ITCM is over its budget, or the library
+#              breaks one of its rules
 #   --summary  the totals only (make.sh prints this)
 #
 # It reads the ELF and changes nothing.
@@ -26,12 +34,17 @@ for arg in "$@"; do
         *) ELF="$arg" ;;
     esac
 done
+DSL="$(dirname "$ELF")/../hl/hl.elf"
 [ -f "$ELF" ] || { echo "arm9-report: no $ELF (build first)" >&2; exit 2; }
 
-"$BIN/arm-none-eabi-objdump" -d -C "$ELF" | MODE="$MODE" python3 -c '
+# One ELF: the program (KIND=main) or the game library (KIND=dsl). (-r: in
+# the library a call to the program is a relocation, not an address.)
+report() {
+"$BIN/arm-none-eabi-objdump" -dr -C "$3" | MODE="$1" KIND="$2" python3 -c '
 import os, re, subprocess, sys
 
 mode = os.environ["MODE"]
+kind_of_elf = os.environ["KIND"]
 elf, tools = sys.argv[1], sys.argv[2]
 
 # Code the ITCM may hold before the build is told to think again. (The link
@@ -81,6 +94,10 @@ HOT = {
     "hldata::monstersTick": ["lmul"],
     "hldata::logicTick": ["lmul"],
 }
+# The game'"'"'s own, which the program must not have (the library does).
+GAME_ONLY = ["hldata::aiTick", "hldata::aiWorldTick", "hldata::logicTick", "hldata::monstersTick",
+             "hldata::detail::weaponsTickBody", "hldata::detail::projectilesTick", "hldata::detail::actorsTick",
+             "hldata::detail::netApply", "hldata::logicUse", "hldata::radiusDamage"]
 # ... and what has to be in the ITCM.
 HOT_ITCM = ["hldata::detail::hullCheck", "hldata::traceHull", "hldata::traceAll", "hldata::poseModel",
             "hldata::detail::sampleTrack", "hldata::walkStep", "hldata::walkTick",
@@ -127,6 +144,7 @@ where = {}      # function -> address
 current = None
 head = re.compile(r"^([0-9a-f]{8}) <(.*)>:$")
 branch = re.compile(r"\tblx?\t[0-9a-f]+ <([^>+]+)>")
+relocated = re.compile(r": R_ARM_(?:CALL|JUMP24)\t(\S+)")
 word = re.compile(r"\t\.word\t0x([0-9a-f]{8})")
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -137,7 +155,7 @@ for line in sys.stdin:
         continue
     if current is None:
         continue
-    m = branch.search(line)
+    m = branch.search(line) or relocated.search(line)
     helper = None
     if m and m.group(1) in HELPERS:
         helper = m.group(1)
@@ -153,6 +171,8 @@ itcm_at, itcm_size = sizes.get(".itcm", (0, 0))[1], sizes.get(".itcm", (0, 0))[0
 dtcm_size = sizes.get(".dtcm", (0, 0))[0] + sizes.get(".sbss", (0, 0))[0]
 in_itcm = [(size, demangle.get(name, name)) for at, size, kind, name in symbols
            if itcm_at <= (at & ~1) < itcm_at + 32768 and size]
+if kind_of_elf == "dsl":
+    in_itcm = []  # (the library is linked at 0: nothing of it is in ITCM)
 dtcm_at = sizes.get(".dtcm", (0, 0))[1]
 in_dtcm = [(size, demangle.get(name, name)) for at, size, kind, name in symbols
            if kind == "OBJECT" and 0x02ff4000 <= at < 0x02ff8000 and size]
@@ -170,7 +190,10 @@ for name, by in calls.items():
         else:
             soft += count
 
-summary = ("arm9: ITCM %d of 32768 bytes, DTCM data %d (the stack has the rest of 16384); "
+summary = ("hl.dsl: %d bytes; the game: %d ARM functions, %d Thumb; helper calls: %d on the hardware, %d in the library"
+           % (sizes.get(".progbits", (0, 0))[0] + sizes.get(".nobits", (0, 0))[0], len(arm_game), len(thumb_game),
+              hard, soft)) if kind_of_elf == "dsl" else \
+          ("arm9: ITCM %d of 32768 bytes, DTCM data %d (the stack has the rest of 16384); "
            "the game: %d ARM functions, %d Thumb; helper calls: %d on the hardware, %d in the library"
            % (itcm_size, dtcm_size, len(arm_game), len(thumb_game), hard, soft))
 
@@ -186,7 +209,7 @@ for name, banned in HOT.items():
                 failed.append("%s calls %s (%d)" % (function, helper, count))
     if not found and mode == "check":
         pass  # inlined away, or not in this build: nothing to hold it to
-for name in HOT_ITCM:
+for name in HOT_ITCM if kind_of_elf == "main" else []:
     for function, at in where.items():
         if bare(function) == name and not (itcm_at <= at < itcm_at + 32768):
             failed.append("%s is not in the ITCM (it is at %08x)" % (function, at))
@@ -197,6 +220,24 @@ for name in HOT_ARM:
     for at, size, function in functions:
         if bare(function) == name and (at & 1):
             failed.append("%s is Thumb" % function)
+if kind_of_elf == "dsl":
+    # The library: ARM throughout, and no linker stub (see the top).
+    for size, name in thumb_game:
+        failed.append("%s is Thumb, in the library" % name)
+    for at, size, kind, name in symbols:
+        if name.endswith("_from_arm") or name.endswith("_from_thumb"):
+            failed.append("a linker stub in the library: %s" % name)
+    # What it takes of the program by name: libc, libnds, the compiler'"'"'s
+    # helpers and the engine'"'"'s table; nothing of the engine'"'"'s own.
+    for line in run(tools + "/arm-none-eabi-nm", "-uC", elf).splitlines():
+        name = line.split()[-1]
+        if game(name) or name.startswith("Global::") or name.startswith("NEA_"):
+            failed.append("the library takes %s by its name (not through hlEngine)" % name)
+else:
+    # The program: none of the game left in it (GameApi.hpp).
+    for at, size, name in functions:
+        if bare(name) in GAME_ONLY:
+            failed.append("%s is in the program, not the library" % name)
 if itcm_size > ITCM_BUDGET:
     failed.append("the ITCM holds %d bytes, over its budget of %d" % (itcm_size, ITCM_BUDGET))
 
@@ -241,4 +282,13 @@ if failed:
     print()
     for line in failed:
         print("HOT LIST: " + line)
-' "$ELF" "$BIN"
+' "$3" "$BIN"
+}
+
+status=0
+report "$MODE" main "$ELF" || status=$?
+if [ -f "$DSL" ]; then
+    [ "$MODE" = full ] && echo
+    report "$MODE" dsl "$DSL" || status=$?
+fi
+exit $status

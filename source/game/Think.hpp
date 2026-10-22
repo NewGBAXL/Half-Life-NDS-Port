@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The actors' long thinking outside the frame (shared/HlThink.hpp): a worker
 // of the 3D engine's (NEAThread.h) that answers their questions while the
 // frame waits for the screen, stopping now and then so as not to hold the
@@ -34,5 +36,5 @@ namespace hlrt
         bool started_ = false;
     };
 
-    extern Think think;
+    HL_ENGINE_OBJECT(Think, think);
 } // namespace hlrt

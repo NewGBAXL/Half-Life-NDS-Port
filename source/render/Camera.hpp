@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The eye: where it is, where it looks, and the two things the renderer needs
 // from that every frame -- the matrix handed to the geometry engine and the
 // planes the BSP walk culls against.
@@ -112,5 +114,5 @@ namespace hlrt
         void clampPitch();
     };
 
-    extern Camera camera;
+    HL_ENGINE_OBJECT(Camera, camera);
 } // namespace hlrt

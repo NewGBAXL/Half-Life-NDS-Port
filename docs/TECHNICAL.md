@@ -7,6 +7,7 @@ build and run it; this is for whoever wants to know why something is the way
 it is before changing it.
 
 - [What works](#what-works)
+- [The game as a library](#the-game-as-a-library)
 - [Not yet](#not-yet)
 - [Tests, the DSP program, timing](#tests-the-dsp-program-timing)
 - [Comparing with the game](#comparing-with-the-game)
@@ -717,6 +718,60 @@ Milestone 11, "levels of detail".
     leaving, the frag limit. Also the sending of a file in pieces (only the
     pieces the other end lacks), which is for consoles started by Download
     Play, when that is built.
+
+## The game as a library
+
+The program is cut where Half-Life cuts it, between the engine and
+`hl.dll`. The game -- the monsters and their thinking, the weapons, the logic
+entities, a map's saved state, the changes of map, the multiplayer match's
+rules -- is a BlocksDS dynamic library, `dsl/hl.dsl`, built from `dll/hl/`
+(and the shared headers it instantiates) against the ARM9 ELF and carried in
+the ROM's NitroFS. The engine loads it at startup (`source/game/GameDll.arm.cpp`)
+and from then on the two speak through two tables
+(`source/game/GameApi.hpp`):
+
+- `GameFuncs`, what the engine asks of the game (`DLL_FUNCTIONS`): `Game`'s own
+  functions -- set a map up, advance it, save it, change it -- each a one-line
+  hand-on in `source/game/Game.cpp`; the think worker's question; fall damage;
+  `killall`; the match's start, tick, events and USE.
+- `EngineFuncs`, what the game may ask of the engine (`enginefuncs_t`): its
+  objects (`game`, `camera`, `player`, `sound`, ... -- the library's
+  `HL_ENGINE_OBJECT`s are references to them), the twenty-odd of their
+  functions the game calls, and the hot code in ITCM -- `traceHull`,
+  `traceAll`, `poseModel`, `actorAdvance`, `walkTick` -- whose declarations
+  are bodiless in the library's build (`HL_DSL`).
+
+The engine owns the memory, as it owns the edicts: the renderer and the sound
+read `game` as they always have. The library binds by address to nothing of
+the engine but libc's, libnds's and the compiler's functions and the table
+itself, `hlEngine`; a handshake compares the API's version and the sizes of
+two dozen structures both sides lay out, and refuses a library of another
+build. Saves are as they were: a save written before the split loads.
+
+What it costs and what it took:
+
+- About 125 KB of heap on the DS: the library is 432 KB of code and data, its
+  5,260 relocations keep 8 bytes each for the loader's veneers, and there is
+  its symbol table; the program is 404 KB smaller for it (c2a5w's first load
+  leaves 300 KB of headroom on a DS, where it left 428). Frames take what
+  they took (c1a1 with a zombie: DS 52-56% of the frame, before 55-60%; DSi
+  36%, as before).
+- The library is ARM throughout. An ARM-to-Thumb tail call inside it goes
+  through a stub the linker writes with an absolute address and no
+  relocation: the loader cannot move it, and the call lands where the library
+  was linked (a hang on the DS, an abort on the DSi).
+- The loader's branches reach 8 MB, not 32 (libnds checks a byte offset
+  against a word one's limit), and ITCM is linked 17 MB below the library.
+  The hardware divide the library calls is therefore called at ITCM's mirror
+  just under main RAM (a symbol resolver), with the protection unit's ITCM
+  region opened over the mirrors. The library is loaded before anything else
+  takes the heap, so that it sits next to the program.
+- Its build is given `__NDS__`, `__BLOCKSDS__` and `ARM9` as the program's
+  is: libnds's and the engine's headers lay their structures out by them.
+
+`tools/arm9-report.sh --check` holds both to this: no Thumb code and no
+linker stub in the library, nothing of the engine taken by name, and none of
+the game's code left in the program.
 
 ## Not yet
 

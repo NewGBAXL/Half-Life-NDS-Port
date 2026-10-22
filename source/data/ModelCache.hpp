@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The models of the loaded map: each one's cooked file (mdl/<map>/<name>.hmd)
 // held in memory and opened, and its skin (mdl/<name>.htx) in video memory,
 // except weapons' (v_*), of which only the one in hand is in video memory.
@@ -94,5 +96,5 @@ namespace hlrt
         int bare_ = 0;
     };
 
-    extern ModelCache modelCache;
+    HL_ENGINE_OBJECT(ModelCache, modelCache);
 } // namespace hlrt

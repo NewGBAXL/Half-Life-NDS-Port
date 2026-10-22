@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The head-up display, over the 3D picture as the game has it: health and
 // armour at the bottom left, what is in the gun and what is carried for it
 // at the bottom right, a crosshair in the middle. And the picture shown
@@ -128,5 +130,5 @@ namespace hlrt
         int health_ = 100, armor_ = 0, weapon_ = 0, clip_ = 0, spare_ = 0, extra_ = -1;
     };
 
-    extern HudDraw hudDraw;
+    HL_ENGINE_OBJECT(HudDraw, hudDraw);
 } // namespace hlrt

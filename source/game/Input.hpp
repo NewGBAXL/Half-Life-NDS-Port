@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The controls: what the buttons and the stylus mean is in
 // shared/HlControls.hpp (two layouts, either hand, and which of the pad and
 // the stylus turns and which moves); where things are on the touch screen is
@@ -36,5 +38,5 @@ namespace hlrt
         static inline bool pressureSeen_ = false;
     };
 
-    extern Input input;
+    HL_ENGINE_OBJECT(Input, input);
 } // namespace hlrt

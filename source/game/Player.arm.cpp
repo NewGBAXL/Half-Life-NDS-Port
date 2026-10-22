@@ -10,6 +10,7 @@
 #include "DebugLog.hpp"
 #include "data/LevelFile.hpp"
 #include "game/Game.hpp"
+#include "game/GameApi.hpp"
 #include "game/Input.hpp"
 #include "render/Camera.hpp"
 
@@ -210,7 +211,7 @@ namespace hlrt
                 viewLand(view, speed);
                 if (const int cost = fallDamage(speed))
                 {
-                    logicHurt(state, cost);
+                    gameApi.hurtPlayer(state, cost);
                     game.heard.add(CommonSound::FallPain, nullptr);
                 }
                 else if (speed > 290)

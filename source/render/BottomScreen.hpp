@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The touch screen while the game is played: a bar along the top (MENU,
 // USE, RELOAD), the framed aim pad with JUMP, the lamp and DUCK in a column
 // beside it, and a slot for each weapon along the bottom, with the game's
@@ -73,5 +75,5 @@ namespace hlrt
         bool iconsTried_ = false;
     };
 
-    extern BottomScreen bottomScreen;
+    HL_ENGINE_OBJECT(BottomScreen, bottomScreen);
 } // namespace hlrt

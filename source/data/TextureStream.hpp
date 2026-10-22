@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // Streaming a map's textures.
 //
 // A map cooked with --stream-textures has textures that are bigger than
@@ -95,5 +97,5 @@ namespace hlrt
         std::uint32_t blank_ = 0;
     };
 
-    extern TextureStream textureStream;
+    HL_ENGINE_OBJECT(TextureStream, textureStream);
 } // namespace hlrt

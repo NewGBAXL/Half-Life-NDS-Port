@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // What is heard: the map's sounds in memory, played through maxmod (by way
 // of NEA where NEA has the call), in layers.
 //
@@ -223,5 +225,5 @@ namespace hlrt
         bool musicHeld_ = false;
     };
 
-    extern Sound sound;
+    HL_ENGINE_OBJECT(Sound, sound);
 } // namespace hlrt

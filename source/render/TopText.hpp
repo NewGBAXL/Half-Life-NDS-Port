@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // What the game writes over the picture: a chapter's name, the names of the
 // introduction, the game's own title (the level's Messages: HlLevel.hpp).
 //
@@ -77,5 +79,5 @@ namespace hlrt
         void drawLogo(Slot &slot, int index);
     };
 
-    extern TopText topText;
+    HL_ENGINE_OBJECT(TopText, topText);
 } // namespace hlrt

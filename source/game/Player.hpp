@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EngineObject.hpp"
+
 // The player on the console: the shared movement code (HlPlayerMove.hpp) fed
 // from the DS's input, and the camera placed at its eyes.
 //
@@ -52,5 +54,5 @@ namespace hlrt
         void fly(int vblanks);
     };
 
-    extern Player player;
+    HL_ENGINE_OBJECT(Player, player);
 } // namespace hlrt
