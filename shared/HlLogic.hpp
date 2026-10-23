@@ -952,6 +952,15 @@ namespace hldata
             }
         }
 
+        /// What a brush on hinges is turned by at rest, before its hinge
+        /// turns it (the game's CRotDoor opens FROM its angles): extra[1..3],
+        /// pitch, yaw and roll. (0 from a converter before it was kept.)
+        inline void hingeRest(const LogicRecord &record, std::uint16_t *angles)
+        {
+            for (int a = 0; a < 3; ++a)
+                angles[a] = static_cast<std::uint16_t>(record.extra[1 + a]);
+        }
+
         inline void moverTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -989,11 +998,12 @@ namespace hldata
                 // Turned, not moved. A door that turns into the player does
                 // not shove them: it is blocked, and turns back.
                 const int axis = static_cast<int>(record.extra[0] % 3);
-                std::uint16_t angles[3] = {0, 0, 0};
+                std::uint16_t angles[3];
+                hingeRest(record, angles);
                 const std::uint16_t before = w.brushStates[record.brush].angles[axis];
                 // From the angle it rests at (state.bits), by its travel.
                 angles[axis] = static_cast<std::uint16_t>(
-                    state.bits +
+                    angles[axis] + state.bits +
                     static_cast<std::uint32_t>(
                         (static_cast<std::int64_t>(state.travel[0]) * phase) >> kFractionShift));
                 logicPlaceBrushTurned(w, record.brush, state.base, angles);
@@ -3443,8 +3453,9 @@ namespace hldata
                         state.base[a] = w.brushes[record.brush].origin[a];
                     state.bits = startOpen ? static_cast<std::uint16_t>(record.move[0]) : 0;
                     state.travel[0] = startOpen ? -record.move[0] : record.move[0];
-                    std::uint16_t angles[3] = {0, 0, 0};
-                    angles[record.extra[0] % 3] = static_cast<std::uint16_t>(state.bits);
+                    std::uint16_t angles[3];
+                    detail::hingeRest(record, angles);
+                    angles[record.extra[0] % 3] = static_cast<std::uint16_t>(angles[record.extra[0] % 3] + state.bits);
                     logicPlaceBrushTurned(w, record.brush, state.base, angles);
                 }
             }

@@ -95,6 +95,69 @@ namespace
               "way its \"angle\" says): drawn so, and solid so");
     }
 
+    /// A door on hinges starts turned as its map turns it (the game's
+    /// CRotDoor opens FROM its angles): c1a0's keypad, which flips out of
+    /// the console the scientist uses, and c1a0e's cover over the reactor's
+    /// motor button.
+    void testHinged(const char *dir)
+    {
+        // An entity's angles as the engine reads them: the last of "angle"
+        // and "angles" written.
+        Entity both;
+        both.pairs = {{"classname", "func_door_rotating"}, {"angles", "0 0 0"}, {"angle", "315"}};
+        Entity back;
+        back.pairs = {{"angle", "90"}, {"angles", "10 20 30"}};
+        double a[3], b[3];
+        entityAngles(both, a);
+        entityAngles(back, b);
+        check(a[0] == 0 && a[1] == 315 && a[2] == 0 && b[0] == 10 && b[1] == 20 && b[2] == 30,
+              "of \"angle\" and \"angles\", the one written last is what an entity is turned by");
+        struct Case
+        {
+            const char *map, *name;
+            int yaw, axis, swing;
+        };
+        for (const Case &c : {Case{"c1a0", "introroomgizmokeys", 315, kPitch, 185},
+                              Case{"c1a0e", "motor_button_cover", 45, kRoll, 160}})
+        {
+            const std::unique_ptr<Game> game = load(dir, c.map);
+            if (game == nullptr)
+            {
+                check(false, "the map with a hinged brush cooks");
+                continue;
+            }
+            const int name = nameOf(*game, c.name);
+            int at = -1;
+            for (int i = 0; i < game->logic.recordCount; ++i)
+            {
+                if (game->logic.records[i].name == name &&
+                    game->logic.records[i].kind == static_cast<std::uint8_t>(LogicKind::DoorRotating))
+                    at = i;
+            }
+            if (at < 0)
+            {
+                check(false, "the hinged brush is there");
+                continue;
+            }
+            const LogicRecord &record = game->logic.records[at];
+            const BrushState &brush = game->logic.brushStates[record.brush];
+            const auto turn = [](int degrees) { return static_cast<std::uint16_t>((degrees * 65536 / 360) & 0xFFFF); };
+            const bool rests = brush.angles[0] == 0 && brush.angles[1] == turn(c.yaw) && brush.angles[2] == 0;
+            logicUse(game->logic, game->player, at, -1, kUseToggle);
+            for (int t = 0; t < 120; ++t)
+                logicTick(game->logic, game->player, 33);
+            // (Both are "reverse direction": the swing is back, and the yaw
+            // they rest at is kept while they swing.)
+            const BrushState &open = game->logic.brushStates[record.brush];
+            const int swung = static_cast<std::int16_t>(open.angles[c.axis]);
+            const auto off = static_cast<std::int16_t>(open.angles[c.axis] - turn(-c.swing));
+            const bool opens = open.angles[kYaw] == turn(c.yaw) && std::abs(off) < 400;
+            std::printf("test_incident: %s's %s rests at yaw %d, swings %d on its hinge\n", c.map, c.name,
+                        brush.angles[1] * 360 / 65536, swung * 360 / 65536);
+            check(rests && opens, "a door on hinges rests turned as its map turns it, and swings from there");
+        }
+    }
+
     void testLift(const char *dir)
     {
         const std::unique_ptr<Game> game = load(dir, "c1a0b");
@@ -639,6 +702,7 @@ int main()
     if (dir != nullptr && dir[0] != '\0')
     {
         testTramDoor(dir);
+        testHinged(dir);
         testLift(dir);
         testFallingLift(dir);
         testValve(dir);

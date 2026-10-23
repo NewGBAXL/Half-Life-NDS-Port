@@ -10,6 +10,7 @@
 #include <cctype>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -741,11 +742,44 @@ namespace hlds
         }
     }
 
+    void entityAngles(const Entity &entity, double *out)
+    {
+        out[0] = out[1] = out[2] = 0;
+        for (const auto &[key, value] : entity.pairs)
+        {
+            double three[3];
+            if (key == "angles" && std::sscanf(value.c_str(), "%lf %lf %lf", &three[0], &three[1], &three[2]) == 3)
+            {
+                for (int a = 0; a < 3; ++a)
+                    out[a] = three[a];
+            }
+            else if (key == "angle")
+            {
+                out[0] = out[2] = 0;
+                out[1] = std::atof(value.c_str());
+            }
+        }
+    }
+
+    namespace
+    {
+        /// What a brush on hinges starts turned by (the game's CRotDoor
+        /// keeps its angles: it opens from them), as turns, in the record's
+        /// extra[1..3] (pitch, yaw, roll).
+        void turnedFrom(const Entity &entity, hldata::LogicRecord &record)
+        {
+            double angles[3];
+            entityAngles(entity, angles);
+            for (int a = 0; a < 3; ++a)
+                record.extra[1 + a] = static_cast<std::uint16_t>(
+                    static_cast<std::int32_t>(std::lround(std::remainder(angles[a], 360.0) * 65536.0 / 360.0)) & 0xFFFF);
+        }
+    } // namespace
+
     void moverDirection(const Entity &entity, double *out)
     {
-        double angles[3] = {0, 0, 0};
-        if (!entity.vec3("angles", angles))
-            angles[1] = numberKey(entity, "angle");
+        double angles[3];
+        entityAngles(entity, angles);
         out[0] = out[1] = out[2] = 0;
         if (angles[0] == 0 && angles[2] == 0 && angles[1] == -1)
         {
@@ -1212,6 +1246,7 @@ namespace hlds
                 // flags are named for the AXIS in the editor ("Z", "X") but
                 // choose an ANGLE: 64 is roll, 128 is pitch.
                 record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
+                turnedFrom(entity, record);
                 // Degrees, and degrees a second, as turns * 65536.
                 double distance = numberKey(entity, "distance", 90);
                 if (spawnflags & 2)
@@ -1248,6 +1283,7 @@ namespace hlds
                 record.kind = static_cast<std::uint8_t>(LogicKind::Button);
                 record.flags |= kLogicTurns;
                 record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
+                turnedFrom(entity, record);
                 double distance = numberKey(entity, "distance", 90);
                 if (spawnflags & 2)
                     distance = -distance;

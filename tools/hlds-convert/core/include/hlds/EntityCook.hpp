@@ -143,6 +143,11 @@ namespace hlds
     /// direction it moves in, the size of its brush and its "lip".
     void moverTravel(const double *direction, const double *size, double lip, double *out);
 
+    /// An entity's angles (pitch, yaw, roll; degrees) as the engine reads
+    /// them: "angle" N is (0, N, 0), and of it and "angles" the one written
+    /// last is what counts.
+    void entityAngles(const Entity &entity, double *out);
+
     /// The direction an entity's "angles" / "angle" key means for a mover: -1
     /// is up and -2 is down, anything else is a compass heading.
     void moverDirection(const Entity &entity, double *out);

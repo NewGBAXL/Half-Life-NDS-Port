@@ -61,6 +61,7 @@ bind 1 "weapon_rpg"
 bind 2 "weapon_gauss"
 bind 3 "weapon_egon"
 bind h "weapon_hornetgun"
+bind u "+use"
 bind m "give monster_zombie"
 crosshair 1
 cl_bob 0
