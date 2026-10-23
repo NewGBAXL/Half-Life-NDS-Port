@@ -38,7 +38,8 @@ namespace hldata
         // (A roach or a leech is a few pixels: the first to go, not an
         // enemy that never is.)
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cockroach) ||
-            actor.kind == static_cast<std::uint8_t>(ActorKind::Leech))
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Boid))
             return kDrawProp;
         if (fights(actor.kind))
             return dead ? kDrawProp : kDrawEnemy;

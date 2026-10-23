@@ -421,7 +421,10 @@ namespace hlrt
         }
 
         // What the player holds is always in view.
-        const ModelView *held = game.held.active && !player.noclip ? actorModel(actors, game.held) : nullptr;
+        // (Not while a gun's controls are in hand: the game's holstered weapon.)
+        const ModelView *held = game.held.active && !player.noclip && tankManned(game.logic) < 0
+                                    ? actorModel(actors, game.held)
+                                    : nullptr;
         // (The player's say: with model detail high, a step of pressure is
         // borne before any model is made coarser for it.)
         const int weight = modelDetailWeight(settings.graphics.modelDetail);
@@ -606,8 +609,36 @@ namespace hlrt
         for (int i = 0; i < kMaxProjectiles; ++i)
         {
             const Projectile &shot = actors.shots[i];
-            if (shot.active && shot.kind == kShotRocket && shot.sprite == 1)
+            if (shot.active && (shot.kind == kShotRocket || shot.kind == kShotRocketFoe) && shot.sprite == 1)
                 effectDraw.glow(shot.pos, 26, RGB15(31, 20, 6), 8);
+            // The nihilanth's balls: its zap, the one that takes the player
+            // away, and what it throws off dying.
+            else if (shot.active && shot.kind == kShotNihilZap)
+                effectDraw.glow(shot.pos, 31, RGB15(24, 28, 31), 16);
+            else if (shot.active && (shot.kind == kShotNihilPortal || shot.kind == kShotNihilGreen))
+                effectDraw.glow(shot.pos, 28, RGB15(8, 31, 8), shot.kind == kShotNihilPortal ? 24 : 10);
+        }
+        // ... and its spheres, going round it (`reach` of them), and, open,
+        // the light at its head (`mood`: HlAliens.hpp's nihilanth).
+        for (int i = 0; i < actors.count; ++i)
+        {
+            const ActorState &boss = actors.states[i];
+            if (!boss.active || boss.kind != static_cast<std::uint8_t>(ActorKind::Nihilanth))
+                continue;
+            const int spheres = boss.reach < 0 ? 0 : (boss.reach > 20 ? 20 : static_cast<int>(boss.reach));
+            for (int n = 0; n < spheres; ++n)
+            {
+                fx sine, cosine;
+                fxSinCos(static_cast<std::uint16_t>(Global::drawClock() * 400 + n * 65536 / 20), sine, cosine);
+                const fx at[3] = {boss.pos[0] + cosine * 360, boss.pos[1] + sine * 360,
+                                  boss.pos[2] + fxFromInt(240 + ((n & 3) - 2) * 40)};
+                effectDraw.glow(at, 28, RGB15(31, 28, 24), 12);
+            }
+            if (boss.mood >= 2)
+            {
+                const fx head[3] = {boss.pos[0], boss.pos[1], boss.pos[2] + fxFromInt(400)};
+                effectDraw.glow(head, 31, RGB15(31, 31, 31), 40);
+            }
         }
         // What the player has thrown or put down: few, small, and wanted
         // (a tripmine is a thing to see) -- in what room there is.
@@ -679,13 +710,14 @@ namespace hlrt
             fx sine, cosine;
             fxSinCos(actor.yaw, sine, cosine);
             fx turn[9] = {cosine, -sine, 0, sine, cosine, 0, 0, 0, kFxOne};
-            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+            std::int32_t tiltPitch = 0, tiltRoll = 0;
+            if (actorTilt(actor, tiltPitch, tiltRoll))
             {
-                // ... and, swimming, nosed up or down and rolled (HlAliens.hpp,
-                // icky): its forward, left and up are the columns.
+                // ... and, swimming or flying, nosed up or down and rolled
+                // (actorTilt): its forward, left and up are the columns.
                 fx sp, cp, sr, cr;
-                fxSinCos(static_cast<std::uint16_t>(actor.aimPitch), sp, cp);
-                fxSinCos(static_cast<std::uint16_t>(actor.aimYaw), sr, cr);
+                fxSinCos(static_cast<std::uint16_t>(tiltPitch), sp, cp);
+                fxSinCos(static_cast<std::uint16_t>(tiltRoll), sr, cr);
                 const fx forward[3] = {fxMul(cp, cosine), fxMul(cp, sine), sp};
                 const fx left0[3] = {-sine, cosine, 0};
                 const fx up0[3] = {-fxMul(sp, cosine), -fxMul(sp, sine), cp};

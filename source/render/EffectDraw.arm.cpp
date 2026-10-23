@@ -216,7 +216,7 @@ namespace hlrt
 
     void EffectDraw::glow(const fx *at, int alpha, std::uint16_t colour, int half)
     {
-        if (glowCount_ >= 8 || alpha < 1)
+        if (glowCount_ >= kMaxGlows || alpha < 1)
             return;
         Glow &g = glows_[glowCount_++];
         for (int k = 0; k < 3; ++k)
@@ -884,11 +884,13 @@ namespace hlrt
         // (Drawn as its model, where the map has one: ModelDraw. A tripmine's
         // beam is drawn here all the same.)
         const bool modelled = game.thrownModel(shot.kind) >= 0;
-        if (shot.kind == kShotSpit)
+        if (shot.kind == kShotSpit || shot.kind == kShotMommaSpit)
         {
+            // (Big momma's is a glob of it, five times the size.)
+            const int size = shot.kind == kShotMommaSpit ? 24 : 7;
             if (const SpriteRef *ref = sprite(CommonSprite::Spit, 31))
                 picture(*ref, static_cast<int>(Global::drawClock() / 4 % ref->frames), shot.pos, camera.right,
-                        camera.up, 7, 7);
+                        camera.up, size, size);
             else
             {
                 look(31, 0, RGB15(12, 28, 6));

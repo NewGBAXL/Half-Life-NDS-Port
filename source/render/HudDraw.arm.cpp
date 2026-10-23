@@ -624,7 +624,7 @@ namespace hlrt
         }
         // The crosshair, for what is aimed (unless the COMMAND line's
         // crosshair 0 took it away).
-        if (gun && game.crosshair)
+        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
             sprite(6, 128 - 16, 96 - 16, 0, 2, 0, 32, kBankWhite);
     }
 
@@ -749,7 +749,7 @@ namespace hlrt
             }
         }
         // The crosshair, for what is aimed.
-        if (gun && game.crosshair)
+        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
         {
             GFX_COLOR = 0x7FFF;
             picture(128 - kHudCrosshair.w / 2, 96 - kHudCrosshair.h / 2, kHudCrosshair);
@@ -925,7 +925,7 @@ namespace hlrt
         }
         // The crosshair, for what is aimed (unless the COMMAND line's
         // crosshair 0 took it away).
-        if (gun && game.crosshair)
+        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
             sprite(5, hudDs(kHud640CrosshairX) - 3, hudDs(kHud640CrosshairY) - 3, 0, 1, kCrosshairCell[0],
                    kCrosshairCell[1], kBankWhite);
     }
@@ -1050,7 +1050,7 @@ namespace hlrt
             }
         }
         // The crosshair, for what is aimed.
-        if (gun && game.crosshair)
+        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
         {
             GFX_COLOR = 0x7FFF;
             picture(hudDs(kHud640CrosshairX), hudDs(kHud640CrosshairY), kHud640Crosshair);

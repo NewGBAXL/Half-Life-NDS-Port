@@ -367,6 +367,32 @@ namespace hldata
         IckyDie,
         AssassinShot1,
         AssassinShot2,
+        // ... and round 5's (from level version 35: kCommonSoundsBefore35).
+        TentacleAlert,
+        TentacleSing,
+        TentacleStrike,
+        TentacleRoar,
+        TentacleSearch,
+        TentacleMove,
+        Flies,
+        Squirm,
+        ApacheRotor,
+        MommaAlert,
+        MommaPain,
+        MommaAttack,
+        MommaBirth,
+        MommaSack,
+        MommaDie,
+        MommaStep,
+        BeamStart,
+        NihilAttack,
+        NihilBall,
+        NihilRecharge,
+        NihilLaugh,
+        NihilPain,
+        NihilDie,
+        BoidIdle,
+        BoidAlert,
         Count
     };
     /// How many of these a map of level version 29 or before has.
@@ -379,6 +405,8 @@ namespace hldata
     inline constexpr std::uint16_t kCommonSoundsBefore33 = static_cast<std::uint16_t>(CommonSound::RoachWalk);
     /// ... and of version 33.
     inline constexpr std::uint16_t kCommonSoundsBefore34 = static_cast<std::uint16_t>(CommonSound::OspreyRotor);
+    /// ... and of version 34.
+    inline constexpr std::uint16_t kCommonSoundsBefore35 = static_cast<std::uint16_t>(CommonSound::TentacleAlert);
     /// How many of them a map of level version `version` has (its sounds
     /// after those are its own).
     inline constexpr std::uint16_t commonsOf(std::uint16_t version)
@@ -388,6 +416,7 @@ namespace hldata
                : version < 32 ? kCommonSoundsBefore32
                : version < 33 ? kCommonSoundsBefore33
                : version < 34 ? kCommonSoundsBefore34
+               : version < 35 ? kCommonSoundsBefore35
                               : static_cast<std::uint16_t>(CommonSound::Count);
     }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -468,7 +497,15 @@ namespace hldata
             "garg/gar_flamerun1.wav",   "garg/gar_flameoff1.wav",  "ichy/ichy_idle1.wav",
             "ichy/ichy_alert2.wav",     "ichy/ichy_attack1.wav",   "ichy/ichy_bite1.wav",
             "ichy/ichy_pain2.wav",      "ichy/ichy_die2.wav",      "weapons/pl_gun1.wav",
-            "weapons/pl_gun2.wav"};
+            "weapons/pl_gun2.wav",      "tentacle/te_alert1.wav",  "tentacle/te_sing1.wav",
+            "tentacle/te_strike1.wav",  "tentacle/te_roar1.wav",   "tentacle/te_search1.wav",
+            "tentacle/te_move1.wav",    "ambience/flies.wav",      "ambience/squirm2.wav",
+            "apache/ap_rotor2.wav",     "gonarch/gon_alert1.wav",  "gonarch/gon_pain2.wav",
+            "gonarch/gon_attack1.wav",  "gonarch/gon_birth1.wav",  "gonarch/gon_sack1.wav",
+            "gonarch/gon_die1.wav",     "gonarch/gon_step1.wav",   "debris/beamstart7.wav",
+            "x/x_attack1.wav",          "x/x_ballattack1.wav",     "x/x_recharge1.wav",
+            "x/x_laugh1.wav",           "x/x_pain1.wav",           "x/x_die1.wav",
+            "boid/boid_idle1.wav",      "boid/boid_alert1.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

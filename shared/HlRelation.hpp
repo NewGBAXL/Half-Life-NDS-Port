@@ -91,13 +91,17 @@ namespace hldata
         case ActorKind::Barnacle:
         case ActorKind::Gargantua:
         case ActorKind::Ichthyosaur:
+        case ActorKind::Tentacle:
+        case ActorKind::BigMomma:
             return kClassAlienMonster;
         case ActorKind::Slave:
         case ActorKind::AlienGrunt:
         case ActorKind::Controller:
+        case ActorKind::Nihilanth:
             return kClassAlienMilitary;
         case ActorKind::Cockroach:
         case ActorKind::Leech:
+        case ActorKind::Boid:
             return kClassInsect;
         case ActorKind::Snark: // (a maker's: the player's own is a shot, not an actor)
             return kClassAlienBioweapon;
@@ -110,6 +114,7 @@ namespace hldata
         case ActorKind::Sentry:
         case ActorKind::Turret:
         case ActorKind::Osprey:
+        case ActorKind::Apache:
             return kClassMachine;
         case ActorKind::Player:
             return kClassPlayer;

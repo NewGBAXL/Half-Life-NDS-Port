@@ -69,7 +69,11 @@ namespace hlds
                 "weapon_egon", "weapon_hornetgun", "weaponbox", "monster_cockroach", "monster_leech",
                 "monster_alien_grunt", "monster_alien_controller", "monster_snark", "monster_osprey",
                 "monster_gargantua", "monster_babycrab", "monster_hevsuit_dead",
-                "monster_human_assassin", "monster_ichthyosaur"};
+                "monster_human_assassin", "monster_ichthyosaur",
+                "func_tank", "func_tanklaser", "func_tankrocket", "func_tankmortar", "func_tankcontrols",
+                "func_mortar_field", "momentary_rot_button", "momentary_door", "monster_tentacle",
+                "monster_apache", "monster_bigmomma", "info_bigmomma", "monster_nihilanth",
+                "monster_flyer_flock", "monster_grunt_repel"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -176,6 +180,11 @@ namespace hlds
                 if (count > 0)
                     spare = std::min(spare, count);
             }
+            // A soldier who comes down a rope when told (CHGruntRepel): a
+            // soldier, with his rope's clips (below), not there until then.
+            const bool repel = cls == "monster_grunt_repel";
+            if (repel)
+                cls = "monster_human_grunt";
             // The campaign's suit is not an item_suit: it is a "world_items"
             // of type 45 (44 is a battery; the antidote and the security
             // card, 42 and 43, were never finished in the game either).
@@ -287,6 +296,8 @@ namespace hlds
                     clips.push_back("throwgrenade");
                 if (weapons & 4)
                     clips.push_back("launchgrenade");
+                if (repel)
+                    clips.insert(clips.end(), {"repel_repel", "repel_land"});
                 info = {true, ActorKind::Grunt, "models/hgrunt.mdl", clips, "idle1"};
             }
             else if (cls == "monster_tripmine")
@@ -311,6 +322,48 @@ namespace hlds
                         {"idle1", "run", "shoot", "jump", "fly_up", "fly_attack", "fly_down", "landfromjump",
                          "grenadethrow", "die_simple"},
                         "idle1"};
+            }
+            else if (cls == "monster_flyer_flock")
+            {
+                // (Its boids: cooked as many as it has, below.)
+                info = {true, ActorKind::Boid, "models/boid.mdl", {"idle"}, "idle"};
+                info.solid = false;
+            }
+            else if (cls == "monster_nihilanth")
+            {
+                // (Every clip its think plays by name.)
+                info = {true, ActorKind::Nihilanth, "models/nihilanth.mdl",
+                        {"float", "attack1", "attack2", "recharge", "float_open", "attack1_open", "attack2_open",
+                         "flinch1", "die1", "walk_u", "walk_d", "walk_r", "walk_l"},
+                        "float"};
+            }
+            else if (cls == "monster_bigmomma")
+            {
+                // (What her path's nodes have her play are added by name:
+                // collectModelNeeds.)
+                info = {true, ActorKind::BigMomma, "models/big_mom.mdl",
+                        {"idle1", "walk", "run", "death", "claw", "spawn", "mortar", "flinch", "jump"}, "idle1"};
+            }
+            else if (cls == "monster_apache")
+            {
+                info = {true, ActorKind::Apache, "models/apache.mdl", {"idle"}, "idle"};
+            }
+            else if (cls == "monster_tentacle")
+            {
+                // Every clip its think finds by the model's own graph of them
+                // (HlAliens.hpp's tentacle::kSeqs), and the map's scenes'.
+                info = {true, ActorKind::Tentacle, "models/tentacle2.mdl",
+                        {"pit_idle", "rise_to_temp1", "temp1_to_floor", "floor_idle", "floor_fidget_pissed",
+                         "floor_fidget_smallrise", "floor_fidget_wave", "floor_strike", "floor_tap", "floor_rotate",
+                         "floor_rear", "floor_rear_idle", "floor_to_lev1", "lev1_idle", "lev1_fidget_claw",
+                         "lev1_fidget_shake", "lev1_fidget_snap", "lev1_strike", "lev1_tap", "lev1_rotate",
+                         "lev1_rear", "lev1_rear_idle", "lev1_to_lev2", "lev2_idle", "lev2_fidget_shake",
+                         "lev2_fidget_tut", "lev2_strike", "lev2_tap", "lev2_rotate", "lev2_rear",
+                         "lev2_rear_idle", "lev2_to_lev3", "lev3_idle", "lev3_fidget_shake", "lev3_fidget_side",
+                         "lev3_strike", "lev3_tap", "lev3_rotate", "lev3_rear", "lev3_rear_idle",
+                         "lev3_to_engine", "engine_idle", "engine_sway", "engine_swat", "engine_bob",
+                         "engine_death1", "engine_death2", "engine_death3"},
+                        "pit_idle"};
             }
             else if (cls == "monster_ichthyosaur")
             {
@@ -419,7 +472,10 @@ namespace hlds
                 kActSignal2,       kActSignal3,       kActCower,         kActWalkHurt,     kActRunHurt,
                 kActBarnacleHit,   kActBarnaclePull,  kActBarnacleChomp, kActBarnacleChew, kActArm,
                 kActDisarm};
-            if (info.is && actorThinks(static_cast<std::uint8_t>(info.kind)) && info.kind != ActorKind::Generic)
+            // (Not the tentacle: what it plays is no activity the game's
+            // code knows; it is by name, all of it.)
+            if (info.is && actorThinks(static_cast<std::uint8_t>(info.kind)) && info.kind != ActorKind::Generic &&
+                info.kind != ActorKind::Tentacle && info.kind != ActorKind::Nihilanth)
             {
                 info.activities = true;
                 if (!isPersonKind(info.kind))
@@ -677,6 +733,52 @@ namespace hlds
             if (weapons & 4)
                 add(needOf("models/w_argrenade.mdl"), "idle");
         }
+        // ... and what a rocket tank fires: the RPG's rocket.
+        for (const Entity &entity : entities)
+        {
+            const std::string fires = lowered(entity.className());
+            if (fires == "func_tankrocket" || fires == "monster_apache")
+                needOf("models/rpgrocket.mdl").firstSequence = true;
+        }
+        // ... and what big momma plays at the nodes of her path, and the young
+        // she lays.
+        bool momma = false;
+        for (const Entity &entity : entities)
+            momma = momma || lowered(entity.className()) == "monster_bigmomma";
+        for (const Entity &entity : entities)
+        {
+            if (!momma || lowered(entity.className()) != "info_bigmomma")
+                continue;
+            ModelNeed &need = needOf("models/big_mom.mdl");
+            add(need, lowered(entity.value("presequence")));
+            add(need, lowered(entity.value("reachsequence")));
+        }
+        // ... and the friends a nihilanth calls up: as a map that has them
+        // would have them.
+        bool nihilanth = false;
+        for (const Entity &entity : entities)
+            nihilanth = nihilanth || lowered(entity.className()) == "monster_nihilanth";
+        if (nihilanth)
+        {
+            for (const char *cls : {"monster_alien_slave", "monster_alien_controller"})
+            {
+                Entity one;
+                one.pairs.emplace_back("classname", cls);
+                const ActorInfo info = actorOf(one);
+                ModelNeed &need = needOf(info.file);
+                need.activities = need.activities || info.activities;
+                addActivities(need, info.dsActivities);
+                for (const std::string &clip : info.clips)
+                    add(need, clip);
+            }
+        }
+        if (momma)
+        {
+            ModelNeed &crab = needOf("models/baby_headcrab.mdl");
+            // (By name: the headcrab's list of them, which hers is.)
+            for (const char *clip : {"idle1", "run", "walk", "jump", "flinch", "dieback"})
+                add(crab, clip);
+        }
         // ... and how soldiers come down from an osprey: on a rope.
         for (const Entity &entity : entities)
         {
@@ -882,6 +984,11 @@ namespace hlds
     {
         out = LogicCook();
         out.recordOfEntity.assign(entities.size(), -1);
+        // (A map with a nihilanth keeps its named info_targets: it goes by
+        // them, and the map takes them away.)
+        bool nihilanthMap = false;
+        for (const Entity &entity : entities)
+            nihilanthMap = nihilanthMap || entity.className() == "monster_nihilanth";
 
         // The sounds: the common ones first, at their fixed places, then
         // whatever the map names. A sound that loops and the same one played
@@ -1359,6 +1466,142 @@ namespace hlds
                     record.flags |= kLogicToggle;
                 if (spawnflags & kButtonTouchOnly)
                     record.flags |= kLogicTouch;
+            }
+            else if ((cls == "func_tank" || cls == "func_tanklaser" || cls == "func_tankrocket" ||
+                      cls == "func_tankmortar") &&
+                     brushRecordOfEntity[e] >= 0)
+            {
+                // A gun on a mount (the game's CFuncTank): its keys, packed
+                // (LogicKind::Tank says where).
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Tank);
+                double angles[3] = {0, 0, 0};
+                if (!entity.vec3("angles", angles))
+                    angles[1] = numberKey(entity, "angle");
+                auto turns = [](double degrees)
+                { return static_cast<std::uint32_t>(static_cast<std::uint16_t>(std::lround(degrees * 65536.0 / 360.0))); };
+                auto byte = [](double value) { return static_cast<std::uint32_t>(std::clamp(std::lround(value), 0L, 255L)); };
+                record.extra[0] = turns(angles[1]) | (turns(angles[0]) << 16);
+                record.extra[1] = byte(numberKey(entity, "yawrange")) | (byte(numberKey(entity, "pitchrange")) << 8) |
+                                  (byte(numberKey(entity, "yawtolerance")) << 16) |
+                                  (byte(numberKey(entity, "pitchtolerance")) << 24);
+                double rate = numberKey(entity, "firerate");
+                if (rate <= 0)
+                    rate = 1;
+                const int variant = cls == "func_tanklaser" ? kTankLaser
+                                    : cls == "func_tankrocket" ? kTankRocket
+                                    : cls == "func_tankmortar" ? kTankMortar
+                                                               : kTankGun;
+                int spread = static_cast<int>(numberKey(entity, "firespread"));
+                if (spread < 0 || spread > 4)
+                    spread = 0;
+                record.extra[2] = static_cast<std::uint32_t>(std::clamp(std::lround(rate * 16), 1L, 65535L)) |
+                                  (byte(numberKey(entity, "pitchrate")) << 16) |
+                                  (static_cast<std::uint32_t>(std::clamp(static_cast<int>(numberKey(entity, "bullet")), 0, 3)) << 24) |
+                                  (static_cast<std::uint32_t>(spread) << 26) | (static_cast<std::uint32_t>(variant) << 29);
+                record.extra[3] = static_cast<std::uint32_t>(std::clamp(millis(numberKey(entity, "persistence")), 0, 65535));
+                record.speed = fxFromDouble(numberKey(entity, "yawrate"));
+                record.move[0] = fxFromDouble(numberKey(entity, "barrel"));
+                record.move[1] = fxFromDouble(numberKey(entity, "barrely"));
+                record.move[2] = fxFromDouble(numberKey(entity, "barrelz"));
+                record.mins[0] = static_cast<std::int16_t>(std::clamp(numberKey(entity, "minRange"), 0.0, 32767.0));
+                record.mins[1] = static_cast<std::int16_t>(std::clamp(numberKey(entity, "maxRange"), 0.0, 32767.0));
+                record.mins[2] = static_cast<std::int16_t>(std::clamp(numberKey(entity, "iMagnitude"), 0.0, 32767.0));
+                record.maxs[0] = static_cast<std::int16_t>(spawnflags & 0x7FFF);
+                record.damage = static_cast<std::uint16_t>(std::clamp(numberKey(entity, "bullet_damage"), 0.0, 65535.0));
+                record.netName = nameId(entity.value("laserentity"));
+                if (spawnflags & kTankActive)
+                    record.flags |= kLogicStartOpen;
+            }
+            else if (cls == "info_target" && named && nihilanthMap)
+            {
+                // A place the nihilanth goes by (LogicKind::Target).
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Target);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+            }
+            else if (cls == "monster_grunt_repel")
+            {
+                // A soldier down a rope when told (LogicKind::Repel); his
+                // actor's place is filled in with the actors.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Repel);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+            }
+            else if (cls == "info_bigmomma")
+            {
+                // A place on big momma's path (LogicKind::MommaNode).
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::MommaNode);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+                record.extra[0] = static_cast<std::uint32_t>(std::clamp(numberKey(entity, "health"), 0.0, 30000.0));
+                record.extra[1] = static_cast<std::uint32_t>(std::clamp(numberKey(entity, "radius"), 0.0, 32767.0));
+                record.waitMs = millis(numberKey(entity, "reachdelay"));
+                record.extra[2] = nameId(entity.value("reachtarget"));
+                record.extra[3] = hashOf(lowered(entity.value("reachsequence")));
+                const std::uint32_t before = hashOf(lowered(entity.value("presequence")));
+                record.damage = static_cast<std::uint16_t>(before);
+                record.pad = static_cast<std::uint16_t>(before >> 16);
+                record.mins[0] = static_cast<std::int16_t>(spawnflags & 3);
+                double angles[3] = {0, 0, 0};
+                if (!entity.vec3("angles", angles))
+                    angles[1] = numberKey(entity, "angle");
+                record.maxs[0] = static_cast<std::int16_t>(std::lround(angles[1] * 65536.0 / 360.0));
+            }
+            else if ((cls == "func_tankcontrols" || cls == "func_mortar_field") && model != nullptr)
+            {
+                // Volumes: where a player takes a gun's controls; and where
+                // mortars fall on call.
+                make = true;
+                for (int a = 0; a < 3; ++a)
+                {
+                    record.mins[a] = static_cast<std::int16_t>(
+                        std::clamp(std::floor(model->mins[a] + origin[a]), -32768.0, 32767.0));
+                    record.maxs[a] = static_cast<std::int16_t>(
+                        std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
+                }
+                if (cls == "func_tankcontrols")
+                {
+                    record.kind = static_cast<std::uint8_t>(LogicKind::TankControls);
+                }
+                else
+                {
+                    record.kind = static_cast<std::uint8_t>(LogicKind::MortarField);
+                    record.extra[0] = static_cast<std::uint32_t>(std::clamp(static_cast<int>(numberKey(entity, "m_iCount")), 0, 32));
+                    record.extra[1] = static_cast<std::uint32_t>(std::clamp(numberKey(entity, "m_flSpread"), 0.0, 4096.0));
+                    record.extra[2] = static_cast<std::uint32_t>(std::clamp(static_cast<int>(numberKey(entity, "m_fControl")), 0, 2));
+                    record.extra[3] = static_cast<std::uint32_t>(nameId(entity.value("m_iszXController"))) |
+                                      (static_cast<std::uint32_t>(nameId(entity.value("m_iszYController"))) << 16);
+                }
+            }
+            else if (cls == "momentary_rot_button" && brushRecordOfEntity[e] >= 0)
+            {
+                // A wheel turned by hand: as a func_rot_button turns
+                // (CMomentaryRotButton), and what it targets goes with it.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::MomentaryButton);
+                record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
+                turnedFrom(entity, record);
+                double distance = numberKey(entity, "distance", 90);
+                if (spawnflags & 2)
+                    distance = -distance;
+                record.move[0] = static_cast<fx>(std::lround(distance * 65536.0 / 360.0));
+                double speed = numberKey(entity, "speed", 40);
+                if (speed <= 0)
+                    speed = 40;
+                record.speed = static_cast<fx>(std::lround(speed * 65536.0 / 360.0));
+            }
+            else if (cls == "momentary_door" && brushRecordOfEntity[e] >= 0)
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::MomentaryDoor);
+                record.speed = fxFromDouble(numberKey(entity, "speed", 100));
+                if (record.speed <= 0)
+                    record.speed = fxFromInt(100);
+                travel(numberKey(entity, "lip"));
             }
             else if (cls == "func_button")
             {
@@ -2456,9 +2699,21 @@ namespace hlds
                     sound.move = soundIndex("doors/doormove" + std::to_string(move) + ".wav", true);
                 sound.stop = numbered("doors/doorstop", static_cast<int>(numberKey(entity, "stopsnd")), 8);
             }
-            else if (cls == "func_button" || cls == "func_rot_button")
+            else if (cls == "func_button" || cls == "func_rot_button" || cls == "momentary_rot_button")
             {
                 sound.move = buttonSound(static_cast<int>(numberKey(entity, "sounds")));
+            }
+            else if (cls.rfind("func_tank", 0) == 0 && !entity.value("rotatesound").empty())
+            {
+                // What a tank sounds like for as long as it turns.
+                sound.move = soundIndex(std::string(entity.value("rotatesound")), true);
+            }
+            else if (cls == "func_mortar_field")
+            {
+                // The shells' whistle as they come, and where they land
+                // (mortar.cpp's).
+                sound.move = soundIndex("weapons/mortar.wav", false);
+                sound.stop = soundIndex("weapons/mortarhit.wav", false);
             }
             else if (cls == "func_rotating")
             {
@@ -2526,8 +2781,9 @@ namespace hlds
         // (In rounds, each after all of the one before: what each version of
         // the format added comes after everything that was there before it,
         // so an actor a save points at keeps its place -- the later items,
-        // then the last ones, then round 3's monsters, then round 4's.)
-        for (int round = 0; round < 5; ++round)
+        // then the last ones, then round 3's monsters, then round 4's, then
+        // round 5's.)
+        for (int round = 0; round < 6; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
@@ -2537,7 +2793,10 @@ namespace hlds
             // (Round 4's include the dead man in the suit, who is a pose.)
             const bool round4 = static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Osprey) ||
                                 lowered(entity.className()) == "monster_hevsuit_dead";
-            const int itemRound = round4 ? 4
+            const bool round5 = static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Tentacle) ||
+                                lowered(entity.className()) == "monster_grunt_repel";
+            const int itemRound = round5 ? 5
+                                  : round4 ? 4
                                   : info.item == ItemKind::None
                                       ? (static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Cockroach) ? 3 : 0)
                                   : static_cast<int>(info.item) >= static_cast<int>(kItemFirstLast) ? 2
@@ -2655,6 +2914,36 @@ namespace hlds
                 if (spawnflags & 128)
                     actor.flags |= kActorWaitScript;
             }
+            else if (info.kind == ActorKind::BigMomma)
+            {
+                // Her first node: the one her netname names (as a record).
+                const std::uint16_t first = nameId(entity.value("netname"));
+                actor.item = 0;
+                for (std::size_t r = 0; r < out.records.size() && first != 0; ++r)
+                {
+                    if (out.records[r].name == first &&
+                        out.records[r].kind == static_cast<std::uint8_t>(LogicKind::MommaNode))
+                    {
+                        actor.item = static_cast<std::uint32_t>(r) + 1;
+                        break;
+                    }
+                }
+                const int condition = std::clamp(static_cast<int>(numberKey(entity, "TriggerCondition")), 0, 15);
+                if (condition != 0)
+                    actor.target = nameId(entity.value("TriggerTarget"));
+            }
+            else if (info.kind == ActorKind::Apache)
+            {
+                // Where it flies first, as an osprey's; it waits to be
+                // switched on (the game's 4 or 64), and leaves no wreck (8).
+                const auto corner = cornerOfName.find(std::string(entity.value("target")));
+                actor.item = corner != cornerOfName.end() ? static_cast<std::uint32_t>(corner->second) + 1 : 0;
+                const int spawnflags = static_cast<int>(numberKey(entity, "spawnflags"));
+                if (spawnflags & (4 | 64))
+                    actor.flags |= kActorCeiling; // (apache::kActorWaitTrigger)
+                if (spawnflags & 8)
+                    actor.flags |= kActorAuto;
+            }
             else if (info.kind == ActorKind::Osprey)
             {
                 // Where it flies to first: the corner it targets (plus one;
@@ -2753,7 +3042,80 @@ namespace hlds
                 for (int n = 1; n < info.spare; ++n)
                     out.actors.push_back(actor);
             }
+            if (actorClass == "monster_grunt_repel")
+            {
+                // Kept for him, not there until his rope is used: his record
+                // (LogicKind::Repel) knows the place.
+                actor.flags |= kActorDormant;
+                actor.name = 0;
+                const int record = out.recordOfEntity[e];
+                if (record >= 0)
+                    out.records[record].extra[0] = static_cast<std::uint32_t>(out.actors.size());
+            }
+            if (info.kind == ActorKind::Boid)
+            {
+                // SpawnFlock: iFlockSize boids within flFlockRadius about it
+                // (by the map's own numbers, the same each cook), the first
+                // their leader -- the others know it by its number.
+                const int size = std::clamp(static_cast<int>(numberKey(entity, "iFlockSize", 8)), 1, 12);
+                const double radius = std::max(16.0, numberKey(entity, "flFlockRadius", 128));
+                const std::uint32_t leader = static_cast<std::uint32_t>(out.actors.size()) + 1;
+                std::uint32_t roll = static_cast<std::uint32_t>(e) * 2654435761u + 12345u;
+                auto next = [&]() { roll = roll * 1664525u + 1013904223u; return static_cast<double>(roll >> 8) / 16777216.0; };
+                for (int n = 0; n < size; ++n)
+                {
+                    ActorRecord one = actor;
+                    one.origin[0] = fxFromDouble(origin[0] + (next() * 2 - 1) * radius);
+                    one.origin[1] = fxFromDouble(origin[1] + (next() * 2 - 1) * radius);
+                    one.origin[2] = fxFromDouble(origin[2] + next() * 16);
+                    one.item = n == 0 ? 0 : leader;
+                    one.name = 0;
+                    one.target = 0;
+                    out.actors.push_back(one);
+                }
+                continue;
+            }
             out.actors.push_back(actor);
+            if (info.kind == ActorKind::Nihilanth)
+            {
+                // The places for its friends, after it (nihilanth::kFriends):
+                // three alien slaves, three controllers, not there until it
+                // calls them up.
+                const auto slave = std::find(models.begin(), models.end(), std::string("islave"));
+                const auto controller = std::find(models.begin(), models.end(), std::string("controller"));
+                for (int n = 0; slave != models.end() && controller != models.end() && n < 6; ++n)
+                {
+                    ActorRecord friendly = actor;
+                    friendly.model = static_cast<std::uint16_t>((n < 3 ? slave : controller) - models.begin());
+                    friendly.name = 0;
+                    friendly.kind = static_cast<std::uint8_t>(n < 3 ? ActorKind::Slave : ActorKind::Controller);
+                    friendly.clip = nameHash(n < 3 ? "idle1" : "float");
+                    friendly.flags = kActorSolid | kActorDormant;
+                    friendly.item = 0;
+                    friendly.target = 0;
+                    friendly.body = 0;
+                    out.actors.push_back(friendly);
+                }
+            }
+            if (info.kind == ActorKind::BigMomma)
+            {
+                // The places for her young, after her (momma::kChildren):
+                // baby crabs, not there until she lays them.
+                const auto crab = std::find(models.begin(), models.end(), std::string("baby_headcrab"));
+                for (int n = 0; crab != models.end() && n < 6; ++n)
+                {
+                    ActorRecord child = actor;
+                    child.model = static_cast<std::uint16_t>(crab - models.begin());
+                    child.name = 0;
+                    child.kind = static_cast<std::uint8_t>(ActorKind::BabyCrab);
+                    child.clip = nameHash("idle1");
+                    child.flags = kActorSolid | kActorDormant;
+                    child.item = 0;
+                    child.target = 0;
+                    child.body = 0;
+                    out.actors.push_back(child);
+                }
+            }
         }
         // (After everything else, so that no other actor is moved: what a
         // soldier drops when he dies -- his gun, and a launcher's grenades --
@@ -3011,6 +3373,31 @@ namespace hlds
                 use(CommonSound::AssassinShot1, CommonSound::AssassinShot2);
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
                 use(CommonSound::IckyIdle, CommonSound::IckyDie);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Tentacle))
+                use(CommonSound::TentacleAlert, CommonSound::Squirm);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Boid))
+                use(CommonSound::BoidIdle, CommonSound::BoidAlert);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Nihilanth))
+            {
+                use(CommonSound::BeamStart, CommonSound::NihilDie);
+                use(CommonSound::Electro4, CommonSound::Electro4);
+                use(CommonSound::SlaveAlert, CommonSound::SlaveDie);
+                use(CommonSound::ControllerIdle, CommonSound::ControllerDie);
+            }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::BigMomma))
+            {
+                use(CommonSound::MommaAlert, CommonSound::MommaStep);
+                use(CommonSound::ClawStrike, CommonSound::ClawMiss);
+                use(CommonSound::SpitHit, CommonSound::SpitHit);
+                use(CommonSound::HeadcrabAlert, CommonSound::HeadcrabBite);
+            }
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Apache))
+            {
+                use(CommonSound::ApacheRotor, CommonSound::ApacheRotor);
+                use(CommonSound::MortarHit, CommonSound::MortarHit);
+                use(CommonSound::TurretFire, CommonSound::TurretFire);
+                use(CommonSound::RocketFire, CommonSound::RocketFire);
+            }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Gargantua))
             {
                 use(CommonSound::GargIdle, CommonSound::GargFlameOff);

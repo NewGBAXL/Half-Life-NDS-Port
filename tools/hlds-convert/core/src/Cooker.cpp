@@ -798,9 +798,13 @@ namespace hlds
             for (const LogicRecord &rec : logic.records)
             {
                 const bool turns = rec.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) ||
-                                   rec.kind == static_cast<std::uint8_t>(LogicKind::Rotating);
+                                   rec.kind == static_cast<std::uint8_t>(LogicKind::Rotating) ||
+                                   rec.kind == static_cast<std::uint8_t>(LogicKind::MomentaryButton);
                 if (turns && rec.brush != kNoBrush && rec.extra[0] != kYaw)
                     level.brushes[rec.brush].flags |= kBrushTumbles;
+                // A gun on a mount tips up and down as it aims.
+                if (rec.kind == static_cast<std::uint8_t>(LogicKind::Tank) && rec.brush != kNoBrush)
+                    level.brushes[rec.brush].flags |= kBrushTumbles | kBrushHasPivot;
                 // A track train goes wherever its track does, and into the
                 // next map; a platform that turns as it sinks has a pivot.
                 if (rec.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) &&

@@ -306,6 +306,11 @@ namespace hldata
         {"monster_babycrab", ActorKind::BabyCrab},      {"babycrab", ActorKind::BabyCrab},
         {"monster_human_assassin", ActorKind::Assassin}, {"assassin", ActorKind::Assassin},
         {"monster_ichthyosaur", ActorKind::Ichthyosaur}, {"icky", ActorKind::Ichthyosaur},
+        {"monster_tentacle", ActorKind::Tentacle},      {"tentacle", ActorKind::Tentacle},
+        {"monster_apache", ActorKind::Apache},          {"apache", ActorKind::Apache},
+        {"monster_bigmomma", ActorKind::BigMomma},      {"bigmomma", ActorKind::BigMomma},
+        {"monster_nihilanth", ActorKind::Nihilanth},    {"nihilanth", ActorKind::Nihilanth},
+        {"monster_flyer", ActorKind::Boid},             {"boid", ActorKind::Boid},
     };
     /// ActorKind::Count if there is no such monster.
     inline ActorKind kindOfName(const char *name)

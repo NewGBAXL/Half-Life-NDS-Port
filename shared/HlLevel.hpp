@@ -52,14 +52,15 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 34;
+    inline constexpr std::uint16_t kLevelVersion = 35;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
     /// say, after the soldiers' table in Section::Speech, which a build
     /// before would refuse; 33: the round 3 monsters, kinds a build before
-    /// has not got; 34: round 4's, the same.)
-    inline constexpr std::uint16_t kLevelMinReader = 34;
+    /// has not got; 34: round 4's, the same; 35: round 5's, and the
+    /// tanks, mortar fields and wheels.)
+    inline constexpr std::uint16_t kLevelMinReader = 35;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -73,7 +74,10 @@ namespace hldata
     /// the nodes in the air (after those on the ground and in the water),
     /// 33 -> 34 the osprey, gargantua, ichthyosaur, assassin, baby crab and
     /// dead scientist in the suit (cooked after every other actor, as round
-    /// 3's are; their sounds after the others), none that a save points at.
+    /// 3's are; their sounds after the others), none that a save points at;
+    /// 34 -> 35 the tanks, mortar fields and wheels (records a map had none
+    /// for: a save of such a map is of other records, and is refused) and
+    /// round 5's monsters (after round 4's).
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
@@ -571,8 +575,72 @@ namespace hldata
         /// name id of who is spoken to (mins[2] 1: the player), maxs[0] the
         /// map's spawnflags (kSentence*). With no name it starts by itself.
         Sentence,
+        // From level version 35 (HlMonsters.hpp's tankTick and the rest).
+        /// A gun on a mount (func_tank, func_tanklaser, func_tankrocket,
+        /// func_tankmortar): a brush that turns about its origin to aim --
+        /// at the player, while it is on (kLogicStartOpen), or where a player
+        /// at its controls looks. `move` is its barrel (forward, right, up,
+        /// from the origin), `speed` how fast it turns about the vertical
+        /// (degrees a second); extra[0] how it rests (yaw, and pitch << 16:
+        /// turns, the brush's way, positive tipped down); extra[1] the
+        /// degrees it may turn either way and how near is near enough to
+        /// fire (yaw range, pitch range << 8, yaw tolerance << 16, pitch
+        /// tolerance << 24); extra[2] its rounds a second (sixteenths, low 16
+        /// bits), how fast it pitches (degrees a second << 16), its bullet
+        /// (kTankBullet* << 24), its spread (<< 26) and what it fires
+        /// (kTankGun... << 29); extra[3] how long it goes on firing at what
+        /// it has lost sight of (ms). mins[0], mins[1] the nearest and the
+        /// furthest it aims at (0: as far as it likes), mins[2] a mortar's
+        /// blast; maxs[0] the map's spawnflags (kTank*). `damage` a round's
+        /// (0: its bullet's own); netName a laser's env_laser; `target` is
+        /// fired at each shot (the map's sound of it).
+        Tank,
+        /// Where a player takes a tank's controls (func_tankcontrols): a
+        /// volume, mins..maxs; `target` names the tank. USE inside it takes
+        /// them, and again lets go.
+        TankControls,
+        /// Mortar fire on call (func_mortar_field): a volume, mins..maxs,
+        /// over which, used, extra[0] shells fall, two and a half seconds on
+        /// and a moment apart, extra[1] units about the spot -- chosen at
+        /// random (extra[2] 0), on whoever set it off (1), or by two wheels
+        /// across it (2: extra[3] the name ids of the one for x, and the one
+        /// for y << 16).
+        MortarField,
+        /// A wheel turned by hand (momentary_rot_button): as a func_rot_button
+        /// turns, extra[0] its axis and extra[1..3] how it rests; move[0] is
+        /// how far it goes (turns * 65536), `speed` how fast (the same a
+        /// second). Used, it turns, until used again or at the end; what it
+        /// targets (momentary_door) goes as far along as it is round.
+        MomentaryButton,
+        /// What a wheel moves (momentary_door): along `move`, at `speed`, to
+        /// as far as the wheel that targets it is round.
+        MomentaryDoor,
+        /// A place on big momma's path (info_bigmomma: HlAliens.hpp's momma),
+        /// at `move`: extra[0] the health she has from there (0: she goes on
+        /// at once), extra[1] how near is there (units), waitMs how long she
+        /// waits there, extra[2] the name id of what reaching it fires,
+        /// extra[3] the nameHash of the clip she plays there and damage | pad
+        /// << 16 of the one she plays on her way to it; mins[0] the map's
+        /// spawnflags (1 run, 2 wait there for good), maxs[0] the way to face
+        /// there (turns; 0: as she is); `target` names the next.
+        MommaNode,
+        /// A place with a name (info_target), where the map has a nihilanth
+        /// that goes by them (n_min, n_max, its rechargers): at `move`. Taken
+        /// away by a killtarget, it is not there.
+        Target,
+        /// A soldier who comes down a rope when told (monster_grunt_repel):
+        /// from `move`, into the actor place extra[0] (kept for him, not
+        /// there until then).
+        Repel,
         Count
     };
+    // A tank's spawnflags (LogicKind::Tank, maxs[0]): the game's.
+    inline constexpr int kTankActive = 0x0001;
+    inline constexpr int kTankLineOfSight = 0x0010;
+    inline constexpr int kTankCanControl = 0x0020;
+    // ... its bullet, and what it fires.
+    inline constexpr int kTankBulletNone = 0, kTankBullet9mm = 1, kTankBulletMp5 = 2, kTankBullet12mm = 3;
+    inline constexpr int kTankGun = 0, kTankLaser = 1, kTankRocket = 2, kTankMortar = 3;
     // What a scripted_sentence's spawnflags say (LogicKind::Sentence).
     inline constexpr std::int16_t kSentenceOnce = 1;       ///< said once, then gone
     inline constexpr std::int16_t kSentenceFollowers = 2;  ///< only by one following the player
@@ -782,6 +850,12 @@ namespace hldata
         BabyCrab,   ///< a monstermaker's small headcrab
         Assassin,   ///< the black-clad soldier: leaps, a silenced pistol
         Ichthyosaur, ///< swims its water, circles, charges and bites
+        // Round 5 (HlAliens.hpp, HlMilitary.hpp).
+        Tentacle,   ///< rises from its pit to strike at what it hears
+        Apache,     ///< the helicopter: a gun and rockets
+        BigMomma,   ///< the gonarch: walks her path, spits, lays crabs
+        Nihilanth,  ///< the last of them
+        Boid,       ///< one of a flock of flyers (monster_flyer_flock)
         Count
     };
 
@@ -819,6 +893,11 @@ namespace hldata
         case ActorKind::BabyCrab:
         case ActorKind::Assassin:
         case ActorKind::Ichthyosaur:
+        case ActorKind::Tentacle:
+        case ActorKind::Apache:
+        case ActorKind::BigMomma:
+        case ActorKind::Nihilanth:
+        case ActorKind::Boid:
             return true;
         default:
             return false;
@@ -1186,8 +1265,9 @@ namespace hldata
         /// Name id of what an item fires when it is taken, or a turret when
         /// it comes out, folds away or is destroyed; 0 = nothing.
         std::uint16_t target;
-        /// For an ActorKind::Item: its ItemKind. For an osprey: the corner
-        /// it flies to first, plus one (0: none), in the low 16 bits -- it
+        /// For an ActorKind::Item: its ItemKind. For an osprey or an apache: the corner
+        /// it flies to first, plus one (0: none), in the low 16 bits (for big
+        /// momma, her first MommaNode record, the same) -- it
         /// has one skin, and sets nothing off. For anything else: its
         /// skin in bits 8..15 (kActorSkinShift), and for a soldier which
         /// weapons he has in the low 8 (kGrunt*) and the name id of his

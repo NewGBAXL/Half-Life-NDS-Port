@@ -66,6 +66,8 @@ namespace hlrt
                 kind = hldata::kShotSnark;
             else if (kind == hldata::kShotHornetFoe)
                 kind = hldata::kShotHornet;
+            else if (kind == hldata::kShotRocketFoe)
+                kind = hldata::kShotRocket; // (a tank's: the RPG's rocket)
             return kind >= hldata::kShotBolt && kind <= hldata::kShotHornet ? thrown_[kind - hldata::kShotBolt] : -1;
         }
         bool lampLit = false;

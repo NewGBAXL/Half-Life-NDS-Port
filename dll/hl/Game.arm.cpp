@@ -641,8 +641,12 @@ namespace hlrt
                 // From the eyes, along the view as it was drawn last frame.
                 const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                    player.state.origin[2] + player.state.viewHeight};
-                const int target = logicFindUsable(logic, eye, camera.forward);
-                if (target >= 0)
+                // (At a gun's controls, USE takes them, or lets go.)
+                const int target = tankUse(logic, player.state) ? -2 : logicFindUsable(logic, eye, camera.forward);
+                if (target == -2)
+                {
+                }
+                else if (target >= 0)
                 {
                     logicUse(logic, player.state, target, -1, kUseSet);
                     netGame.used(target); // (a game between consoles: they are told)
@@ -776,10 +780,15 @@ namespace hlrt
             // to the weapon before or after.)
             const int pick = input.weaponPick != 0 ? weaponOfCategory(player.state, input.weaponPick)
                                                    : weaponStepped(player.state, input.weaponStep);
+            // At a gun's controls: the fire button is the gun's, and what is
+            // in hand is put away (the game's holstered weapon).
+            const bool manning = tankManned(logic) >= 0;
+            if (manning)
+                tankControl(logic, player.state, camera.yaw, camera.pitch, alive && input.attack, ms);
             const std::uint32_t did = netDid = weaponsTick(logic, player.state, weapon_, eye, camera.forward,
-                                                  camera.right, camera.up, alive && input.attack,
-                                                  false, ms, alive && input.second, alive ? pick : 0,
-                                                  alive && input.reloadPressed);
+                                                  camera.right, camera.up, alive && input.attack && !manning,
+                                                  false, ms, alive && input.second && !manning, alive && !manning ? pick : 0,
+                                                  alive && input.reloadPressed && !manning);
             // What has broken: its pieces, each a patch of the thing's
             // own texture, thrown from where it was.
             for (int n = 0; n < logic.brokeCount; ++n)

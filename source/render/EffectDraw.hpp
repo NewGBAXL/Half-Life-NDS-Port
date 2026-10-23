@@ -59,7 +59,8 @@ namespace hlrt
             std::uint16_t colour;
             std::uint8_t alpha, half;
         };
-        Glow glows_[8];
+        static constexpr int kMaxGlows = 40; ///< (the nihilanth's spheres are twenty of them)
+        Glow glows_[kMaxGlows];
         int glowCount_ = 0;
 
         static constexpr int kMaxItems = 96;

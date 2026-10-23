@@ -70,7 +70,11 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Snark) ||
                kind == static_cast<std::uint8_t>(ActorKind::Gargantua) ||
                kind == static_cast<std::uint8_t>(ActorKind::BabyCrab) ||
-               kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur);
+               kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Tentacle) ||
+               kind == static_cast<std::uint8_t>(ActorKind::BigMomma) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Nihilanth) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Boid);
     }
 
     inline bool isGrunt(std::uint8_t kind)
@@ -89,7 +93,8 @@ namespace hldata
     /// bleed.
     inline bool isMachine(std::uint8_t kind)
     {
-        return kind == static_cast<std::uint8_t>(ActorKind::Osprey);
+        return kind == static_cast<std::uint8_t>(ActorKind::Osprey) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Apache);
     }
     /// The military's assassins: they fight, and bleed red.
     inline bool isAssassin(std::uint8_t kind)
@@ -186,8 +191,26 @@ namespace hldata
         static const MonsterKind kAssassin = {50, false, fxFromInt(16), fxFromInt(72), fxFromInt(200),
                                               "idle1", "run", "idle1", "die_simple"};
         // (Its box is about its middle: targetBox.)
-        static const MonsterKind kIchthyosaur = {400, false, fxFromInt(32), fxFromInt(64), fxFromInt(150),
+        static const MonsterKind kIchthyosaur = {200, false, fxFromInt(32), fxFromInt(64), fxFromInt(150),
                                                  "swim", "swim", "smflinch", "die1"};
+        // (A tentacle is shot at up its stalk, as high as it reaches; its
+        // root is the game's box, 64 across.)
+        static const MonsterKind kTentacle = {75, false, fxFromInt(32), fxFromInt(640), 0,
+                                              "pit_idle", "pit_idle", "pit_idle", "pit_idle"};
+        // (The apache's box is the game's, 64 across and below where it is:
+        // targetBox.)
+        static const MonsterKind kApache = {250, false, fxFromInt(32), fxFromInt(64), 0, "idle", "idle", "idle", "idle"};
+        // (Big momma is shot at as the game's box, 190 across and high; she
+        // walks as something 64 across: monsterHull.)
+        static const MonsterKind kBigMomma = {225, false, fxFromInt(95), fxFromInt(190), fxFromInt(80),
+                                              "idle1", "walk", "flinch", "death"};
+        // (The nihilanth's box is the game's: 240 about, from 720 below
+        // where it is to 420 above -- targetBox.)
+        static const MonsterKind kNihilanth = {800, false, fxFromInt(240), fxFromInt(1140), 0, "float", "float",
+                                               "flinch1", "die1"};
+        // (A boid is a few units across in the game: a little more here,
+        // as the roach is.)
+        static const MonsterKind kBoid = {10, true, fxFromInt(8), fxFromInt(8), fxFromInt(125), "idle", "idle", "idle", "idle"};
         switch (static_cast<ActorKind>(kind))
         {
         case ActorKind::Cockroach:  return kCockroach;
@@ -200,6 +223,11 @@ namespace hldata
         case ActorKind::BabyCrab:   return kBabyCrab;
         case ActorKind::Assassin:   return kAssassin;
         case ActorKind::Ichthyosaur: return kIchthyosaur;
+        case ActorKind::Tentacle:   return kTentacle;
+        case ActorKind::Apache:     return kApache;
+        case ActorKind::BigMomma:   return kBigMomma;
+        case ActorKind::Nihilanth:  return kNihilanth;
+        case ActorKind::Boid:       return kBoid;
         default:                    break;
         }
         if (kind == static_cast<std::uint8_t>(ActorKind::Grunt))
@@ -252,7 +280,8 @@ namespace hldata
         if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid) ||
             kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt) ||
             kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
-            kind == static_cast<std::uint8_t>(ActorKind::Gargantua))
+            kind == static_cast<std::uint8_t>(ActorKind::Gargantua) ||
+            kind == static_cast<std::uint8_t>(ActorKind::BigMomma))
             return kWalkLarge;
         return monsterKind(kind).small ? kWalkCrouched : kWalkStanding;
     }
@@ -1153,6 +1182,59 @@ namespace hldata
             shot.sprite = static_cast<std::uint16_t>((faster > 0x7FFF ? 0x7FFF : faster) | hit);
         }
 
+        /// Big momma's mortar (CBMortar), a frame on: thrown, it falls; where
+        /// it meets the world, the player or anyone, it bursts, its acid
+        /// hurting all about (sk_bigmomma_dmg_blast, _radius_blast).
+        inline void mommaSpitTick(LogicWorld &w, PlayerState &player, Projectile &shot, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            shot.leftMs -= ms;
+            shot.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(player)) * ms) / 1000);
+            fx to[3];
+            for (int i = 0; i < 3; ++i)
+                to[i] = shot.pos[i] + static_cast<fx>((static_cast<std::int64_t>(shot.velocity[i]) * ms) / 1000);
+            const Shot line = traceShot(*w.world, shot.pos, to);
+            std::int64_t reach = line.fraction;
+            bool met = line.fraction < kFractionOne;
+            if (player.health > 0)
+            {
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx lo[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16), player.origin[2] - tall};
+                const fx hi[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16), player.origin[2] + tall};
+                std::int64_t enter;
+                if (lineEntersBox(shot.pos, to, lo, hi, enter) && enter < reach)
+                {
+                    reach = enter;
+                    met = true;
+                }
+            }
+            for (int i = 0; i < a.count; ++i)
+            {
+                const ActorState &actor = a.states[i];
+                if (!actor.active || actor.ai >= kAiDying || !canBeHurt(actor.kind) ||
+                    actor.kind == static_cast<std::uint8_t>(ActorKind::BigMomma) ||
+                    actor.kind == static_cast<std::uint8_t>(ActorKind::BabyCrab))
+                    continue;
+                fx lo[3], hi[3];
+                targetBox(actor, lo, hi);
+                std::int64_t enter;
+                if (lineEntersBox(shot.pos, to, lo, hi, enter) && enter < reach)
+                {
+                    reach = enter;
+                    met = true;
+                }
+            }
+            for (int i = 0; i < 3; ++i)
+                shot.pos[i] += static_cast<fx>((static_cast<std::int64_t>(to[i] - shot.pos[i]) * reach) >> kFractionShift);
+            if (!met && shot.leftMs > 0)
+                return;
+            shot.active = false;
+            effectAdd(a, kEffectSplat, shot.pos, nullptr, 48, 500);
+            if (w.heard != nullptr)
+                w.heard->add(CommonSound::SpitHit, shot.pos, 127, kRadiusMedium);
+            radiusDamage(w, player, shot.pos, 120, 250, -1, kDmgAcid, kAiNone);
+        }
+
         inline void projectilesTick(LogicWorld &w, PlayerState &player, int ms)
         {
             ActorWorld &a = *w.actors;
@@ -1236,6 +1318,13 @@ namespace hldata
                     stompTick(w, player, shot, ms);
                     continue;
                 }
+                if (shot.kind == kShotMommaSpit)
+                {
+                    mommaSpitTick(w, player, shot, ms);
+                    continue;
+                }
+                if (shot.kind == kShotNihilZap || shot.kind == kShotNihilPortal || shot.kind == kShotNihilGreen)
+                    continue; // (the nihilanth's own: HlAliens.hpp)
                 // (An armed mine keeps its beam's length there, not a time.)
                 if (!(shot.kind == kShotMine && shot.sprite == 1))
                     shot.leftMs -= ms;
@@ -1492,9 +1581,10 @@ namespace hldata
                         shot.pos[i] = t.startSolid ? shot.pos[i] : to[i];
                     continue;
                 }
-                if (shot.kind == kShotRocket || shot.kind == kShotHornet || shot.kind == kShotHornetFoe)
+                if (shot.kind == kShotRocket || shot.kind == kShotRocketFoe || shot.kind == kShotHornet ||
+                    shot.kind == kShotHornetFoe)
                 {
-                    const bool rocket = shot.kind == kShotRocket;
+                    const bool rocket = shot.kind == kShotRocket || shot.kind == kShotRocketFoe;
                     // (An alien grunt's: always homing, at 600 -- 800 for
                     // the orange kind, `sprite` 2 -- after the player and
                     // their side, never the aliens.)
@@ -1605,6 +1695,19 @@ namespace hldata
                         {
                             reach = enter;
                             struck = i;
+                        }
+                    }
+                    if (shot.kind == kShotRocketFoe && player.health > 0)
+                    {
+                        // (A tank's: the player is in its way too.)
+                        const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                        const fx lo[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16), player.origin[2] - tall};
+                        const fx hi[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16), player.origin[2] + tall};
+                        std::int64_t enter;
+                        if (lineEntersBox(shot.pos, to, lo, hi, enter) && enter < reach)
+                        {
+                            reach = enter;
+                            struck = a.count; // (the player: no actor of that number)
                         }
                     }
                     if (foe && player.health > 0 && playerTouchesBox(player, to, to, fxFromInt(4)))
@@ -2716,6 +2819,28 @@ namespace hldata
             maxs[2] = actor.pos[2] + fxFromInt(32);
             return;
         }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Nihilanth))
+        {
+            for (int i = 0; i < 2; ++i)
+            {
+                mins[i] = actor.pos[i] - kind.half;
+                maxs[i] = actor.pos[i] + kind.half;
+            }
+            mins[2] = actor.pos[2] - fxFromInt(720);
+            maxs[2] = actor.pos[2] + fxFromInt(420);
+            return;
+        }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Apache))
+        {
+            for (int i = 0; i < 2; ++i)
+            {
+                mins[i] = actor.pos[i] - kind.half;
+                maxs[i] = actor.pos[i] + kind.half;
+            }
+            mins[2] = actor.pos[2] - kind.height;
+            maxs[2] = actor.pos[2];
+            return;
+        }
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
         {
             for (int i = 0; i < 3; ++i)
@@ -2881,6 +3006,13 @@ namespace hldata
         return true;
     }
 
+    namespace detail
+    {
+        inline void tankTick(LogicWorld &w, PlayerState &player, int index, int ms);
+        inline void mortarTick(LogicWorld &w, PlayerState &player, int index, int ms);
+        inline void repelTick(LogicWorld &w, PlayerState &player, int index, int ms); // (HlMilitary.hpp)
+    }
+
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
     {
         if (w.actors == nullptr || w.world == nullptr)
@@ -2912,6 +3044,12 @@ namespace hldata
                 detail::makerTick(w, player, i, ms);
             else if (kind == LogicKind::HealthCharger || kind == LogicKind::SuitCharger)
                 detail::chargerTick(w, player, i, ms);
+            else if (kind == LogicKind::Tank)
+                detail::tankTick(w, player, i, ms);
+            else if (kind == LogicKind::MortarField)
+                detail::mortarTick(w, player, i, ms);
+            else if (kind == LogicKind::Repel)
+                detail::repelTick(w, player, i, ms);
         }
         for (int i = 0; i < a.count; ++i)
         {
@@ -3312,6 +3450,556 @@ namespace hldata
                          kRadiusMedium);
         }
         return false;
+    }
+
+    // ------------------------------------------------------- guns on mounts
+    //
+    // func_tank and its kinds (func_tank.cpp), the controls a player takes
+    // them by, and func_mortar_field (mortar.cpp). The gun is a brush that
+    // turns about its origin: LogicKind::Tank says what of the map's keys it
+    // keeps where. Its state: `bits` how it is turned now (yaw, and pitch <<
+    // 16, the brush's way: positive tipped down); `base` where it is;
+    // `travel` where it last saw what it aims at (m_sightOrigin) -- or, at a
+    // player's hands, the yaw and pitch they look at; `timer` the ms gathered
+    // towards its next round (-1: not firing -- the game's m_fireLast 0);
+    // `speed` the ms since it last saw its target (m_lastSightTime);
+    // `running` whether it is on; `phase` 1 while a player has it; `move`
+    // whether its turning sound is on. A TankControls' `bits` is the tank it
+    // drives, plus one, while it is taken, and its `base` where the player
+    // took it from.
+
+    namespace detail
+    {
+        inline std::uint16_t tankYaw(const LogicState &state) { return static_cast<std::uint16_t>(state.bits); }
+        inline std::uint16_t tankPitch(const LogicState &state) { return static_cast<std::uint16_t>(state.bits >> 16); }
+
+        /// Its forward, right and up, as it is turned.
+        inline void tankAxes(const LogicState &state, fx *forward, fx *right, fx *up)
+        {
+            fx sy, cy, sp, cp;
+            fxSinCos(tankYaw(state), sy, cy);
+            fxSinCos(tankPitch(state), sp, cp);
+            forward[0] = fxMul(cp, cy);
+            forward[1] = fxMul(cp, sy);
+            forward[2] = -sp; // (tipped down is positive)
+            right[0] = sy;
+            right[1] = -cy;
+            right[2] = 0;
+            up[0] = fxMul(sp, cy);
+            up[1] = fxMul(sp, sy);
+            up[2] = cp;
+        }
+
+        /// BarrelPosition: the end of its barrel, as it is turned.
+        inline void tankBarrel(const LogicWorld &w, int index, fx *at)
+        {
+            const LogicRecord &record = w.records[index];
+            const LogicState &state = w.states[index];
+            fx forward[3], right[3], up[3];
+            tankAxes(state, forward, right, up);
+            for (int a = 0; a < 3; ++a)
+                at[a] = state.base[a] + fxMul(forward[a], record.move[0]) + fxMul(right[a], record.move[1]) +
+                        fxMul(up[a], record.move[2]);
+        }
+
+        /// A round's damage by the kind of bullet (the game's monster
+        /// rounds at "normal"), unless the map gives its own.
+        inline int tankDamage(const LogicRecord &record)
+        {
+            if (record.damage != 0)
+                return record.damage;
+            switch ((record.extra[2] >> 24) & 3)
+            {
+            case kTankBullet9mm: return 5;   // sk_9mm_bullet
+            case kTankBulletMp5: return 4;   // sk_9mmAR_bullet
+            case kTankBullet12mm: return 10; // sk_12mm_bullet
+            default: return 0;
+            }
+        }
+
+        /// TankTrace's spread: the game's cones (none, then 0.025, 0.05,
+        /// 0.1 and 0.25), two throws added either way.
+        inline void tankAim(ActorWorld &a, const LogicRecord &record, const LogicState &state, fx *dir)
+        {
+            static constexpr fx kCones[5] = {0, 102, 205, 410, 1024};
+            const fx cone = kCones[((record.extra[2] >> 26) & 7) % 5];
+            fx forward[3], right[3], up[3];
+            tankAxes(state, forward, right, up);
+            const int x = static_cast<int>(chance(a) % 2049) - 1024 + static_cast<int>(chance(a) % 2049) - 1024;
+            const int y = static_cast<int>(chance(a) % 2049) - 1024 + static_cast<int>(chance(a) % 2049) - 1024;
+            for (int k = 0; k < 3; ++k)
+                dir[k] = forward[k] + static_cast<fx>((static_cast<std::int64_t>(right[k]) * x * cone +
+                                                       static_cast<std::int64_t>(up[k]) * y * cone) >> 22);
+            const fx length = fxLength(dir);
+            for (int k = 0; length > 0 && k < 3; ++k)
+                dir[k] = static_cast<fx>((static_cast<std::int64_t>(dir[k]) << kFxShift) / length);
+        }
+
+        /// One round of what it fires, from `barrel`, along where it points
+        /// (by its spread): a player's at its controls (`manned`) hurts
+        /// whatever it meets as the player's own shots do; one of its own
+        /// is after the player.
+        inline void tankShoot(LogicWorld &w, PlayerState &player, int index, const fx *barrel, bool manned)
+        {
+            const LogicRecord &record = w.records[index];
+            const LogicState &state = w.states[index];
+            ActorWorld &a = *w.actors;
+            const int variant = static_cast<int>((record.extra[2] >> 29) & 3);
+            fx dir[3];
+            tankAim(a, record, state, dir);
+            const fx far[3] = {barrel[0] + dir[0] * 4096, barrel[1] + dir[1] * 4096, barrel[2] + dir[2] * 4096};
+            if (variant == kTankRocket)
+            {
+                // rpg_rocket, as the gun points.
+                fx forward[3], right[3], up[3];
+                tankAxes(state, forward, right, up);
+                const fx velocity[3] = {forward[0] * 250, forward[1] * 250, forward[2] * 250};
+                projectileAdd(a, manned ? kShotRocket : kShotRocketFoe, barrel, velocity, 30000);
+                if (w.heard != nullptr)
+                    w.heard->add(CommonSound::RocketFire, barrel, 127, kRadiusLarge);
+                return;
+            }
+            // Where the line stops: the world, or the player.
+            const Shot wall = traceShot(*w.world, barrel, far);
+            std::int64_t reach = wall.fraction;
+            bool atPlayer = false;
+            if (!manned && player.health > 0)
+            {
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx lo[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16), player.origin[2] - tall};
+                const fx hi[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16), player.origin[2] + tall};
+                std::int64_t enter;
+                if (lineEntersBox(barrel, far, lo, hi, enter) && enter < reach)
+                {
+                    reach = enter;
+                    atPlayer = true;
+                }
+            }
+            fx end[3];
+            for (int k = 0; k < 3; ++k)
+                end[k] = barrel[k] + static_cast<fx>((static_cast<std::int64_t>(far[k] - barrel[k]) * reach) >> kFractionShift);
+            const fx gone[3] = {end[0] - barrel[0], end[1] - barrel[1], end[2] - barrel[2]};
+            const int range = fxToInt(fxLength(gone)) + 1;
+            if (variant == kTankMortar)
+            {
+                // A shell where the line meets something: the map's blast.
+                explodeAt(w, player, end, record.mins[2] > 0 ? record.mins[2] : 100, true, true, true);
+                return;
+            }
+            int damage = tankDamage(record);
+            std::uint16_t colour = 0;
+            if (variant == kTankLaser)
+            {
+                // Its env_laser, fired at where the line stops: as much as
+                // that does in a second, at once (FireAtPoint).
+                damage = 0;
+                for (int r = 0; r < w.recordCount && record.netName != 0; ++r)
+                {
+                    if (w.records[r].name == record.netName && w.records[r].kind == static_cast<std::uint8_t>(LogicKind::Beam))
+                    {
+                        damage = w.records[r].damage;
+                        colour = static_cast<std::uint16_t>(w.records[r].extra[2] & 0x7FFF); // (effectColour)
+                        break;
+                    }
+                }
+                Effect &beam = effectAdd(a, kEffectBeam, barrel, end, 4, 150);
+                beam.colour = colour != 0 ? colour : 0x7C1F;
+            }
+            else
+            {
+                effectAdd(a, kEffectTracer, barrel, end, 0, 60);
+            }
+            if (atPlayer)
+            {
+                if (damage > 0)
+                {
+                    playerHurt(player, damage, barrel);
+                    a.got |= kGotHurt;
+                }
+                return;
+            }
+            // Short of the player: whatever is in the way, or the wall.
+            if (damage > 0)
+                fireLine(w, player, barrel, dir, range + 8, damage, variant == kTankGun);
+        }
+
+        /// Fire: the rounds its rate has gathered since it began, each the
+        /// map's target (its sound) with it. The first frame of firing is
+        /// only a start (the game's m_fireLast 0).
+        inline void tankFire(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            const int rate = static_cast<int>(record.extra[2] & 0xFFFF); // (sixteenths a second)
+            if (state.timer < 0)
+            {
+                state.timer = 0;
+                return;
+            }
+            state.timer += ms;
+            const int each = rate > 0 ? 16000 / rate : 1000;
+            if (state.timer < each)
+                return;
+            fx barrel[3];
+            tankBarrel(w, index, barrel);
+            for (; state.timer >= each; state.timer -= each)
+                tankShoot(w, player, index, barrel, false);
+            effectAdd(*w.actors, kEffectMuzzle, barrel, nullptr, 0, 50);
+            logicUseTargets(w, player, index, kUseToggle, 0);
+        }
+
+        /// AdjustAnglesForBarrel: a barrel off to one side or up aims for
+        /// where its end will be.
+        inline void tankBarrelAdjust(const LogicRecord &record, fx distance, int &yaw, int &pitchUp)
+        {
+            const fx by = record.move[1], bz = record.move[2];
+            if (by == 0 && bz == 0)
+                return;
+            const fx d = distance - bz;
+            if (by != 0 && d > (by < 0 ? -by : by))
+            {
+                const std::int64_t rest = static_cast<std::int64_t>(d) * d - static_cast<std::int64_t>(by) * by;
+                yaw += static_cast<std::int16_t>(fxAtan2Turns(by, static_cast<fx>(isqrt64(static_cast<std::uint64_t>(rest)))));
+            }
+            if (bz != 0 && d > (bz < 0 ? -bz : bz))
+            {
+                const std::int64_t rest = static_cast<std::int64_t>(d) * d - static_cast<std::int64_t>(bz) * bz;
+                pitchUp += static_cast<std::int16_t>(fxAtan2Turns(-bz, static_cast<fx>(isqrt64(static_cast<std::uint64_t>(rest)))));
+            }
+        }
+
+        /// TrackTarget, each frame: turned towards the player while it is on
+        /// (or where the player at its controls looks), within how far it
+        /// goes and as fast as it turns; and, on target, firing.
+        inline void tankTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.brush == kNoBrush || state.dead)
+                return;
+            const bool manned = state.phase == 1;
+            auto rotSound = [&](bool on)
+            {
+                const bool was = state.move == MoveState::GoingUp;
+                if (on == was)
+                    return;
+                state.move = on ? MoveState::GoingUp : MoveState::AtBottom;
+                if (w.heard == nullptr || w.sounds == nullptr || w.sounds[index].move == kNoSound)
+                    return;
+                if (on)
+                    w.heard->add(w.sounds[index].move, state.base, 108, kRadiusMedium, kSoundLoopOn, 100,
+                                 static_cast<std::uint16_t>(index));
+                else
+                    w.heard->add(kNoSound, nullptr, 0, 0, kSoundLoopOff, 100, static_cast<std::uint16_t>(index));
+            };
+            if (!manned && !state.running)
+            {
+                rotSound(false);
+                return;
+            }
+            const auto restYaw = static_cast<std::uint16_t>(record.extra[0]);
+            const auto restPitch = static_cast<std::uint16_t>(record.extra[0] >> 16);
+            auto degrees = [](std::uint32_t byte) { return static_cast<int>(byte & 255) * 65536 / 360; };
+            const int yawRange = degrees(record.extra[1]), pitchRange = degrees(record.extra[1] >> 8);
+            const int yawTolerance = degrees(record.extra[1] >> 16), pitchTolerance = degrees(record.extra[1] >> 24);
+            const int yawRate = static_cast<int>((static_cast<std::int64_t>(record.speed) * 65536) / (360 * kFxOne));
+            const int pitchRate = degrees(record.extra[2] >> 16);
+            int wantYaw = 0, wantPitch = 0;
+            bool updateTime = false;
+            fx barrel[3];
+            tankBarrel(w, index, barrel);
+            fx distance = 0;
+            if (manned)
+            {
+                wantYaw = static_cast<std::uint16_t>(state.travel[0]);
+                wantPitch = static_cast<std::int16_t>(state.travel[1]);
+            }
+            else
+            {
+                if (player.health <= 0 || unseen(player))
+                {
+                    rotSound(false);
+                    state.timer = -1;
+                    return;
+                }
+                const fx eye[3] = {player.origin[0], player.origin[1], player.origin[2] + player.viewHeight};
+                const fx apart[3] = {eye[0] - barrel[0], eye[1] - barrel[1], eye[2] - barrel[2]};
+                const fx range = fxLength(apart);
+                if (range < fxFromInt(record.mins[0]) || (record.mins[1] > 0 && range > fxFromInt(record.mins[1])))
+                {
+                    rotSound(false);
+                    return;
+                }
+                if (traceShot(*w.world, barrel, eye).fraction >= kFractionOne)
+                {
+                    updateTime = true;
+                    for (int k = 0; k < 3; ++k)
+                        state.travel[k] = player.origin[k];
+                }
+                const fx d[3] = {state.travel[0] - state.base[0], state.travel[1] - state.base[1],
+                                 state.travel[2] - state.base[2]};
+                const fx flat[3] = {d[0], d[1], 0};
+                distance = fxLength(d);
+                wantYaw = fxAtan2Turns(d[1], d[0]);
+                int pitchUp = static_cast<std::int16_t>(fxAtan2Turns(d[2], fxLength(flat)));
+                tankBarrelAdjust(record, distance, wantYaw, pitchUp);
+                wantPitch = -pitchUp;
+            }
+            // Within its reach either way of how it rests.
+            int fromRest = static_cast<std::int16_t>(wantYaw - restYaw);
+            if (fromRest > yawRange || fromRest < -yawRange)
+            {
+                fromRest = fromRest > 0 ? yawRange : -yawRange;
+                updateTime = false; // (seen, but out of its reach)
+            }
+            if (updateTime)
+                state.speed = 0;
+            else if (state.speed < fxFromInt(30000))
+                state.speed += ms;
+            int pitchFromRest = static_cast<std::int16_t>(wantPitch - restPitch);
+            pitchFromRest = pitchFromRest > pitchRange ? pitchRange : (pitchFromRest < -pitchRange ? -pitchRange : pitchFromRest);
+            // Ten times the way still to go, a second, up to its rates.
+            const int distY = static_cast<std::int16_t>(restYaw + fromRest - tankYaw(state));
+            const int distX = static_cast<std::int16_t>(restPitch + pitchFromRest - tankPitch(state));
+            auto turn = [&](int dist, int rate)
+            {
+                std::int64_t v = static_cast<std::int64_t>(dist) * 10;
+                v = v > rate ? rate : (v < -rate ? -rate : v);
+                const std::int64_t step = v * ms / 1000;
+                return static_cast<int>(step == 0 && dist != 0 ? (dist > 0 ? 1 : -1) * (std::abs(dist) < 2 ? std::abs(dist) : 1) : step);
+            };
+            const int turnY = turn(distY, yawRate), turnX = turn(distX, pitchRate);
+            if (turnY != 0 || turnX != 0)
+            {
+                const std::uint16_t yaw = static_cast<std::uint16_t>(tankYaw(state) + turnY);
+                const std::uint16_t pitch = static_cast<std::uint16_t>(tankPitch(state) + turnX);
+                state.bits = yaw | (static_cast<std::uint32_t>(pitch) << 16);
+                const std::uint16_t angles[3] = {pitch, yaw, 0};
+                logicPlaceBrushTurned(w, record.brush, state.base, angles);
+            }
+            // (Its sound while it turns more than a degree a second.)
+            rotSound(std::abs(turnY) * 1000 > 182 * ms || std::abs(turnX) * 1000 > 182 * ms);
+            if (manned)
+                return;
+            // On target -- or, for one that fires at whatever it can see,
+            // at it -- for as long as it has seen it lately.
+            const bool canFire = state.speed < static_cast<fx>(record.extra[3]);
+            const bool los = (record.maxs[0] & kTankLineOfSight) != 0;
+            const bool onTarget = std::abs(distX) < pitchTolerance && std::abs(distY) < yawTolerance;
+            if (!canFire || !(onTarget || los))
+            {
+                state.timer = -1;
+                return;
+            }
+            bool fire = true;
+            if (los)
+            {
+                fx forward[3], right[3], up[3];
+                tankAxes(state, forward, right, up);
+                const fx reach = distance + fxFromInt(16);
+                const fx to[3] = {barrel[0] + fxMul(forward[0], reach), barrel[1] + fxMul(forward[1], reach),
+                                  barrel[2] + fxMul(forward[2], reach)};
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx lo[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16), player.origin[2] - tall};
+                const fx hi[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16), player.origin[2] + tall};
+                std::int64_t enter;
+                const Shot wall = traceShot(*w.world, barrel, to);
+                fire = lineEntersBox(barrel, to, lo, hi, enter) && enter <= wall.fraction;
+            }
+            if (fire)
+                tankFire(w, player, index, ms);
+            else
+                state.timer = -1;
+        }
+
+        /// A mortar field's shells, a frame on (CFuncMortarField::FieldUse
+        /// and CMortar): called in, the spot is chosen and the whistle heard;
+        /// two and a half seconds on, a shell at a time, each a moment after
+        /// the one before, each about the spot as far as its spread.
+        inline void mortarTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            ActorWorld &a = *w.actors;
+            auto random = [&](int lo, int hi) { return hi <= lo ? lo : lo + static_cast<int>(chance(a) % static_cast<std::uint32_t>(hi - lo + 1)); };
+            if (state.running)
+            {
+                state.running = false;
+                // Where: by chance within it; on who called it; or by its
+                // two wheels.
+                fx spot[3] = {fxFromInt(random(record.mins[0], record.maxs[0])),
+                              fxFromInt(random(record.mins[1], record.maxs[1])), fxFromInt(record.maxs[2])};
+                if (record.extra[2] == 1)
+                {
+                    spot[0] = state.base[0];
+                    spot[1] = state.base[1];
+                }
+                else if (record.extra[2] == 2)
+                {
+                    const std::uint16_t wheels[2] = {static_cast<std::uint16_t>(record.extra[3]),
+                                                     static_cast<std::uint16_t>(record.extra[3] >> 16)};
+                    for (int axis = 0; axis < 2; ++axis)
+                    {
+                        for (int r = 0; r < w.recordCount && wheels[axis] != 0; ++r)
+                        {
+                            if (w.records[r].name != wheels[axis])
+                                continue;
+                            const std::int64_t size = record.maxs[axis] - record.mins[axis];
+                            spot[axis] = fxFromInt(record.mins[axis]) +
+                                         static_cast<fx>((fxFromInt(1) * size * w.states[r].phase) >> 16);
+                            break;
+                        }
+                    }
+                }
+                for (int k = 0; k < 3; ++k)
+                    state.base[k] = spot[k];
+                state.phase = static_cast<std::int32_t>(record.extra[0]);
+                state.timer = 2500;
+                if (w.heard != nullptr && w.sounds != nullptr && w.sounds[index].move != kNoSound)
+                    w.heard->add(w.sounds[index].move, nullptr, 127, kRadiusEverywhere, 0, random(95, 124));
+                const fx below[3] = {spot[0], spot[1], spot[2] - fxFromInt(4096)};
+                const Shot ground = traceShot(*w.world, spot, below);
+                fx landing[3];
+                for (int k = 0; k < 3; ++k)
+                    landing[k] = spot[k] + static_cast<fx>((static_cast<std::int64_t>(below[k] - spot[k]) * ground.fraction) >> kFractionShift);
+                aiSound(a, kSoundDanger, landing, 400, 300);
+            }
+            if (state.phase <= 0)
+                return;
+            state.timer -= ms;
+            while (state.timer <= 0 && state.phase > 0)
+            {
+                const int spread = static_cast<int>(record.extra[1]);
+                const fx from[3] = {state.base[0] + fxFromInt(random(-spread, spread)),
+                                    state.base[1] + fxFromInt(random(-spread, spread)), state.base[2]};
+                const fx below[3] = {from[0], from[1], from[2] - fxFromInt(4096)};
+                const Shot ground = traceShot(*w.world, from, below);
+                fx at[3];
+                for (int k = 0; k < 3; ++k)
+                    at[k] = from[k] + static_cast<fx>((static_cast<std::int64_t>(below[k] - from[k]) * ground.fraction) >> kFractionShift);
+                // MortarExplode: its streak of light from the sky, and a
+                // blast of 200.
+                const fx sky[3] = {at[0], at[1], at[2] + fxFromInt(1024)};
+                Effect &streak = effectAdd(a, kEffectBeam, at, sky, 4, 120);
+                streak.colour = 0x3A9F; // (255, 160, 100)
+                at[2] += fxFromInt(8);
+                explodeAt(w, player, at, 200, true, true, true);
+                if (w.heard != nullptr && w.sounds != nullptr && w.sounds[index].stop != kNoSound)
+                    w.heard->add(w.sounds[index].stop, at, 127, kRadiusLarge, 0, random(95, 124));
+                --state.phase;
+                state.timer += random(200, 500);
+            }
+        }
+    } // namespace detail
+
+    /// The tank a player has at its controls, or -1.
+    inline int tankManned(const LogicWorld &w)
+    {
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::TankControls) && w.states[i].bits != 0)
+                return static_cast<int>(w.states[i].bits) - 1;
+        }
+        return -1;
+    }
+
+    /// Let go of the controls, if a player has any.
+    inline void tankRelease(LogicWorld &w)
+    {
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            LogicState &controls = w.states[i];
+            if (w.records[i].kind != static_cast<std::uint8_t>(LogicKind::TankControls) || controls.bits == 0)
+                continue;
+            const int tank = static_cast<int>(controls.bits) - 1;
+            controls.bits = 0;
+            if (tank >= 0 && tank < w.recordCount)
+            {
+                w.states[tank].phase = 0;
+                w.states[tank].timer = -1;
+            }
+        }
+    }
+
+    /// USE: at a tank's controls, take them (StartControl) -- or, having
+    /// them, let go (StopControl). False if neither: USE is something
+    /// else's.
+    inline bool tankUse(LogicWorld &w, const PlayerState &player)
+    {
+        if (tankManned(w) >= 0)
+        {
+            tankRelease(w);
+            return true;
+        }
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::TankControls) || w.states[i].dead)
+                continue;
+            const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]), fxFromInt(record.mins[2])};
+            const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]), fxFromInt(record.maxs[2])};
+            if (!detail::playerTouchesBox(player, mins, maxs, 0))
+                continue;
+            for (int t = 0; t < w.recordCount && record.target != 0; ++t)
+            {
+                const LogicRecord &tank = w.records[t];
+                if (tank.name != record.target || tank.kind != static_cast<std::uint8_t>(LogicKind::Tank) ||
+                    !(tank.maxs[0] & kTankCanControl) || w.states[t].dead || !logicMasterAllows(w, t))
+                    continue;
+                w.states[i].bits = static_cast<std::uint32_t>(t) + 1;
+                for (int a = 0; a < 3; ++a)
+                    w.states[i].base[a] = player.origin[a];
+                LogicState &state = w.states[t];
+                state.phase = 1;
+                state.timer = 0;
+                state.travel[0] = static_cast<fx>(detail::tankYaw(state));
+                state.travel[1] = static_cast<std::int16_t>(detail::tankPitch(state));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// A frame of the player at a tank's controls (ControllerPostFrame,
+    /// and TrackTarget's part of it): it turns to where they look, and fires
+    /// while they hold fire, at its rate. They let go of it by going more
+    /// than 30 units from where they took it, or by dying.
+    inline void tankControl(LogicWorld &w, PlayerState &player, std::uint16_t viewYaw, std::int16_t viewPitch,
+                            bool attack, int ms)
+    {
+        int controls = -1;
+        for (int i = 0; i < w.recordCount && controls < 0; ++i)
+        {
+            if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::TankControls) && w.states[i].bits != 0)
+                controls = i;
+        }
+        if (controls < 0)
+            return;
+        const int tank = static_cast<int>(w.states[controls].bits) - 1;
+        const fx moved[3] = {player.origin[0] - w.states[controls].base[0], player.origin[1] - w.states[controls].base[1],
+                             player.origin[2] - w.states[controls].base[2]};
+        if (player.health <= 0 || fxLength(moved) >= fxFromInt(30) || tank < 0 || tank >= w.recordCount ||
+            w.states[tank].dead)
+        {
+            tankRelease(w);
+            return;
+        }
+        LogicState &state = w.states[tank];
+        state.travel[0] = viewYaw;
+        state.travel[1] = -viewPitch; // (the view looks up positive; the gun tips down positive)
+        if (state.timer > 0)
+            state.timer -= ms;
+        if (!attack || state.timer > 0)
+            return;
+        const LogicRecord &record = w.records[tank];
+        const int rate = static_cast<int>(record.extra[2] & 0xFFFF);
+        state.timer = rate > 0 ? 16000 / rate : 1000;
+        fx barrel[3];
+        detail::tankBarrel(w, tank, barrel);
+        detail::tankShoot(w, player, tank, barrel, true);
+        effectAdd(*w.actors, kEffectMuzzle, barrel, nullptr, 0, 50);
+        aiWeaponVolume(w, kLoudGunVolume);
+        logicUseTargets(w, player, tank, kUseToggle, 0);
     }
 
     /// The next weapon the player has after the one in hand; kWeaponNone if

@@ -2901,6 +2901,60 @@ namespace hldata
             logicPlaceBrushTurned(w, record.brush, state.base, angles);
         }
 
+        /// A wheel turned by hand, a frame on: round at its speed, to its end;
+        /// what it targets (a momentary_door) is told how far round it is.
+        inline void momentaryTick(LogicWorld &w, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.brush == kNoBrush || !state.running)
+                return;
+            const std::int64_t distance = record.move[0] < 0 ? -record.move[0] : record.move[0];
+            if (distance == 0)
+            {
+                state.running = false;
+                return;
+            }
+            const std::int64_t step = (static_cast<std::int64_t>(record.speed) * ms * 65536) / (1000 * distance);
+            std::int64_t at = state.phase + (state.speed < 0 ? -step : step);
+            if (at <= 0 || at >= 65536)
+            {
+                at = at <= 0 ? 0 : 65536;
+                state.running = false;
+            }
+            state.phase = static_cast<std::int32_t>(at);
+            std::uint16_t angles[3];
+            hingeRest(record, angles);
+            const int axis = static_cast<int>(record.extra[0] % 3);
+            angles[axis] = static_cast<std::uint16_t>(angles[axis] + ((static_cast<std::int64_t>(record.move[0]) * at) >> 16));
+            logicPlaceBrushTurned(w, record.brush, state.base, angles);
+            for (int r = 0; r < w.recordCount && record.target != 0; ++r)
+            {
+                if (w.records[r].name == record.target &&
+                    w.records[r].kind == static_cast<std::uint8_t>(LogicKind::MomentaryDoor))
+                    w.states[r].timer = state.phase;
+            }
+        }
+
+        /// What a wheel moves, a frame on: towards as far along as the wheel
+        /// is round (`timer`), at its speed.
+        inline void momentaryDoorTick(LogicWorld &w, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.brush == kNoBrush || state.phase == state.timer)
+                return;
+            const fx length = fxLength(record.move);
+            const std::int64_t step =
+                length > 0 ? (static_cast<std::int64_t>(record.speed) * ms * 65536) / (static_cast<std::int64_t>(length) * 1000) : 65536;
+            const std::int64_t d = static_cast<std::int64_t>(state.timer) - state.phase;
+            state.phase = static_cast<std::int32_t>(d > step ? state.phase + step : (d < -step ? state.phase - step : state.timer));
+            fx pos[3];
+            for (int a = 0; a < 3; ++a)
+                pos[a] = state.base[a] + static_cast<fx>((static_cast<std::int64_t>(record.move[a]) * state.phase) >> 16);
+            logicMoveBrushTo(w, record.brush, pos);
+        }
+
         inline void rotatingTick(LogicWorld &w, const PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -3178,6 +3232,48 @@ namespace hldata
             }
             break;
 
+        case LogicKind::Tank:
+            // One that is not for a player's hands is switched on and off;
+            // one that is, is taken at its controls (tankUse, HlMonsters.hpp).
+            if (!(record.maxs[0] & kTankCanControl))
+            {
+                const bool on = useType == kUseToggle ? !state.running : useType != kUseOff;
+                state.running = on;
+                state.timer = -1;
+            }
+            break;
+
+        case LogicKind::Repel:
+            // His rope (HlMilitary.hpp's repelTick), once.
+            state.running = true;
+            break;
+
+        case LogicKind::MortarField:
+            // Called in: the shells are on their way (mortarTick), on
+            // whoever called them if that is how it aims.
+            state.running = true;
+            for (int a = 0; a < 3; ++a)
+                state.base[a] = player.origin[a];
+            break;
+
+        case LogicKind::MomentaryButton:
+            // Turned while it is held in the game; here, from one USE to the
+            // next -- or to its end, and back from there the next time.
+            if (state.running)
+            {
+                state.running = false;
+            }
+            else
+            {
+                if (state.phase >= 65536)
+                    state.speed = -1;
+                else if (state.phase <= 0)
+                    state.speed = 1;
+                state.running = true;
+                detail::recordSound(w, index, false);
+            }
+            break;
+
         case LogicKind::ChangeLevel:
             // Its own targets first, as the game does; then the map changes
             // -- at the end of this frame, by the caller.
@@ -3438,6 +3534,44 @@ namespace hldata
                     }
                 }
             }
+            else if (record.kind == static_cast<std::uint8_t>(LogicKind::Tank))
+            {
+                // A gun on a mount rests turned as the map has it (its brush
+                // is built pointing along x), on, or waiting to be, and has
+                // not fired (`timer` -1: the game's m_fireLast 0).
+                state.running = (record.flags & kLogicStartOpen) != 0;
+                state.timer = -1;
+                state.bits = record.extra[0];
+                if (record.brush != kNoBrush)
+                {
+                    for (int a = 0; a < 3; ++a)
+                        state.base[a] = w.brushes[record.brush].origin[a];
+                    const std::uint16_t angles[3] = {static_cast<std::uint16_t>(state.bits >> 16),
+                                                     static_cast<std::uint16_t>(state.bits), 0};
+                    logicPlaceBrushTurned(w, record.brush, state.base, angles);
+                }
+            }
+            else if (record.kind == static_cast<std::uint8_t>(LogicKind::MomentaryButton) ||
+                     record.kind == static_cast<std::uint8_t>(LogicKind::MomentaryDoor))
+            {
+                // A wheel, and what it moves: where they were built, none of
+                // the way round (`phase`, 0..65536); which way a wheel will go
+                // when it is next used (`speed`, 1 on, -1 back); and where a
+                // door is to go (`timer`).
+                state.speed = 1;
+                state.timer = 0;
+                if (record.brush != kNoBrush)
+                {
+                    for (int a = 0; a < 3; ++a)
+                        state.base[a] = w.brushes[record.brush].origin[a];
+                    if (record.kind == static_cast<std::uint8_t>(LogicKind::MomentaryButton))
+                    {
+                        std::uint16_t angles[3];
+                        detail::hingeRest(record, angles);
+                        logicPlaceBrushTurned(w, record.brush, state.base, angles);
+                    }
+                }
+            }
             else if (record.kind == static_cast<std::uint8_t>(LogicKind::DoorRotating) ||
                      (record.kind == static_cast<std::uint8_t>(LogicKind::Button) && (record.flags & kLogicTurns)))
             {
@@ -3666,8 +3800,11 @@ namespace hldata
             const auto kind = static_cast<LogicKind>(record.kind);
 
             // 2. Whatever it was waiting to do. (A box's timer is not one: it
-            //    is the damage it has taken.)
-            if (state.timer >= 0 && kind != LogicKind::Pushable && kind != LogicKind::Script)
+            //    is the damage it has taken; nor a gun's, its rounds' time,
+            //    a mortar field's, its shells', nor a wheel's door's, where it
+            //    is to go.)
+            if (state.timer >= 0 && kind != LogicKind::Pushable && kind != LogicKind::Script &&
+                kind != LogicKind::Tank && kind != LogicKind::MortarField && kind != LogicKind::MomentaryDoor)
             {
                 state.timer -= ms;
                 if (state.timer < 0)
@@ -3731,6 +3868,10 @@ namespace hldata
                 detail::trackTrainTick(w, player, i, ms);
             else if (kind == LogicKind::TrackChange)
                 detail::trackChangeTick(w, player, i, ms);
+            else if (kind == LogicKind::MomentaryButton)
+                detail::momentaryTick(w, i, ms);
+            else if (kind == LogicKind::MomentaryDoor)
+                detail::momentaryDoorTick(w, i, ms);
 
             // 4. The player walking into things.
             if (kind == LogicKind::Breakable && record.brush != kNoBrush && !state.dead)
@@ -3967,6 +4108,7 @@ namespace hldata
                 toStrike ? (detail::isBreakable(record) && !(record.flags & kLogicTriggerOnly) &&
                             record.extra[1] != 7)
                          : ((kind == LogicKind::Button && !(record.flags & kLogicTouch)) ||
+                            kind == LogicKind::MomentaryButton ||
                             kind == LogicKind::HealthCharger || kind == LogicKind::SuitCharger ||
                             ((kind == LogicKind::Door || kind == LogicKind::DoorRotating) &&
                              (record.flags & kLogicUseOnly)));

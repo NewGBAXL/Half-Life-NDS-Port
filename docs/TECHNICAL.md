@@ -242,6 +242,30 @@ Milestone 11, "levels of detail".
   and runs for cover (it is cloaked only at the game's hard skill, which
   this port is not). The baby crab is a smaller, weaker headcrab that leaps
   from closer; the dead in their suits lie as the game poses them.
+- Round 5, the rest of them (`test_bosses`, `test_tanks`). The tentacle
+  rises out of its pit to the height of what it hears and strikes there,
+  finding its way between its many clips by the model's own graph of them;
+  shooting only sends it back down, and the map puts it down. The apache
+  flies by its rotor's lift and its tipping, as the game's does, along its
+  corners and at the player, with its gun and its rockets in pairs, drawn
+  pitched and banked. Big momma walks her path of nodes, given new health at
+  each (hurt to nothing she goes on to the next), slashes, spits acid from
+  afar and lays baby crabs. The nihilanth floats between the map's heights
+  with its twenty spheres about it, which heal it, and goes back to its
+  crystals for more; it zaps, throws the ball that takes the player away to
+  the map's next arena, calls up slaves and controllers, and is hurt to its
+  death only in its head once its crystals are gone and it has opened. The
+  flocks of flyers keep together behind a leader that steers off the walls.
+  A soldier told to comes down a rope (monster_grunt_repel), as the
+  osprey's do.
+- Guns on mounts (func_tank, and its laser, rocket and mortar kinds): they
+  turn to the player within their reach and at their rates, and fire on
+  target for as long as they have lately seen them. At a func_tankcontrols,
+  USE takes a gun: it follows the view, fires at the fire button (the
+  player's own weapon put away, the crosshair kept), and is let go of by USE
+  or by walking off. Mortar fields drop their shells on whoever calls them,
+  at random, or where two wheels (momentary_rot_button, which turn from one
+  USE to the next, and the momentary_door bars they move) say.
 - A hit to the head counts three times, as in the game. Where a shot lands
   is found on the model's own hit boxes, posed as the monster stands; a shot
   that goes through its outline but between the boxes still counts, as a
@@ -802,10 +826,8 @@ the game's code left in the program.
 
 ## Not yet
 
-Friends who follow and talk; the rest of the game's weapons; the
-tentacle, the apache, the big momma, the Nihilanth, the flocks of flyers,
-`monster_grunt_repel` (soldiers come down ropes from an osprey only) and
-`func_tank`; `env_bubbles`; the suit's voice, the chatter of scientists
+Friends who follow and talk; the rest of the game's weapons;
+`func_traincontrols` (a train is not driven); `env_bubbles`; the suit's voice, the chatter of scientists
 and guards, the sounds of trains and lifts. Soldiers fight the player only
 (not the aliens), do not drop their guns, and are
 not eaten by barnacles; the player cannot yet lay a tripmine. What breaks

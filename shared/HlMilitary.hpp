@@ -10,12 +10,104 @@
 //                              of the map's soldiers who has died
 //   assassin    hassassin.cpp  leaps, shoots as it falls, throws a grenade
 //                              once it is frustrated, and runs for cover
+//   apache      apache.cpp     (round 5) flies by its rotor's lift and its
+//                              tipping, along its corners and at the
+//                              player; its gun, and rockets in pairs
 //
 // std-only and inline (HlMonsters.hpp includes it after HlAliens.hpp): the
 // host tests run it.
 
 namespace hldata
 {
+    // ================================================================= ropes
+
+    /// A soldier into place `i` at the top of a rope at `src` (where his
+    /// middle is): as the map made him, woken, sliding down (the game's
+    /// MOVETYPE_FLY at -128 to -196, and ACT_GLIDE). The osprey's
+    /// MakeGrunt, and CHGruntRepel's.
+    inline void ropeStart(ActorWorld &a, const MoveWorld &world, int i, const fx *src, std::uint16_t yaw)
+    {
+        actorSetup(a, i, a.records[i], world);
+        ActorState &grunt = a.states[i];
+        grunt.flags &= static_cast<std::uint8_t>(~(kActorWaitScript | kActorWaitSeen | kActorDormant));
+        aiForget(a, i); // (a new soldier in the old one's place)
+        for (int k = 0; k < 3; ++k)
+            grunt.pos[k] = src[k];
+        grunt.pos[2] -= kStandingFeet;
+        grunt.yaw = yaw;
+        grunt.velocity[0] = grunt.velocity[1] = 0;
+        grunt.velocity[2] = -fxFromInt(aiRandomLong(a, 128, 196));
+        actorPlay(a, grunt, nameHash("repel_repel"), false);
+        if (a.ai != nullptr)
+            a.ai->held[i] |= kHeldRope;
+        actorPlaceBox(a, i);
+    }
+
+    /// The soldier on the rope in place `i`, a frame down it, until there
+    /// is ground under him; the rope seen from `topZ` to his hands. False
+    /// once he is off it (down, or gone).
+    inline bool ropeDown(ActorWorld &a, const MoveWorld &world, int i, fx topZ, int ms)
+    {
+        if (a.ai == nullptr || i < 0 || i >= a.count || !(a.ai->held[i] & kHeldRope))
+            return false;
+        ActorState &grunt = a.states[i];
+        if (!grunt.active || grunt.ai >= kAiDying)
+        {
+            a.ai->held[i] &= static_cast<std::uint8_t>(~kHeldRope);
+            return false;
+        }
+        const fx from[3] = {grunt.pos[0], grunt.pos[1], grunt.pos[2] + kStandingFeet};
+        const fx to[3] = {from[0], from[1], from[2] + static_cast<fx>((static_cast<std::int64_t>(grunt.velocity[2]) * ms) / 1000)};
+        const Trace t = detail::walkerTrace(world, &a, i, false, from, to);
+        if (!t.startSolid)
+            grunt.pos[2] = t.endPos[2] - kStandingFeet;
+        bool still = true;
+        if (t.startSolid || t.fraction < kFractionOne)
+        {
+            a.ai->held[i] &= static_cast<std::uint8_t>(~kHeldRope);
+            grunt.velocity[2] = 0;
+            actorPlay(a, grunt, nameHash("repel_land"), true);
+            still = false;
+        }
+        actorPlaceBox(a, i);
+        const fx top[3] = {grunt.pos[0], grunt.pos[1], topZ};
+        const fx hands[3] = {grunt.pos[0], grunt.pos[1], grunt.pos[2] + fxFromInt(72)};
+        Effect &rope = effectAdd(a, kEffectBeam, top, hands, 2, ms + 50);
+        rope.colour = 0x7FFF;
+        return still;
+    }
+
+    namespace detail
+    {
+        /// A monster_grunt_repel, a frame on (CHGruntRepel): used, its
+        /// soldier comes down its rope from where it is, and it is done.
+        /// Its state: `running` used and waiting, `phase` 1 while he is on
+        /// the rope.
+        inline void repelTick(LogicWorld &w, PlayerState &, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            ActorWorld &a = *w.actors;
+            const int i = static_cast<int>(record.extra[0]);
+            if (state.dead || i < 0 || i >= a.count || i >= a.recordCount)
+                return;
+            if (state.running && state.phase == 0)
+            {
+                state.running = false;
+                const fx down[3] = {record.move[0], record.move[1], record.move[2] - fxFromInt(4096)};
+                if (traceShot(*w.world, record.move, down).fraction >= kFractionOne)
+                    return;
+                ropeStart(a, *w.world, i, record.move, a.records[i].yaw);
+                state.phase = 1;
+            }
+            if (state.phase == 1 && !ropeDown(a, *w.world, i, record.move[2] + fxFromInt(112), ms))
+            {
+                state.phase = 2;
+                state.dead = true; // (it is gone: UTIL_Remove)
+            }
+        }
+    } // namespace detail
+
     // ================================================================ osprey
 
     namespace osprey
@@ -167,19 +259,7 @@ namespace hldata
             {
                 if (!isSoldier(c, i) || onRope(c, i) || (c.a.states[i].active && c.a.states[i].ai != kAiDead))
                     continue;
-                actorSetup(c.a, i, c.a.records[i], *c.w.world);
-                ActorState &grunt = c.a.states[i];
-                grunt.flags &= static_cast<std::uint8_t>(~(kActorWaitScript | kActorWaitSeen | kActorDormant));
-                aiForget(c.a, i); // (a new soldier in the old one's place)
-                for (int k = 0; k < 3; ++k)
-                    grunt.pos[k] = src[k];
-                grunt.pos[2] -= kStandingFeet;
-                grunt.yaw = c.me.yaw;
-                grunt.velocity[0] = grunt.velocity[1] = 0;
-                grunt.velocity[2] = -fxFromInt(aiRandomLong(c.a, 128, 196));
-                actorPlay(c.a, grunt, nameHash("repel_repel"), false);
-                c.ai.held[i] |= kHeldRope;
-                actorPlaceBox(c.a, i);
+                ropeStart(c.a, *c.w.world, i, src, c.me.yaw);
                 return i;
             }
             return -1;
@@ -218,34 +298,10 @@ namespace hldata
             for (int r = 0; r < kRepels; ++r)
             {
                 const int i = c.m.squadMember[r];
-                if (i < 0 || i >= c.a.count)
+                if (i < 0 || i >= c.a.count || !onRope(c, i))
                     continue;
-                ActorState &grunt = c.a.states[i];
-                if (!onRope(c, i))
-                    continue;
-                if (!grunt.active || grunt.ai >= kAiDying)
-                {
-                    c.ai.held[i] &= static_cast<std::uint8_t>(~kHeldRope);
-                    continue;
-                }
                 any = true;
-                const fx from[3] = {grunt.pos[0], grunt.pos[1], grunt.pos[2] + kStandingFeet};
-                const fx to[3] = {from[0], from[1],
-                                  from[2] + static_cast<fx>((static_cast<std::int64_t>(grunt.velocity[2]) * ms) / 1000)};
-                const Trace t = detail::walkerTrace(*c.w.world, &c.a, i, false, from, to);
-                if (!t.startSolid)
-                    grunt.pos[2] = t.endPos[2] - kStandingFeet;
-                if (t.startSolid || t.fraction < kFractionOne)
-                {
-                    c.ai.held[i] &= static_cast<std::uint8_t>(~kHeldRope);
-                    grunt.velocity[2] = 0;
-                    actorPlay(c.a, grunt, nameHash("repel_land"), true);
-                }
-                actorPlaceBox(c.a, i);
-                const fx top[3] = {grunt.pos[0], grunt.pos[1], c.me.pos[2] + fxFromInt(16)};
-                const fx hands[3] = {grunt.pos[0], grunt.pos[1], grunt.pos[2] + fxFromInt(72)};
-                Effect &rope = effectAdd(c.a, kEffectBeam, top, hands, 2, ms + 50);
-                rope.colour = 0x7FFF;
+                ropeDown(c.a, *c.w.world, i, c.me.pos[2] + fxFromInt(16), ms);
             }
             return any;
         }
@@ -906,12 +962,494 @@ namespace hldata
         }
     } // namespace assassin
 
+    // ================================================================ apache
+
+    namespace apache
+    {
+        inline constexpr int kHealth = 250;  ///< sk_apache_health
+        inline constexpr int kRound = 10;    ///< BULLET_MONSTER_12MM: sk_12mm_bullet
+        inline constexpr int kRockets = 10;
+        inline constexpr std::uint8_t kActorWaitTrigger = kActorCeiling; ///< SF_WAITFORTRIGGER (0x04 | 0x40)
+        // Its own think, HuntThink, ten times a second, and its flight a
+        // frame at a time (MOVETYPE_FLY). m_posTarget, m_vecDesired,
+        // m_posDesired, m_vecGoal: oldEnemyAt[0..3]; pev->avelocity: vec1
+        // (degrees a second, Q12: pitch, yaw, roll); its pitch and roll
+        // (65536 to the circle, nose up, as drawn): wantPitch, wantYaw;
+        // m_angGun: aimYaw, aimPitch (its gun's bone controllers, the same
+        // way); m_flForce: value1 (Q12); m_flGoalSpeed: value2 (Q12 units a
+        // second); m_flNextRocket: time1; m_flLastSeen: time2;
+        // m_flPrevSeen: time3; m_iRockets: count1; m_pGoalEnt: other (a
+        // corner, or -1); hunting (HuntThink is its think): flag1; dying:
+        // flag2; the side its next rocket is from: flag3.
+
+        inline fx *posTarget(AiCtx &c) { return c.m.oldEnemyAt[0]; }
+        inline fx *vecDesired(AiCtx &c) { return c.m.oldEnemyAt[1]; }
+        inline fx *posDesired(AiCtx &c) { return c.m.oldEnemyAt[2]; }
+        inline fx *vecGoal(AiCtx &c) { return c.m.oldEnemyAt[3]; }
+
+        inline fx dot(const fx *a, const fx *b) { return fxMul(a[0], b[0]) + fxMul(a[1], b[1]) + fxMul(a[2], b[2]); }
+        inline fx unit(fx *v)
+        {
+            const fx length = fxLength(v);
+            for (int k = 0; length > 0 && k < 3; ++k)
+                v[k] = static_cast<fx>((static_cast<std::int64_t>(v[k]) << kFxShift) / length);
+            return length;
+        }
+        inline std::int32_t turnsOf(fx degrees) { return static_cast<std::int32_t>((static_cast<std::int64_t>(degrees) << 16) / (360 * kFxOne)); }
+        inline fx degreesOf(std::int32_t turns) { return static_cast<fx>((static_cast<std::int64_t>(static_cast<std::int16_t>(turns)) * 360 * kFxOne) >> 16); }
+
+        /// UTIL_MakeAimVectors of its angles (pitch nose up, yaw, roll, in
+        /// degrees Q12, and as much again of each in `add`).
+        inline void aimVectors(const AiCtx &c, const fx *add, fx *forward, fx *right, fx *up)
+        {
+            const fx pitch = degreesOf(c.me.wantPitch) + add[0];
+            const fx yaw = degreesOf(c.me.yaw) + add[1];
+            const fx roll = degreesOf(c.me.wantYaw) + add[2];
+            fx sp, cp, sy, cy, sr, cr;
+            // (AngleVectors, of the view's pitch: the model's, turned over.)
+            fxSinCos(static_cast<std::uint16_t>(-turnsOf(pitch)), sp, cp);
+            fxSinCos(static_cast<std::uint16_t>(turnsOf(yaw)), sy, cy);
+            fxSinCos(static_cast<std::uint16_t>(turnsOf(roll)), sr, cr);
+            forward[0] = fxMul(cp, cy);
+            forward[1] = fxMul(cp, sy);
+            forward[2] = -sp;
+            right[0] = -fxMul(fxMul(sr, sp), cy) + fxMul(cr, sy);
+            right[1] = -fxMul(fxMul(sr, sp), sy) - fxMul(cr, cy);
+            right[2] = -fxMul(sr, cp);
+            up[0] = fxMul(fxMul(cr, sp), cy) + fxMul(sr, sy);
+            up[1] = fxMul(fxMul(cr, sp), sy) - fxMul(sr, cy);
+            up[2] = fxMul(cr, cp);
+        }
+
+        inline int firstCorner(const AiCtx &c)
+        {
+            if (c.a.records == nullptr || c.index >= c.a.recordCount)
+                return -1;
+            const int corner = static_cast<int>(c.a.records[c.index].item & 0xFFFF) - 1;
+            return corner >= 0 && corner < c.w.cornerCount ? corner : -1;
+        }
+        /// Its goal at corner `corner`: there, and facing on along its path.
+        inline void goalAt(AiCtx &c, int corner)
+        {
+            c.m.other = static_cast<std::int16_t>(corner);
+            if (corner < 0)
+                return;
+            const PathCorner &at = c.w.corners[corner];
+            for (int k = 0; k < 3; ++k)
+                posDesired(c)[k] = at.pos[k];
+            fx way[3] = {0, 0, 0};
+            if (at.next != kNoCorner && at.next < c.w.cornerCount)
+            {
+                for (int k = 0; k < 2; ++k)
+                    way[k] = c.w.corners[at.next].pos[k] - at.pos[k];
+            }
+            if (unit(way) == 0)
+                aiForward(c.me.yaw, way);
+            for (int k = 0; k < 3; ++k)
+                vecGoal(c)[k] = way[k];
+        }
+
+        inline void rotor(AiCtx &c, bool on)
+        {
+            if (c.w.heard == nullptr)
+                return;
+            const auto tag = static_cast<std::uint16_t>(kSoundTagActor | c.index);
+            if (on && static_cast<std::uint16_t>(CommonSound::ApacheRotor) < c.w.heard->commons)
+                c.w.heard->add(static_cast<std::uint16_t>(CommonSound::ApacheRotor), c.me.pos, 127, 3000, kSoundLoopOn,
+                               100, tag);
+            else if (!on)
+                c.w.heard->add(kNoSound, nullptr, 0, 0, kSoundLoopOff, 100, tag);
+        }
+
+        /// Flight: turned and tipped towards where it would be, lifted by its
+        /// rotor against the world's pull.
+        inline void flight(AiCtx &c)
+        {
+            fx *av = c.m.vec1;
+            fx forward[3], right[3], up[3];
+            const fx ahead[3] = {av[0] * 2 + fxFromInt(5), av[1] * 2, av[2] * 2};
+            aimVectors(c, ahead, forward, right, up);
+            if (dot(vecDesired(c), right) < 0)
+            {
+                if (av[1] < fxFromInt(60))
+                    av[1] += fxFromInt(8);
+            }
+            else if (av[1] > -fxFromInt(60))
+            {
+                av[1] -= fxFromInt(8);
+            }
+            av[1] = fxMul(av[1], kFxOne * 98 / 100);
+            const fx once[3] = {av[0] + fxFromInt(5), av[1], av[2]};
+            aimVectors(c, once, forward, right, up);
+            fx est[3];
+            for (int k = 0; k < 3; ++k)
+                est[k] = c.me.pos[k] + c.me.velocity[k] * 2 + fxMul(up[k], c.m.value1) * 20;
+            est[2] -= fxFromInt(384 * 2);
+            const fx tilt[3] = {fxFromInt(5), 0, 0};
+            aimVectors(c, tilt, forward, right, up);
+            for (int k = 0; k < 3; ++k)
+                c.me.velocity[k] += fxMul(up[k], c.m.value1);
+            c.me.velocity[2] -= fxDot(38.4);
+            fx speed = fxLength(c.me.velocity);
+            const fx flatForward[3] = {forward[0], forward[1], 0};
+            const fx flatVelocity[3] = {c.me.velocity[0], c.me.velocity[1], 0};
+            if (dot(flatForward, flatVelocity) < 0)
+                speed = -speed;
+            const fx off[3] = {posDesired(c)[0] - est[0], posDesired(c)[1] - est[1], posDesired(c)[2] - est[2]};
+            const fx dist = dot(off, forward);
+            const fx slip = -dot(off, right);
+            const fx roll = degreesOf(c.me.wantYaw), pitch = degreesOf(c.me.wantPitch);
+            if (slip > 0)
+            {
+                if (roll > -fxFromInt(30) && av[2] > -fxFromInt(15))
+                    av[2] -= fxFromInt(4);
+                else
+                    av[2] += fxFromInt(2);
+            }
+            else
+            {
+                if (roll < fxFromInt(30) && av[2] < fxFromInt(15))
+                    av[2] += fxFromInt(4);
+                else
+                    av[2] -= fxFromInt(2);
+            }
+            for (int k = 0; k < 3; ++k)
+            {
+                const fx side = right[k] < 0 ? -right[k] : right[k];
+                c.me.velocity[k] = fxMul(c.me.velocity[k], kFxOne - side / 20);
+                c.me.velocity[k] = fxMul(c.me.velocity[k], kFxOne * 995 / 1000);
+            }
+            if (c.m.value1 < fxFromInt(80) && est[2] < posDesired(c)[2])
+                c.m.value1 += fxFromInt(12);
+            else if (c.m.value1 > fxFromInt(30) && est[2] > posDesired(c)[2])
+                c.m.value1 -= fxFromInt(8);
+            // (Its pitch here is the game's angles.x, which is nose up.)
+            const fx p = pitch + av[0];
+            if (dist > 0 && speed < c.m.value2 && p > -fxFromInt(40))
+                av[0] -= fxFromInt(12);
+            else if (dist < 0 && speed > -fxFromInt(50) && p < fxFromInt(20))
+                av[0] += fxFromInt(12);
+            else if (p > 0)
+                av[0] -= fxFromInt(4);
+            else if (p < 0)
+                av[0] += fxFromInt(4);
+            rotor(c, true);
+        }
+
+        /// FireGun: its gun turned towards what it is after, twelve degrees
+        /// a think either way, within its reach; a round, when it is on it.
+        inline bool fireGun(AiCtx &c)
+        {
+            fx forward[3], right[3], up[3];
+            const fx none[3] = {0, 0, 0};
+            aimVectors(c, none, forward, right, up);
+            fx gun[3];
+            for (int k = 0; k < 3; ++k)
+                gun[k] = c.me.pos[k] + forward[k] * 90 - up[k] * 50; // (under its nose)
+            fx to[3] = {posTarget(c)[0] - gun[0], posTarget(c)[1] - gun[1], posTarget(c)[2] - gun[2]};
+            unit(to);
+            const fx out[3] = {dot(forward, to), -dot(right, to), dot(up, to)};
+            const fx flat[3] = {out[0], out[1], 0};
+            const int wantYaw = static_cast<std::int16_t>(fxAtan2Turns(out[1], out[0]));
+            const int wantPitch = -static_cast<std::int16_t>(fxAtan2Turns(out[2], fxLength(flat)));
+            const int step = 12 * 65536 / 360;
+            auto toward = [&](int want, int now, int lo, int hi)
+            {
+                int v = want > now ? (want < now + step ? want : now + step) : (want > now - step ? want : now - step);
+                return v < lo ? lo : (v > hi ? hi : v);
+            };
+            c.me.aimYaw = toward(wantYaw, static_cast<std::int16_t>(c.me.aimYaw), -90 * 65536 / 360, 90 * 65536 / 360);
+            c.me.aimPitch = toward(wantPitch, static_cast<std::int16_t>(c.me.aimPitch), -10 * 65536 / 360, 45 * 65536 / 360);
+            // Where it points now: its body's forward, turned by the gun.
+            fx sy, cy, sp, cp;
+            fxSinCos(static_cast<std::uint16_t>(c.me.aimYaw), sy, cy);
+            fxSinCos(static_cast<std::uint16_t>(-c.me.aimPitch), sp, cp);
+            fx barrel[3];
+            for (int k = 0; k < 3; ++k)
+                barrel[k] = fxMul(fxMul(forward[k], cy) - fxMul(right[k], sy), cp) + fxMul(up[k], sp);
+            unit(barrel);
+            if (dot(barrel, to) <= fxDot(0.98))
+                return false;
+            // FireBullets, a 4 degree cone.
+            fx aim[3];
+            for (int k = 0; k < 3; ++k)
+                aim[k] = barrel[k] + fxMul(right[k], fxFromInt(aiRandomLong(c.a, -35, 35)) / 1000) +
+                         fxMul(up[k], fxFromInt(aiRandomLong(c.a, -35, 35)) / 1000);
+            fx end[3];
+            const std::int16_t hit = aiTraceLine(c, gun, aim, 8192, end);
+            effectAdd(c.a, kEffectTracer, gun, end, 0, 60);
+            effectAdd(c.a, kEffectMuzzle, gun, nullptr, 0, 50);
+            if (c.w.heard != nullptr)
+                c.w.heard->add(CommonSound::TurretFire, c.me.pos, 127, 3000);
+            if (hit == kAiNone)
+            {
+                const fx far[3] = {gun[0] + aim[0] * 8192, gun[1] + aim[1] * 8192, gun[2] + aim[2] * 8192};
+                markShot(c.a, *c.w.world, gun, far, false);
+            }
+            else
+            {
+                aiDamageTarget(c, hit, kRound, kDmgBullet | kDmgNeverGib);
+            }
+            return true;
+        }
+
+        /// FireRocket: an HVR rocket from under one side or the other (the
+        /// port's rocket: it flies as a tank's does).
+        inline void fireRocket(AiCtx &c)
+        {
+            if (c.m.count1 <= 0)
+                return;
+            fx forward[3], right[3], up[3];
+            const fx none[3] = {0, 0, 0};
+            aimVectors(c, none, forward, right, up);
+            const int side = c.m.flag3 ? -1 : 1;
+            fx src[3], velocity[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                src[k] = c.me.pos[k] + (forward[k] * 21 + right[k] * 70 * side - up[k] * 79) * 3 / 2;
+                velocity[k] = c.me.velocity[k] + forward[k] * 100;
+            }
+            projectileAdd(c.a, kShotRocketFoe, src, velocity, 30000);
+            if (c.w.heard != nullptr)
+                c.w.heard->add(CommonSound::RocketFire, src, 127, kRadiusLarge);
+            --c.m.count1;
+            c.m.flag3 = !c.m.flag3;
+        }
+
+        /// HuntThink.
+        inline void hunt(AiCtx &c)
+        {
+            if (c.m.other < 0 && c.m.time1 == 0)
+            {
+                goalAt(c, firstCorner(c));
+                c.m.time1 = 1; // (looked for, once)
+            }
+            // What it sees: the player, in its wide sweep, with nothing
+            // between (Look, BestVisibleEnemy), within 4092.
+            fx forward[3], right[3], up[3];
+            const fx none[3] = {0, 0, 0};
+            aimVectors(c, none, forward, right, up);
+            bool sees = false;
+            AiTarget t;
+            if (c.player.health > 0 && !unseen(c.player) && aiTargetOf(c.w, c.player, kAiPlayer, t))
+            {
+                fx to[3] = {t.center[0] - c.me.pos[0], t.center[1] - c.me.pos[1], t.center[2] - c.me.pos[2]};
+                const fx far = unit(to);
+                sees = far < fxFromInt(4092) && dot(forward, to) > fxDot(-0.707) && lineClear(*c.w.world, c.me.pos, t.center);
+            }
+            c.m.enemy = sees ? kAiPlayer : kAiNone;
+            c.m.state = sees ? kStateCombat : kStateAlert;
+            if (c.m.value2 < fxFromInt(800))
+                c.m.value2 += fxFromInt(5);
+            if (sees)
+            {
+                if (c.m.time2 < c.ai.now - 5000)
+                    c.m.time3 = c.ai.now;
+                c.m.time2 = c.ai.now;
+                for (int k = 0; k < 3; ++k)
+                    posTarget(c)[k] = t.center[k];
+            }
+            fx target[3] = {posTarget(c)[0] - c.me.pos[0], posTarget(c)[1] - c.me.pos[1], posTarget(c)[2] - c.me.pos[2]};
+            unit(target);
+            fx off[3] = {c.me.pos[0] - posDesired(c)[0], c.me.pos[1] - posDesired(c)[1], c.me.pos[2] - posDesired(c)[2]};
+            fx length = fxLength(off);
+            if (c.m.other >= 0)
+            {
+                if (length < fxFromInt(128))
+                {
+                    const std::uint16_t next = c.w.corners[c.m.other].next;
+                    if (next != kNoCorner && next < c.w.cornerCount)
+                    {
+                        goalAt(c, next);
+                        for (int k = 0; k < 3; ++k)
+                            off[k] = c.me.pos[k] - posDesired(c)[k];
+                        length = fxLength(off);
+                    }
+                }
+            }
+            else
+            {
+                for (int k = 0; k < 3; ++k)
+                    posDesired(c)[k] = c.me.pos[k];
+                length = 0;
+            }
+            if (length > fxFromInt(250))
+            {
+                fx desired[3] = {posDesired(c)[0] - c.me.pos[0], posDesired(c)[1] - c.me.pos[1], posDesired(c)[2] - c.me.pos[2]};
+                unit(desired);
+                const bool chase = c.m.time2 + 90000 > c.ai.now && c.m.time2 != 0 && dot(target, desired) > fxDot(0.25);
+                for (int k = 0; k < 3; ++k)
+                    vecDesired(c)[k] = chase ? target[k] : desired[k];
+            }
+            else
+            {
+                for (int k = 0; k < 3; ++k)
+                    vecDesired(c)[k] = vecGoal(c)[k];
+            }
+            flight(c);
+            if (c.m.time2 + 1000 > c.ai.now && c.m.time3 + 2000 < c.ai.now && c.m.time2 != 0)
+            {
+                if (fireGun(c) && c.m.value2 > fxFromInt(400))
+                    c.m.value2 = fxFromInt(400);
+            }
+            // Its rockets: in pairs (an odd count left fires the other at
+            // once), when it is nosed down at what it is after.
+            fx est[3];
+            for (int k = 0; k < 3; ++k)
+                est[k] = forward[k] * 800 + c.me.velocity[k];
+            unit(est);
+            if (c.m.count1 % 2 == 1)
+            {
+                fireRocket(c);
+                c.m.time1 = c.ai.now + 500;
+                if (c.m.count1 <= 0)
+                {
+                    c.m.time1 = c.ai.now + 10000;
+                    c.m.count1 = kRockets;
+                }
+            }
+            else if (static_cast<std::int16_t>(c.me.wantPitch) < 0 && dot(c.me.velocity, forward) > -fxFromInt(100) &&
+                     c.m.time1 < c.ai.now && c.m.time2 + 60000 > c.ai.now && sees && dot(target, est) > fxDot(0.965))
+            {
+                const fx far[3] = {c.me.pos[0] + est[0] * 4096, c.me.pos[1] + est[1] * 4096, c.me.pos[2] + est[2] * 4096};
+                const Shot line = traceShot(*c.w.world, c.me.pos, far);
+                fx end[3];
+                for (int k = 0; k < 3; ++k)
+                    end[k] = c.me.pos[k] + static_cast<fx>((static_cast<std::int64_t>(far[k] - c.me.pos[k]) * line.fraction) >> kFractionShift);
+                if (aiDist(end, posTarget(c)) < fxFromInt(512))
+                    fireRocket(c);
+            }
+        }
+
+        inline void think(AiCtx &c)
+        {
+            if (c.m.flag2)
+                return; // (dying: its frame has it)
+            if (!c.m.flag1)
+            {
+                if ((c.me.flags & kActorWaitTrigger) && c.me.switched == 0)
+                    return;
+                c.me.switched = 0;
+                c.m.flag1 = true;
+                c.m.count1 = kRockets;
+                c.m.other = -1;
+                c.m.time1 = 0;
+            }
+            hunt(c);
+        }
+
+        /// Each frame: where its velocity and its turning take it; off what
+        /// it flies into (FlyTouch); dying, down burning, and at the ground
+        /// (or in fifteen seconds) the end of it.
+        inline void frame(AiCtx &c, int ms)
+        {
+            if (!c.me.active || !c.m.flag1)
+                return;
+            fx *av = c.m.vec1;
+            if (c.m.flag2)
+            {
+                c.me.velocity[2] -= static_cast<fx>((static_cast<std::int64_t>(gravityOf(c.player) * 3 / 10) * ms) / 1000);
+                for (int k = 0; k < 3; ++k)
+                    av[k] += static_cast<fx>((static_cast<std::int64_t>(av[k]) * 2 * ms) / 10000); // (1.02 a tenth)
+            }
+            c.me.wantPitch = static_cast<std::uint16_t>(c.me.wantPitch + turnsOf(static_cast<fx>((static_cast<std::int64_t>(av[0]) * ms) / 1000)));
+            c.me.yaw = static_cast<std::uint16_t>(c.me.yaw + turnsOf(static_cast<fx>((static_cast<std::int64_t>(av[1]) * ms) / 1000)));
+            c.me.wantYaw = static_cast<std::uint16_t>(c.me.wantYaw + turnsOf(static_cast<fx>((static_cast<std::int64_t>(av[2]) * ms) / 1000)));
+            c.m.idealYaw = c.me.yaw;
+            fx to[3];
+            for (int k = 0; k < 3; ++k)
+                to[k] = c.me.pos[k] + static_cast<fx>((static_cast<std::int64_t>(c.me.velocity[k]) * ms) / 1000);
+            fx at[3], normal[3];
+            const bool met = traceShotWall(*c.w.world, c.me.pos, to, at, normal);
+            if (!met)
+            {
+                for (int k = 0; k < 3; ++k)
+                    c.me.pos[k] = to[k];
+            }
+            else if (!c.m.flag2)
+            {
+                const fx speed = fxLength(c.me.velocity) + fxFromInt(200);
+                for (int k = 0; k < 3; ++k)
+                    c.me.velocity[k] += fxMul(normal[k], speed);
+            }
+            actorPlaceBox(c.a, c.index);
+            if (!c.m.flag2)
+                return;
+            // DyingThink: blasts about it, five a second, as it comes down.
+            c.m.time3 -= ms;
+            if (c.m.time3 <= 0 && !met && c.ai.now < c.m.time1)
+            {
+                c.m.time3 += 200;
+                const fx spot[3] = {c.me.pos[0] + fxFromInt(aiRandomLong(c.a, -150, 150)),
+                                    c.me.pos[1] + fxFromInt(aiRandomLong(c.a, -150, 150)),
+                                    c.me.pos[2] + fxFromInt(aiRandomLong(c.a, -150, -50))};
+                explodeAt(c.w, c.player, spot, aiRandomLong(c.a, 30, 59), true, false, false);
+            }
+            if (met || c.ai.now >= c.m.time1)
+            {
+                explodeAt(c.w, c.player, c.me.pos, 160, true, false, false);
+                if (c.w.heard != nullptr)
+                    c.w.heard->add(CommonSound::MortarHit, c.me.pos, 127, 3000);
+                radiusDamage(c.w, c.player, c.me.pos, 300, 750, c.index);
+                c.me.active = false;
+                actorPlaceBox(c.a, c.index);
+            }
+        }
+
+        /// TraceAttack and TakeDamage: what is not hard enough, and lands on
+        /// neither of its two weak places, only sparks; a blast counts twice.
+        inline bool traceAttack(AiCtx &c, AiDamage &d)
+        {
+            (void)c;
+            const bool counts = d.amount > 50 || d.group == 1 || d.group == 2 || (d.type & kDmgBlast) != 0;
+            if (d.type & kDmgBlast)
+                d.amount *= 2;
+            d.group = kHitGeneric;
+            return counts;
+        }
+
+        inline bool killed(AiCtx &c)
+        {
+            rotor(c, false);
+            c.me.ai = kAiDying;
+            c.m.deadflag = 1;
+            c.m.state = c.m.idealState = kStateDead;
+            c.me.health = 0;
+            c.m.flag2 = true;
+            c.m.time1 = c.ai.now + ((c.a.records != nullptr && c.index < c.a.recordCount &&
+                                     (c.a.records[c.index].flags & kActorAuto))
+                                        ? 4000
+                                        : 15000);
+            c.m.time3 = 0;
+            return true;
+        }
+
+        inline const AiKind &kind()
+        {
+            static const AiKind k = []
+            {
+                AiKind k;
+                k.kind = static_cast<std::uint8_t>(ActorKind::Apache);
+                k.health = kHealth;
+                k.fov = fxDot(-0.707);
+                k.blood = kBloodNone;
+                k.think = think;
+                k.frame = frame;
+                k.traceAttack = traceAttack;
+                k.killed = killed;
+                return k;
+            }();
+            return k;
+        }
+    } // namespace apache
+
     inline const AiKind *aiMilitaryKindOf(std::uint8_t kind)
     {
         switch (static_cast<ActorKind>(kind))
         {
         case ActorKind::Osprey:   return &osprey::kind();
         case ActorKind::Assassin: return &assassin::kind();
+        case ActorKind::Apache:   return &apache::kind();
         default:                  return nullptr;
         }
     }

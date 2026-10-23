@@ -59,6 +59,8 @@ namespace hldata
             &garg::slFlame, &garg::slSwipe, &babycrab::slRangeAttack1Fast, &assassin::slFail, &assassin::slExposed,
             &assassin::slTakeCoverFromEnemy, &assassin::slTakeCoverFromEnemy2, &assassin::slTakeCoverFromBestSound,
             &assassin::slHide, &assassin::slHunt, &assassin::slJump, &assassin::slJumpAttack, &assassin::slJumpLand,
+            // round 5's (bigmomma.cpp)
+            &momma::slBigNode, &momma::slNodeFail,
         };
         count = static_cast<int>(sizeof(kAll) / sizeof(kAll[0]));
         return kAll;

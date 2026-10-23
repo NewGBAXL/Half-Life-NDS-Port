@@ -199,6 +199,19 @@ namespace hldata
     /// a second (kStomp*). `sprite` is how fast it gathers speed (the game's
     /// framerate), with kStompHitPlayer once it has hurt the player.
     inline constexpr std::uint8_t kShotStomp = 15;
+    /// A rocket a tank fired (func_tankrocket: the game's rpg_rocket):
+    /// flies as the player's does, but stops at the player too, and no
+    /// laser of the player's steers it.
+    inline constexpr std::uint8_t kShotRocketFoe = 16;
+    /// Big momma's mortar of acid (CBMortar): thrown, it falls at the
+    /// world's pull and bursts where it meets anything.
+    inline constexpr std::uint8_t kShotMommaSpit = 17;
+    /// The nihilanth's balls (CNihilanthHVR), its own to move
+    /// (HlAliens.hpp): the zap, the one that takes the player away, and
+    /// those it throws off as it dies.
+    inline constexpr std::uint8_t kShotNihilZap = 18;
+    inline constexpr std::uint8_t kShotNihilPortal = 19;
+    inline constexpr std::uint8_t kShotNihilGreen = 20;
     inline constexpr std::int32_t kStompLengthMask = 0xFFF;
     inline constexpr int kStompSpeedShift = 12;
     inline constexpr std::uint16_t kStompHitPlayer = 0x8000;
@@ -534,6 +547,13 @@ namespace hldata
             controls[1] = ceiling ? actor.aimPitch : -actor.aimPitch;
             return true;
         }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Apache))
+        {
+            // Its gun, turned and tipped (HlMilitary.hpp).
+            controls[0] = static_cast<std::int16_t>(actor.aimYaw);
+            controls[1] = static_cast<std::int16_t>(actor.aimPitch);
+            return controls[0] != 0 || controls[1] != 0;
+        }
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
         {
             // Its tail, against its turn (the game's yaw_adj / 4).
@@ -555,6 +575,27 @@ namespace hldata
             // grabs.
             const fx slide = actor.reach > kBarnacleTongueBones ? actor.reach - kBarnacleTongueBones : 0;
             controls[0] = -(slide & ~(kFxOne - 1));
+            return true;
+        }
+        return false;
+    }
+
+    /// How it is tipped besides the way it faces, for what swims and flies
+    /// that way (65536 to the circle: nose up, and rolled): false for the
+    /// rest, which are turned about the upright alone.
+    inline bool actorTilt(const ActorState &actor, std::int32_t &pitch, std::int32_t &roll)
+    {
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+        {
+            pitch = actor.aimPitch;
+            roll = actor.aimYaw;
+            return true;
+        }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Apache) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Boid))
+        {
+            pitch = actor.wantPitch;
+            roll = actor.wantYaw;
             return true;
         }
         return false;
@@ -692,8 +733,12 @@ namespace hldata
         actor.nameHash = a.nameHashes != nullptr ? a.nameHashes[record.name] : 0;
         actor.yaw = record.yaw;
         actor.body = record.body;
-        // (An osprey's `item` is where it flies: it has the one skin.)
-        const bool flies = record.kind == static_cast<std::uint8_t>(ActorKind::Osprey);
+        // (An osprey's `item`, and an apache's, is where it flies: it has
+        // the one skin.)
+        const bool flies = record.kind == static_cast<std::uint8_t>(ActorKind::Osprey) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Apache) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::BigMomma) || // (hers: her path)
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Boid);       // (its: its leader)
         if (record.kind != static_cast<std::uint8_t>(ActorKind::Item) && !flies)
             actor.skin = static_cast<std::uint8_t>(record.item >> kActorSkinShift);
         actor.kind = record.kind;
@@ -731,6 +776,10 @@ namespace hldata
                            record.kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Osprey) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Tentacle) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Apache) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Nihilanth) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Boid) ||
                            isTurret(record.kind);
         if (stays)
         {
