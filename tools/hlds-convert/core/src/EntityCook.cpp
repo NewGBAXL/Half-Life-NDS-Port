@@ -1320,6 +1320,13 @@ namespace hlds
                     double angles[3] = {0, 0, 0};
                     if (!entity.vec3("angles", angles))
                         angles[1] = numberKey(entity, "angle");
+                    // (Turned the other way round from how an "angle" turns
+                    // anything else: the tram's door -- c0a0e's, c5a1's, a
+                    // quarter turn -- stands in its doorway only so, as the
+                    // game has it, seen side by side with it from the platform
+                    // and from inside. The only other turned train is c1a1b's
+                    // half turn, which is the same either way.)
+                    angles[1] = -angles[1];
                     for (int a = 0; a < 3; ++a)
                         record.extra[a] = static_cast<std::uint16_t>(std::lround(angles[a] * 65536.0 / 360.0));
                 }

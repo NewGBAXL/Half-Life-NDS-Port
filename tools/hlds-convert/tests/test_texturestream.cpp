@@ -491,6 +491,38 @@ namespace
         }
         // Two of 2 KB fit (one in each piece); a third never does.
         check(s.residentCount() <= 3, "at most what the pieces hold");
+
+        // The sums fit and the pieces do not: four of 1280 bytes, in 3 KB and
+        // 2 KB, are three. Pinned, the fourth would be flat for good; with
+        // none pinned, it takes the place of one not in view once it is.
+        std::vector<StreamInfo> four = {info(1280), info(1280), info(1280), info(1280)};
+        TextureStreamer f;
+        f.init(four.data(), 4, 3072 + TextureStreamer::kBarrierBytes + 2048, 64 * 1024);
+        f.addBarrier(3072);
+        check(f.allFit(), "four of 1280 bytes add up to what two pieces of 3 KB and 2 KB hold");
+        std::uint32_t t = 0, p = 0;
+        int pinned = 0, left = -1;
+        for (int id = 0; id < 4; ++id)
+        {
+            if (f.pin(id, t, p))
+            {
+                f.loaded(id);
+                ++pinned;
+            }
+            else
+            {
+                left = id;
+            }
+        }
+        check(pinned == 3 && left >= 0, "... but only three of them fit in the pieces");
+        f.unpinAll();
+        f.clearScores();
+        for (int id = 0; id < 4; ++id)
+            f.addScore(id, id == left ? 1u << 20 : 10u);
+        f.rebuild();
+        step(f);
+        check(f.state(left) == StreamState::Staged || f.state(left) == StreamState::Resident,
+              "... and the one left out, in view, comes in in the place of one that is not");
     }
 } // namespace
 

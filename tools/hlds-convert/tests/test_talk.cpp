@@ -592,6 +592,226 @@ namespace
               "... and is said when nobody is, by its speaker");
     }
 
+    /// c0a0e: the guard who comes in with the tram walks to it, says the
+    /// player is late, and pushes the button -- and the tram's door opens
+    /// after his push, not before (a scripted_sequence fires its target
+    /// when its clip is done: CCineMonster::SequenceDone). `busyMs`: he is
+    /// kept in another scene that long first; his scenes wait for him, as
+    /// the game's do, rather than giving him up and opening the door.
+    void testTramGuard(const char *dir, int busyMs)
+    {
+        auto game = load(dir, "c0a0d");
+        if (!game)
+            return;
+        Game &g = *game;
+        int change = -1;
+        for (int i = 0; i < g.logic.recordCount; ++i)
+        {
+            const LogicRecord &r = g.logic.records[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel))
+                change = i;
+        }
+        const Landmark *mark = change >= 0 ? findLandmark(g.view.landmarks, g.view.landmarkCount, g.logic.records[change].extra[1])
+                                           : nullptr;
+        check(mark != nullptr, "c0a0d has its way on to c0a0e");
+        if (mark == nullptr)
+            return;
+        for (int k = 0; k < 3; ++k)
+            g.player.origin[k] = mark->origin[k];
+        const Arrival arrival = makeArrival(g.logic, g.view.landmarks, g.view.landmarkCount, g.player, change,
+                                            g.view.modelRefs);
+        int guards = 0;
+        for (const Arrival::Visitor &v : arrival.visitors)
+            guards += v.kind == static_cast<std::uint8_t>(ActorKind::Guard);
+        check(guards == 1, "the guard comes with the tram");
+        auto next = load(dir, "c0a0e");
+        if (!next)
+            return;
+        Game &n = *next;
+        applyArrival(n.logic, n.view.landmarks, n.view.landmarkCount, n.view.nameHashes, n.view.nameCount, n.player,
+                     arrival, n.view.modelRefs);
+        int guard = -1;
+        for (int i = 0; i < n.actors.count; ++i)
+        {
+            if (n.actors.states[i].active && n.actors.states[i].kind == static_cast<std::uint8_t>(ActorKind::Guard))
+                guard = i;
+        }
+        int door = -1;
+        const std::uint32_t doorHash = nameHash("traindoor");
+        for (int i = 0; i < n.logic.recordCount; ++i)
+        {
+            const LogicRecord &r = n.logic.records[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Train) && r.name != 0 && n.view.nameHashes[r.name] == doorHash)
+                door = i;
+        }
+        check(guard >= 0 && door >= 0, "... into c0a0e, by its tram's door");
+        if (guard < 0 || door < 0)
+            return;
+        const ActorState &a = n.actors.states[guard];
+        const ModelView *model = actorModel(n.actors, a);
+        const int push = model != nullptr ? model->findClip(nameHash("intropush")) : -1;
+        std::printf("test_talk: c0a0e: the guard's model has intropush: %s\n", push >= 0 ? "yes" : "NO");
+        const fx doorAt0 = n.brushStates[n.logic.records[door].brush].pos[1];
+        int pushStart = -1, pushEnd = -1, doorMoves = -1, lastClip = -2;
+        ActorState &held = n.actors.states[guard];
+        for (int ms = 0; ms < 40000 + busyMs; ms += 33)
+        {
+            // (Busy: held by a scene that is not one of these.)
+            if (ms < busyMs)
+                held.script = static_cast<std::int16_t>(door);
+            else if (ms - 33 < busyMs && busyMs > 0)
+                held.script = -1;
+            tick(n);
+            if (a.clip != lastClip)
+            {
+                std::printf("test_talk: c0a0e at %d ms: the guard plays clip %d%s at %d %d, script %d\n", ms, a.clip,
+                            a.clip == push ? " (intropush)" : "", fxToInt(a.pos[0]), fxToInt(a.pos[1]), a.script);
+                lastClip = a.clip;
+            }
+            if (a.clip == push && push >= 0 && pushStart < 0)
+                pushStart = ms;
+            if (pushStart >= 0 && pushEnd < 0 && a.clip != push)
+                pushEnd = ms;
+            if (doorMoves < 0 && n.brushStates[n.logic.records[door].brush].pos[1] != doorAt0)
+                doorMoves = ms;
+        }
+        std::printf("test_talk: c0a0e (busy %d ms): the push from %d to %d ms, the door moves at %d ms\n", busyMs, pushStart,
+                    pushEnd, doorMoves);
+        check(push >= 0 && pushStart >= 0, "the guard pushes the tram's button");
+        check(doorMoves >= 0 && pushEnd >= 0 && doorMoves >= pushEnd, "... and its door opens after his push, not before");
+        if (busyMs > 0)
+            return; // (the way in: once is enough)
+
+        // Then at the way in: the player walks up (trigger *17, x -1932..-1892),
+        // he puts his card to the scanner, and the bars and the doors open
+        // after it (entrymm: bars at 7 s, doors at 11 s from his push's end).
+        auto moverOf = [&](const char *name)
+        {
+            const std::uint32_t hash = nameHash(name);
+            for (int i = 0; i < n.logic.recordCount; ++i)
+            {
+                const LogicRecord &r = n.logic.records[i];
+                if (r.kind == static_cast<std::uint8_t>(LogicKind::Door) && r.name != 0 && n.view.nameHashes[r.name] == hash)
+                    return i;
+            }
+            return -1;
+        };
+        const int bars = moverOf("doorbars"), doors = moverOf("doors");
+        check(bars >= 0 && doors >= 0, "c0a0e's way in has its bars and its doors");
+        if (bars < 0 || doors < 0)
+            return;
+        n.player.origin[0] = fxFromInt(-1912);
+        n.player.origin[1] = fxFromInt(-600);
+        n.player.origin[2] = fxFromInt(-253 + 36);
+        int scan = -1, scanEnd = -1, barsMove = -1, doorsMove = -1;
+        for (int ms = 0; ms < 30000; ms += 33)
+        {
+            tick(n);
+            if (a.clip != lastClip)
+            {
+                std::printf("test_talk: c0a0e, at the way in, at %d ms: the guard plays clip %d%s at %d %d, script %d\n",
+                            ms, a.clip, a.clip == push ? " (intropush)" : "", fxToInt(a.pos[0]), fxToInt(a.pos[1]),
+                            a.script);
+                lastClip = a.clip;
+            }
+            if (a.clip == push && scan < 0)
+                scan = ms;
+            if (scan >= 0 && scanEnd < 0 && a.clip != push)
+                scanEnd = ms;
+            if (barsMove < 0 && n.states[bars].move != MoveState::AtBottom)
+                barsMove = ms;
+            if (doorsMove < 0 && n.states[doors].move != MoveState::AtBottom)
+                doorsMove = ms;
+        }
+        std::printf("test_talk: c0a0e: the scan from %d to %d ms, the bars move at %d, the doors at %d\n", scan, scanEnd,
+                    barsMove, doorsMove);
+        check(scan >= 0 && scanEnd >= 0, "the guard puts his card to the scanner");
+        check(barsMove >= scanEnd && doorsMove >= scanEnd, "... and the way in opens after, not before");
+    }
+
+    /// c0a0e from its autosave (made a second in): laid over the map begun
+    /// afresh with the same arrival, the guard still walks to the tram and
+    /// pushes, the door opens after, and it is turned as the map has it.
+    void testTramGuardFromSave(const char *dir, int saveAtMs)
+    {
+        auto game = load(dir, "c0a0d");
+        if (!game)
+            return;
+        Game &g = *game;
+        int change = -1;
+        for (int i = 0; i < g.logic.recordCount; ++i)
+        {
+            if (g.logic.records[i].kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel))
+                change = i;
+        }
+        const Landmark *mark = change >= 0 ? findLandmark(g.view.landmarks, g.view.landmarkCount, g.logic.records[change].extra[1])
+                                           : nullptr;
+        if (mark == nullptr)
+            return;
+        for (int k = 0; k < 3; ++k)
+            g.player.origin[k] = mark->origin[k];
+        const Arrival arrival = makeArrival(g.logic, g.view.landmarks, g.view.landmarkCount, g.player, change,
+                                            g.view.modelRefs);
+        auto first = load(dir, "c0a0e");
+        if (!first)
+            return;
+        Game &a = *first;
+        applyArrival(a.logic, a.view.landmarks, a.view.landmarkCount, a.view.nameHashes, a.view.nameCount, a.player,
+                     arrival, a.view.modelRefs);
+        for (int ms = 0; ms < saveAtMs; ms += 33)
+            tick(a);
+        const std::uint32_t level = a.view.header->crc32;
+        std::vector<std::uint8_t> saved = takeMapState(a.logic, a.player, level);
+        const std::size_t mapBytes = saved.size();
+        aiAppendState(saved, a.actors);
+
+        auto second = load(dir, "c0a0e");
+        if (!second)
+            return;
+        Game &n = *second;
+        applyArrival(n.logic, n.view.landmarks, n.view.landmarkCount, n.view.nameHashes, n.view.nameCount, n.player,
+                     arrival, n.view.modelRefs);
+        const bool laid = layMapState(saved.data(), mapBytes, n.logic, n.player, level) &&
+                          aiLayState(saved.data() + mapBytes, saved.size() - mapBytes, n.actors);
+        check(laid, "c0a0e's save, a moment in, lays back over it");
+        int guard = -1, door = -1;
+        for (int i = 0; i < n.actors.count; ++i)
+        {
+            if (n.actors.states[i].active && n.actors.states[i].kind == static_cast<std::uint8_t>(ActorKind::Guard))
+                guard = i;
+        }
+        const std::uint32_t doorHash = nameHash("traindoor");
+        for (int i = 0; i < n.logic.recordCount; ++i)
+        {
+            const LogicRecord &r = n.logic.records[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Train) && r.name != 0 && n.view.nameHashes[r.name] == doorHash)
+                door = i;
+        }
+        check(guard >= 0 && door >= 0, "... with its guard, and the tram's door");
+        if (guard < 0 || door < 0)
+            return;
+        check(n.brushStates[n.logic.records[door].brush].angles[1] == 49152, "... which is turned as the map has it");
+        const ActorState &me = n.actors.states[guard];
+        const ModelView *model = actorModel(n.actors, me);
+        const int push = model != nullptr ? model->findClip(nameHash("intropush")) : -1;
+        const fx doorAt0 = n.brushStates[n.logic.records[door].brush].pos[1];
+        int pushStart = -1, pushEnd = -1, doorMoves = -1;
+        for (int ms = 0; ms < 40000; ms += 33)
+        {
+            tick(n);
+            if (me.clip == push && push >= 0 && pushStart < 0)
+                pushStart = ms;
+            if (pushStart >= 0 && pushEnd < 0 && me.clip != push)
+                pushEnd = ms;
+            if (doorMoves < 0 && n.brushStates[n.logic.records[door].brush].pos[1] != doorAt0)
+                doorMoves = ms;
+        }
+        std::printf("test_talk: c0a0e from a save %d ms in: the guard at %d %d, push %d..%d ms, door at %d ms\n", saveAtMs,
+                    fxToInt(me.pos[0]), fxToInt(me.pos[1]), pushStart, pushEnd, doorMoves);
+        check(pushStart >= 0 && doorMoves >= pushEnd && pushEnd >= 0,
+              "... and after it is loaded the guard comes and pushes, and the door opens after");
+    }
+
     void testFollowerCrosses(const char *dir)
     {
         auto game = load(dir, "c1a2");
@@ -966,6 +1186,10 @@ int main()
         testTable(valve);
         testDecline(valve);
         testBusy(valve);
+        testTramGuard(valve, 0);
+        testTramGuard(valve, 12000);
+        testTramGuardFromSave(valve, 1000);
+        testTramGuardFromSave(valve, 5000);
         testFollow(valve);
         testGuard(valve);
         testGuardFights(valve);

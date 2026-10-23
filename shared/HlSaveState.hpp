@@ -316,6 +316,22 @@ namespace hldata
             return false;
         detail::StateIn in(bytes + sizeof(detail::StateHeading), size - sizeof(detail::StateHeading));
         detail::mapState(in, w, player, format == 2);
+        // A train is turned as its map has it, for good: not as a save made
+        // by another build of the converter says (c0a0e's tram door was once
+        // cooked turned the wrong way round).
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::Train) || record.brush == kNoBrush ||
+                record.brush >= w.brushCount)
+                continue;
+            const std::uint16_t turned[3] = {static_cast<std::uint16_t>(record.extra[0]),
+                                             static_cast<std::uint16_t>(record.extra[1]),
+                                             static_cast<std::uint16_t>(record.extra[2])};
+            const fx at[3] = {w.brushStates[record.brush].pos[0], w.brushStates[record.brush].pos[1],
+                              w.brushStates[record.brush].pos[2]};
+            logicPlaceBrushTurned(w, record.brush, at, turned);
+        }
         // (What the monsters thought is not kept: they think afresh.)
         if (w.actors != nullptr)
             aiRestart(*w.actors);

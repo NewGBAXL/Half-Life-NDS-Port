@@ -252,6 +252,14 @@ namespace hldata
             return true;
         }
 
+        /// None is resident for good any more (what is resident stays, and
+        /// makes way by its score like the rest): for when pinning them all
+        /// left one out -- the sums fit, the pieces did not.
+        void unpinAll()
+        {
+            std::memset(pinned_, 0, sizeof(pinned_[0]) * static_cast<std::size_t>(count_));
+        }
+
         void clearScores()
         {
             std::memset(score_, 0, sizeof(score_[0]) * static_cast<std::size_t>(count_));

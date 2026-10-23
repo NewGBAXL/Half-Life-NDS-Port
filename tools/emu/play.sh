@@ -46,9 +46,9 @@ if [ "${EMU_INSTANCES:-1}" = 2 ]; then
     SCRIPT="sleep 6; place 0 0 0; sleep 0.5; tap 75 15; sleep 0.8; tap 120 387; sleep 0.8; tap 300 387; sleep 3; place 1 320 0; sleep 1; tap 340 15; sleep 1; tap 420 47; sleep 1; tap 200 47; sleep 12; $SCRIPT"
 fi
 # (The wait: the emulator writes the card back to sdroot/ as it quits --
-# the files the ROM wrote, perf.txt -- and X must not go before it has. Ten
-# seconds at most.)
+# the files the ROM wrote, perf.txt -- and X must not go before it has.
+# Thirty seconds at most: a DSi's card takes longer than ten.)
 env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=xcb XDG_CONFIG_HOME="$CFG" EMU_SCRIPT="$SCRIPT" \
     xvfb-run -a -s "-screen 0 ${EMU_SCREEN:-300x450}x24" bash -c \
     '"${MELONDS:-melonDS}" half-life-nds-port.nds >"'"$CFG"'/melonDS.log" 2>&1 &
-     python3 tools/emu/xin.py "$EMU_SCRIPT"; kill %1; for i in $(seq 40); do kill -0 %1 2>/dev/null || break; sleep 0.25; done; sleep 2' 2>/dev/null || true
+     python3 tools/emu/xin.py "$EMU_SCRIPT"; kill %1; for i in $(seq 120); do kill -0 %1 2>/dev/null || break; sleep 0.25; done; sleep 2' 2>/dev/null || true

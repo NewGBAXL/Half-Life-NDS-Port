@@ -400,6 +400,7 @@ namespace hlrt
         if (planner.allFit())
         {
             // Nothing to stream: every texture is there for good.
+            bool leftOut = false;
             for (int i = 0; i < count; ++i)
             {
                 std::uint32_t t, p;
@@ -408,6 +409,19 @@ namespace hlrt
                     ++pinnedTotal;
                     loadNow(i, t, p);
                 }
+                else if (infos[i].streamed)
+                {
+                    leftOut = true;
+                }
+            }
+            // ... unless the sums fit and the pieces of memory did not: then
+            // none is there for good, so that the one left out (c0a0e's
+            // entrance door) takes the place of one that is not in view the
+            // moment it is, instead of being flat for as long as the map is.
+            if (leftOut)
+            {
+                planner.unpinAll();
+                pinnedTotal = 0;
             }
         }
         else

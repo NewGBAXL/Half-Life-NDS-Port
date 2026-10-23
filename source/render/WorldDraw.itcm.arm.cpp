@@ -189,6 +189,25 @@ namespace hlrt
             REG_NDMA_BLENGTH(0) = 112;
             REG_NDMA_CR(0) = NDMA_ENABLE | NDMA_START_FIFO | NDMA_SRC_INC | NDMA_DST_FIX;
         }
+
+        /// Wait for the DMA to have given the geometry engine all it was
+        /// handed. False -- the DMA stopped -- if it has not within two
+        /// frames: on a DSi it has been seen never to (in melonDS, c0a0d's
+        /// tram stopped by the window, now and then), and a wait for ever is
+        /// the whole game stopped. A frame drawn short is the price instead.
+        inline bool listDone()
+        {
+            const std::uint32_t from = Global::vblanks();
+            while (ndmaBusy(0))
+            {
+                if (Global::vblanks() - from >= 2)
+                {
+                    REG_NDMA_CR(0) = 0;
+                    return false;
+                }
+            }
+            return true;
+        }
     } // namespace
 
     void WorldDraw::emitList()
@@ -215,13 +234,17 @@ namespace hlrt
                 {
                     // No room left (it does not happen: see kListWords): all
                     // of it goes, and the list is begun again.
-                    while (ndmaBusy(0))
+                    if (!listDone())
                     {
+                        listStuck_ = true;
+                        return;
                     }
                     if (at != sent)
                         feed(sent, static_cast<std::uint32_t>(at - sent));
-                    while (ndmaBusy(0))
+                    if (!listDone())
                     {
+                        listStuck_ = true;
+                        return;
                     }
                     at = list_;
                     sent = list_;
@@ -251,8 +274,10 @@ namespace hlrt
         }
         if (at != sent)
         {
-            while (ndmaBusy(0))
+            if (!listDone())
             {
+                listStuck_ = true;
+                return;
             }
             feed(sent, static_cast<std::uint32_t>(at - sent));
         }
@@ -265,9 +290,8 @@ namespace hlrt
             return;
         // Nothing else may be written to the geometry engine until the last
         // of the list has gone in.
-        while (ndmaBusy(0))
-        {
-        }
+        if (!listDone())
+            listStuck_ = true;
         listSent_ = false;
     }
 
@@ -276,7 +300,7 @@ namespace hlrt
         // On a DSi, by display list. (Not while its DSP is in use: a DMA to
         // the geometry engine and the DSP's own traffic do not get on --
         // NEA's notes on its display lists -- and the DSP is an option.)
-        if (list_ != nullptr && !sound.extended())
+        if (list_ != nullptr && !sound.extended() && !listStuck_)
         {
             emitList();
             return;

@@ -224,6 +224,10 @@ namespace hlrt
         /// while this processor gets on with something else. Null on a DS.
         std::uint32_t *list_ = nullptr;
         bool listSent_ = false; ///< this pass's world went that way
+        /// The DMA once did not finish what it was given (WorldDraw.itcm's
+        /// listDone): the world is written to the geometry engine by this
+        /// processor from then on, as on a DS.
+        bool listStuck_ = false;
         const hldata::BrushState *brushState_ = nullptr;
         std::uint32_t chosenWords_ = 0;
         std::uint16_t visFrame_ = 0;

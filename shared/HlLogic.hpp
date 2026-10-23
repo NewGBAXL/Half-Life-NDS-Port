@@ -2270,6 +2270,28 @@ namespace hldata
             return best;
         }
 
+        /// Whether anyone the script could take is in the map at all, free
+        /// or not: of its name, or of its class. (Not one of the people who
+        /// has been killed: he will never be free -- and what waits on him
+        /// is let go on, as when there is nobody.)
+        inline bool scriptActorHere(const LogicWorld &w, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            for (int i = 0; i < w.actors->count; ++i)
+            {
+                const ActorState &actor = w.actors->states[i];
+                const bool person = actor.kind == static_cast<std::uint8_t>(ActorKind::Scientist) ||
+                                    actor.kind == static_cast<std::uint8_t>(ActorKind::Guard) ||
+                                    actor.kind == static_cast<std::uint8_t>(ActorKind::Sitter);
+                if (!actor.active || (person && actor.ai >= 5))
+                    continue;
+                if (record.extra[0] != 0 ? actor.name == record.extra[0]
+                                         : (record.damage != 0 && actor.kind == record.damage - 1))
+                    return true;
+            }
+            return false;
+        }
+
         inline void scriptDone(LogicWorld &w, PlayerState &player, int index);
 
         /// The actor is on its mark, facing as the script says: act it out.
@@ -2513,8 +2535,14 @@ namespace hldata
                     // Nobody to act it out -- an actor this port does not
                     // have yet, or one that is not in this map. After a few
                     // tries the script is taken as played, so that the door
-                    // that waits on it still opens.
-                    if (++state.travel[0] >= 3)
+                    // that waits on it still opens. But one who IS here and
+                    // only busy (in another scene, not free to be taken) is
+                    // waited for, as the game waits: c0a0e's tram door opens
+                    // when its guard has pushed its button, not three seconds
+                    // after his scene first asked for him.
+                    if (scriptActorHere(w, index))
+                        state.travel[0] = 0;
+                    else if (++state.travel[0] >= 3)
                     {
                         state.dead = !(record.flags & kLogicToggle);
                         state.running = false;
