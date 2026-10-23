@@ -186,6 +186,11 @@ namespace
     /// map is a quarter of that, so two do not fit. That is why the one thing
     /// that can be checked first -- that the file is there and is a level of
     /// this version -- is.
+    /// The game the map being left belongs to is over (a new game, a save
+    /// loaded, the map begun again): the next loadLevel does not remember
+    /// that map in the game's progress -- which is by then another game's.
+    bool leavingAbandoned = false;
+
     LoadResult loadLevel(const std::string &name, const hldata::Arrival *arrival,
                          std::string &error)
     {
@@ -196,6 +201,7 @@ namespace
         hlrt::SaveGame::finish();
         if (!hlrt::Level::peekHeader(name, header))
         {
+            leavingAbandoned = false;
             error = "Map not on the card:";
             return LoadResult::NotOnCard;
         }
@@ -214,12 +220,14 @@ namespace
             hlrt::screenFade.curtainDown();
 
         // What is broken in the map being left is noted first: it is still
-        // broken if the player comes back.
+        // broken if the player comes back. (Not a map of a game given up.)
         if (hlrt::level.loaded())
         {
-            hlrt::game.rememberMap(hldata::nameHash(currentMap.c_str()));
+            if (!leavingAbandoned)
+                hlrt::game.rememberMap(hldata::nameHash(currentMap.c_str()));
             logPerformance();
         }
+        leavingAbandoned = false;
         hlrt::gpuStats.beginMap();
         // Silence first: the sounds are the map's, and are played out of its
         // memory.
@@ -389,6 +397,7 @@ namespace
             !hlrt::Level::peekHeader(save.map, header))
             return false;
         hlrt::game.adoptProgress(save);
+        leavingAbandoned = true;
         const std::string map = save.map; // loadLevel changes currentMap, which this may be
         // (Whoever came into that map with the player comes into it again.)
         static hldata::Arrival came;
@@ -475,6 +484,8 @@ namespace
         {
             const std::string again = currentMap;
             std::string error;
+            // (From its start: not as it is now.)
+            leavingAbandoned = true;
             if (loadLevel(again, nullptr, error) == LoadResult::Failed)
                 haltWith("Cannot go on:", error.c_str(), again.c_str());
             return "";
@@ -776,6 +787,7 @@ int main(int argc, char *argv[])
             {
                 leaving();
                 hlrt::game.resetProgress();
+                leavingAbandoned = true;
                 if (loadLevel(map, nullptr, error) == LoadResult::Ok)
                 {
                     hlrt::netGame.mapLoaded();
@@ -792,6 +804,7 @@ int main(int argc, char *argv[])
     auto newGame = [&]()
     {
         hlrt::game.resetProgress();
+        leavingAbandoned = true;
         // (A new game is played straight: the COMMAND line's cheats are off.)
         hlrt::game.cheats = hldata::Cheats();
         hlrt::game.crosshair = true;
@@ -990,6 +1003,7 @@ int main(int argc, char *argv[])
                         paused = false;
                         hlrt::sound.setPaused(false);
                         hlrt::game.resetProgress();
+                        leavingAbandoned = true;
                         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
                             haltWith("Cannot start:", error.c_str(), startMap.c_str());
                         saveNow(hldata::kSlotAuto, true);

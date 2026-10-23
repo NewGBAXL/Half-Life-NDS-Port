@@ -2396,9 +2396,16 @@ namespace hldata
                     actor.pos[a] = record.move[a];
                 // (A mark is often drawn a little above the floor it means.
                 // Not for the seated and the dead, who are put where they
-                // are meant.)
-                if (actor.kind != static_cast<std::uint8_t>(ActorKind::Pose) &&
-                    actor.kind != static_cast<std::uint8_t>(ActorKind::Sitter))
+                // are meant. What never walks -- a monster_generic, the
+                // halves of c1a1's guard the laser cuts -- is put on the
+                // floor under the mark itself, as the game puts it there: a
+                // person's box by a wall would rest on the ledge beside it.)
+                if (actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) ||
+                    actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture) ||
+                    actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler))
+                    pointToFloor(*w.world, actor.pos, fxFromInt(36));
+                else if (actor.kind != static_cast<std::uint8_t>(ActorKind::Pose) &&
+                         actor.kind != static_cast<std::uint8_t>(ActorKind::Sitter))
                     actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(36));
                 actor.yaw = yaw;
                 break;

@@ -882,6 +882,32 @@ namespace
     /// c1a1 left and come back to: the zombie killed by the way out does not
     /// come along to c1a1a, and nothing used up happens again -- the trigger
     /// that sends the maker's zombie, the maker, the zombie's scene -- nor
+    /// c1a1's guard the laser cuts: two halves (monster_generic b1 and b2)
+    /// put by their script onto its mark by the wall, at once. On the floor
+    /// there, as the game puts them -- not on the ledge beside it, as a
+    /// person's box would be.
+    void testLaserGuard(const char *dir)
+    {
+        auto game = load(dir, "c1a1");
+        if (!game)
+            return;
+        Game &g = *game;
+        for (int ms = 0; ms < 3000; ms += 33)
+            tick(g);
+        int halves = 0;
+        bool floor = true;
+        for (int i = 0; i < g.actors.count; ++i)
+        {
+            const ActorState &a = g.actors.states[i];
+            if (!a.active || a.kind != static_cast<std::uint8_t>(ActorKind::Generic) ||
+                (a.nameHash != nameHash("b1") && a.nameHash != nameHash("b2")))
+                continue;
+            ++halves;
+            floor = floor && a.pos[0] == fxFromInt(1632) && a.pos[1] == fxFromInt(1558) && a.pos[2] == fxFromInt(-144);
+        }
+        check(halves == 2 && floor, "c1a1's cut guard lies on the floor at its mark, not on the ledge by it");
+    }
+
     /// does the killed stand up again, scientist or zombie.
     void testRevisit(const char *dir)
     {
@@ -1198,6 +1224,7 @@ int main()
         testSentence(valve);
         testFollowerCrosses(valve);
         testRevisit(valve);
+        testLaserGuard(valve);
     }
     if (g_failures == 0)
         std::printf("test_talk: ok\n");
