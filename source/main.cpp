@@ -679,14 +679,12 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
 
     // A crash says where: the address, and the registers (libnds's own
     // screen, in place of the bare "Data abort" it otherwise shows). A
     // photograph of it, and the .elf, say which line.
     defaultExceptionHandler();
-    global.Init();
+    global.Init(argc > 0 ? argv[0] : nullptr);
     // The game library, first: before anything else takes the heap, so that
     // it sits next to the program (GameDll.arm.cpp).
     const char *gameWhy = nullptr;
@@ -716,6 +714,10 @@ int main(int argc, char *argv[])
     if (status != Global::DataStatus::Ok)
     {
         // (What did not match, if it is known, before what to do about it.)
+        // (Without a card, what the console was like: which way it was
+        // started is what tells a loader that leaves the card out.)
+        if (status == Global::DataStatus::NoCard)
+            dataWhy = global.cardWhy;
         const std::string advice = (dataWhy.empty() ? std::string() : dataWhy + " ") + Global::DataStatusHint(status);
         haltWith("Cannot start:", Global::DataStatusTitle(status), advice.c_str());
     }

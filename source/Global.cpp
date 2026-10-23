@@ -1,4 +1,6 @@
 #include "Global.hpp"
+#include <cstdio>
+#include <nds/arm9/dldi.h>
 
 #include "HlManifest.hpp"
 #include "data/VramWriter.hpp"
@@ -54,7 +56,7 @@ void Global::process(void (*draw)())
         NEA_Process(draw);
 }
 
-void Global::Init()
+void Global::Init(const char *launchedFrom)
 {
     // First, before anything is timed against the CPU: every later measurement
     // and every budget chosen from isDSi assumes the clock is already what it
@@ -77,6 +79,20 @@ void Global::Init()
     if (hasFat)
     {
         fatDeviceCPP = fatDevice;
+    }
+    else
+    {
+        // In DSi mode the card is the console's own SD, reached only when
+        // the loader has left it switched on (SCFG_EXT bit 18; the register
+        // reads 0 if the loader locked SCFG). In DS mode it is whatever the
+        // loader's DLDI driver reaches -- none, if it put none in.
+        char text[160];
+        const DLDI_INTERFACE *dldi = io_dldi_data;
+        std::snprintf(text, sizeof(text), "%s mode, SCFG %08lX, DLDI \"%.24s\", from %.60s", isDSi ? "DSi" : "DS",
+                      isDSi ? static_cast<unsigned long>(REG_SCFG_EXT) : 0ul,
+                      dldi != nullptr ? dldi->friendlyName : "none",
+                      launchedFrom != nullptr && launchedFrom[0] != '\0' ? launchedFrom : "(no path)");
+        cardWhy = text;
     }
 
 }

@@ -24,6 +24,11 @@ public:
     const char *fatDevice = nullptr;   ///< libfat default drive, e.g. "fat:" / "sd:"
     std::string fatDeviceCPP;          ///< same as a std::string, for path building
     bool hasFat = false;               ///< FAT init succeeded and a drive is mounted
+    /// Without a card: what the console was like when it looked for one (the
+    /// mode it runs in, its SD switch, the DLDI driver the loader put in, the
+    /// path it was started from) -- said on the screen that says so, which is
+    /// how a loader that leaves the card out is told from another.
+    std::string cardWhy;
     /// Booted in DSi mode: 16 MB of main RAM and the 134 MHz clock are available.
     /// False on a DS, a DS Lite, and on a DSi/3DS running the ROM in DS mode
     /// (most flashcards).
@@ -32,7 +37,8 @@ public:
     bool fastClock = false;
 
     /// IRQs, clock and FAT: everything but the picture. Call once at startup.
-    void Init();
+    /// `launchedFrom`: argv[0], if the loader gave one.
+    void Init(const char *launchedFrom = nullptr);
 
     /// How the picture is drawn. One pass, at sixty a second; or, on a DSi
     /// and for the heaviest maps only (levelIsHeavy), two: each half of the
