@@ -78,6 +78,47 @@ namespace
         check(known, "every command help shows is read");
     }
 
+    void testHelpAndLog()
+    {
+        const CommandLine a = parseCommand("god help"), b = parseCommand("help god"), c = parseCommand("HELP Noclip"),
+                          d = parseCommand("impulse help");
+        check(a.command == Command::Usage && std::strcmp(a.args[0], "god") == 0 && b.command == Command::Usage &&
+                  std::strcmp(b.args[0], "god") == 0 && c.command == Command::Usage &&
+                  std::strcmp(c.args[0], "noclip") == 0 && d.command == Command::Usage &&
+                  std::strcmp(d.args[0], "impulse") == 0,
+              "\"<command> help\" and \"help <command>\" ask how it is used");
+        check(parseCommand("help").command == Command::Help && parseCommand("help 2").command == Command::Help &&
+                  parseCommand("give help").command == Command::Usage,
+              "... and help alone is the list");
+        bool said = true;
+        for (const CommandInfo &info : kCommands)
+            said = said && info.about != nullptr && info.about[0] != '\0' &&
+                   std::strlen(info.about) <= static_cast<std::size_t>(ConsoleLog::kColumns) &&
+                   commandInfo(info.name) == &info;
+        check(said, "every command says what it does, in a line of the console");
+
+        ConsoleLog log;
+        log.print("one\ntwo");
+        check(log.count() == 2 && std::strcmp(log.line(0), "one") == 0 && std::strcmp(log.line(1), "two") == 0,
+              "the console takes a line at each newline");
+        log.print("aaaa bbbb cccc dddd eeee ffff gggg hhhh");
+        check(log.count() == 4 && std::strcmp(log.line(2), "aaaa bbbb cccc dddd eeee ffff") == 0 &&
+                  std::strcmp(log.line(3), "gggg hhhh") == 0,
+              "... and breaks a long one at a space");
+        log.print("0123456789012345678901234567890123456789");
+        check(log.count() == 6 && std::strlen(log.line(4)) == 32 && std::strcmp(log.line(5), "23456789") == 0,
+              "... or anywhere, for a word longer than a line");
+        for (int n = 0; n < 100; ++n)
+        {
+            char text[8];
+            std::snprintf(text, sizeof(text), "%d", n);
+            log.print(text);
+        }
+        check(log.count() == ConsoleLog::kLines && std::strcmp(log.line(0), "36") == 0 &&
+                  std::strcmp(log.line(ConsoleLog::kLines - 1), "99") == 0,
+              "... keeping its newest 64");
+    }
+
     std::unique_ptr<Game> load(const char *dir, const char *map)
     {
         auto game = std::make_unique<Game>();
@@ -307,6 +348,7 @@ namespace
 int main()
 {
     testParse();
+    testHelpAndLog();
     const char *dir = std::getenv("HLDS_VALVE_DIR");
     if (dir != nullptr && dir[0] != '\0')
         testCheats(dir);

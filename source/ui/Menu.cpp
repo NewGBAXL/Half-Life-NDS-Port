@@ -2,6 +2,7 @@
 
 #include "ui/Menu.hpp"
 
+#include "HlCommands.hpp"
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Input.hpp"
@@ -1043,15 +1044,21 @@ namespace hlrt
         return action;
     }
 
-    bool Menu::typeLine(std::string &typed)
+    void Menu::console(ConsoleRun run)
     {
         static const char *const kKeys[4] = {"1234567890", "qwertyuiop", "asdfghjkl_", "zxcvbnm-.<"};
+        // What the console has said, kept while the game runs (as the
+        // game's own is): closed and opened again, it is all still there.
+        static ConsoleLog log;
+        if (log.count() == 0)
+            log.print("help: the commands\n<command> help: how to use one");
         // The lines typed before, most recent last: up and down on the pad
         // bring them back.
         constexpr int kRemembered = 8;
         constexpr std::size_t kLongest = 32;
         static std::string earlier[kRemembered];
         static int earlierCount = 0;
+        std::string typed;
         int recalled = earlierCount;
         auto remember = [&]()
         {
@@ -1065,21 +1072,42 @@ namespace hlrt
             }
             earlier[earlierCount++] = typed;
         };
-        constexpr int kKey = 24, kLeft = 8, kTop = 58, kBottom = kTop + 4 * kKey + 4;
+        // The screen, from the top: what was said (kShown lines of the plain
+        // letters), the line being typed, the keys, and SPACE / ENTER /
+        // CANCEL, small, along the bottom.
+        constexpr int kShown = 7, kLineStep = 9, kLogTop = 0;
+        constexpr int kPromptTop = 64, kPromptHigh = 16;
+        constexpr int kKey = 24, kLeft = 8, kTop = 82;
+        constexpr int kBottom = 180, kWideHigh = 12;
         bottomScreen.release();
         Canvas &canvas = touchCanvas.canvas();
-        const FontView &font = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall);
-        typed.clear();
+        const FontView &font = touchCanvas.font(kFontMedium), &small = touchCanvas.font(kFontSmall),
+                       &plain = touchCanvas.plain();
+        int scrolled = 0; // lines back from the newest
+        auto said = [&]()
+        {
+            canvas.fill(0, kLogTop, 256, kShown * kLineStep, kUiBack);
+            const int last = log.count() - scrolled;
+            for (int n = 0; n < kShown; ++n)
+            {
+                const int at = last - kShown + n;
+                if (at >= 0)
+                    drawText(canvas, plain, 0, kLogTop + n * kLineStep, log.line(at), inkFor(plain, kUiGrey));
+            }
+            if (scrolled > 0)
+                drawText(canvas, plain, 248, kLogTop, "^", inkFor(plain, kUiOrange));
+        };
         auto prompt = [&]()
         {
-            canvas.fill(0, 30, 256, 22, kUiBack);
-            canvas.frame(6, 30, 244, 22, kUiEdge);
+            canvas.fill(0, kPromptTop, 256, kPromptHigh, kUiBack);
+            canvas.frame(6, kPromptTop, 244, kPromptHigh, kUiEdge);
             // (A long line: its end, which is where the typing is.)
             char line[48];
-            const std::size_t shown = 26;
+            const std::size_t shown = 27;
             const char *from = typed.size() > shown ? typed.c_str() + (typed.size() - shown) : typed.c_str();
-            std::snprintf(line, sizeof(line), "%s%s_", typed.size() > shown ? "<" : "> ", from);
-            drawText(canvas, font, 12, 30 + (22 - font.height()) / 2, line, inkFor(font, kUiWhite));
+            std::snprintf(line, sizeof(line), "%s%s_", typed.size() > shown ? "<" : "] ", from);
+            drawText(canvas, plain, 12, kPromptTop + (kPromptHigh - plain.height()) / 2, line,
+                     inkFor(plain, kUiWhite));
         };
         auto key = [&](int row, int col, bool down)
         {
@@ -1093,13 +1121,12 @@ namespace hlrt
         auto wide = [&](int n, bool down)
         {
             static const char *const kNames[3] = {"SPACE", "ENTER", "CANCEL"};
-            canvas.button(kLeft + n * 80, kBottom, 79, 26, down);
-            drawTextCentred(canvas, font, kLeft + n * 80 + 40, kBottom + (26 - font.height()) / 2, kNames[n],
-                            inkFor(font, down ? kUiWhite : kUiOrange));
+            canvas.button(kLeft + n * 80, kBottom, 79, kWideHigh, down);
+            drawTextCentred(canvas, small, kLeft + n * 80 + 40, kBottom + (kWideHigh - small.height()) / 2, kNames[n],
+                            inkFor(small, down ? kUiWhite : kUiOrange));
         };
         canvas.clear();
-        drawText(canvas, small, 8, 2, "COMMAND", inkFor(small, kUiOrange));
-        drawText(canvas, small, 8, 15, "help: what there is    up/down: lines before", inkFor(small, kUiGrey));
+        said();
         prompt();
         for (int row = 0; row < 4; ++row)
         {
@@ -1108,30 +1135,71 @@ namespace hlrt
         }
         for (int n = 0; n < 3; ++n)
             wide(n, false);
+        // The line given: said above, run, and what it said said too.
+        // Whether the console is to close now.
+        auto enter = [&]() -> bool
+        {
+            remember();
+            recalled = earlierCount;
+            const std::string line = typed;
+            typed.clear();
+            scrolled = 0;
+            if (line.empty())
+            {
+                prompt();
+                return false;
+            }
+            log.print(("] " + line).c_str());
+            const ConsoleReply reply = run(line);
+            if (!reply.text.empty())
+                log.print(reply.text.c_str());
+            if (reply.close)
+                return true;
+            // (What the line did may have had the touch screen -- a map
+            // that did not load, a save: taken back, and drawn again whole.)
+            bottomScreen.release();
+            canvas.clear();
+            said();
+            prompt();
+            for (int row = 0; row < 4; ++row)
+            {
+                for (int col = 0; col < 10; ++col)
+                    key(row, col, false);
+            }
+            for (int n = 0; n < 3; ++n)
+                wide(n, false);
+            return false;
+        };
 
         // The touch that asked for this is still down, and may be on a key
         // now: not until it has lifted is anything typed.
         bool touching = true;
-        int heldRow = -1, heldCol = -1;
+        int heldRow = -1, heldCol = -1, heldWide = -1;
         while (true)
         {
             swiWaitForVBlank();
             sound.frame();
             scanKeys();
-            if (keysDown() & KEY_B)
-                return false;
-            if (keysDown() & (KEY_START | KEY_A))
+            const std::uint32_t pressed = keysDown();
+            if (pressed & (KEY_B | KEY_START))
+                return;
+            if ((pressed & KEY_A) && enter())
+                return;
+            if ((pressed & (KEY_UP | KEY_DOWN)) && earlierCount > 0)
             {
-                remember();
-                return true;
-            }
-            if ((keysDown() & (KEY_UP | KEY_DOWN)) && earlierCount > 0)
-            {
-                recalled += (keysDown() & KEY_UP) ? -1 : 1;
+                recalled += (pressed & KEY_UP) ? -1 : 1;
                 recalled = recalled < 0 ? 0 : (recalled > earlierCount ? earlierCount : recalled);
                 typed = recalled < earlierCount ? earlier[recalled] : std::string();
                 sound.ui(kUiSoundTick);
                 prompt();
+            }
+            if (pressed & (KEY_L | KEY_R))
+            {
+                // A page back (L) or on (R) through what was said.
+                const int most = log.count() > kShown ? log.count() - kShown : 0;
+                scrolled += (pressed & KEY_L) ? kShown - 1 : -(kShown - 1);
+                scrolled = scrolled < 0 ? 0 : (scrolled > most ? most : scrolled);
+                said();
             }
             const bool down = (keysHeld() & KEY_TOUCH) != 0;
             if (down && !touching)
@@ -1139,19 +1207,18 @@ namespace hlrt
                 touchPosition touch;
                 touchRead(&touch);
                 const int col = (touch.px - kLeft) / kKey, row = (touch.py - kTop) / kKey;
-                if (touch.py >= kBottom && touch.py < kBottom + 26 && touch.px >= kLeft)
+                if (touch.py >= kBottom && touch.py < kBottom + kWideHigh && touch.px >= kLeft && touch.px < kLeft + 240)
                 {
                     const int n = (touch.px - kLeft) / 80;
                     sound.ui(kUiSoundPress);
-                    if (n == 1)
-                    {
-                        remember();
-                        return true;
-                    }
+                    if (n == 1 && enter())
+                        return;
                     if (n == 2)
-                        return false;
+                        return;
                     if (n == 0 && typed.size() < kLongest)
                         typed.push_back(' ');
+                    heldWide = n;
+                    wide(n, true);
                     prompt();
                 }
                 else if (touch.px >= kLeft && touch.py >= kTop && col < 10 && row < 4 && kKeys[row][col] != ' ')
@@ -1177,6 +1244,11 @@ namespace hlrt
             {
                 key(heldRow, heldCol, false);
                 heldRow = heldCol = -1;
+            }
+            else if (!down && heldWide >= 0)
+            {
+                wide(heldWide, false);
+                heldWide = -1;
             }
             touching = down;
         }

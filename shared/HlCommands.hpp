@@ -37,6 +37,7 @@ namespace hldata
         Timescale,   ///< host_timescale <x>
         KillAll,     ///< killall <class>
         BarnacleKill, ///< barnaclekill: a barnacle that grabs the player dies of it
+        Usage,        ///< <name> help, help <name>: how a command is written (args[0])
         Count
     };
 
@@ -45,30 +46,42 @@ namespace hldata
         const char *name;
         Command command;
         const char *usage; ///< for help: how it is written
+        const char *about; ///< ... and what it does (a console line: 32 letters at most)
     };
     /// Every name the line knows (aliases too), in the order help shows them.
     inline constexpr CommandInfo kCommands[] = {
-        {"help", Command::Help, "help [page]"},
-        {"god", Command::God, "god"},
-        {"notarget", Command::Notarget, "notarget"},
-        {"noclip", Command::Noclip, "noclip"},
-        {"give", Command::GiveAll, "give [item]"},
-        {"impulse", Command::Unknown, "impulse 101 / 100"},
-        {"heal", Command::Heal, "heal"},
-        {"health", Command::Health, "health <n>"},
-        {"kill", Command::Kill, "kill"},
-        {"killall", Command::KillAll, "killall <monster>"},
-        {"barnaclekill", Command::BarnacleKill, "barnaclekill"},
-        {"map", Command::Map, "map <name>"},
-        {"changelevel", Command::Map, "changelevel <name>"},
-        {"restart", Command::Restart, "restart"},
-        {"save", Command::Save, "save"},
-        {"load", Command::Load, "load"},
-        {"fov", Command::Fov, "fov <60..110>"},
-        {"crosshair", Command::Crosshair, "crosshair 0/1"},
-        {"sv_gravity", Command::Gravity, "sv_gravity <n>"},
-        {"host_timescale", Command::Timescale, "host_timescale <x>"},
+        {"help", Command::Help, "help [command]", "the commands, or how to use one"},
+        {"god", Command::God, "god", "nothing hurts you (again: off)"},
+        {"notarget", Command::Notarget, "notarget", "monsters do not see you"},
+        {"noclip", Command::Noclip, "noclip", "fly through walls (again: off)"},
+        {"give", Command::GiveAll, "give [item]", "everything, or one weapon_/ammo_"},
+        {"impulse", Command::Unknown, "impulse 101 / 100", "101: everything, 100: flashlight"},
+        {"heal", Command::Heal, "heal", "health back to 100"},
+        {"health", Command::Health, "health <n>", "health set to n (1..999)"},
+        {"kill", Command::Kill, "kill", "you die"},
+        {"killall", Command::KillAll, "killall <monster>", "kills a kind, or all: monsters"},
+        {"barnaclekill", Command::BarnacleKill, "barnaclekill", "a barnacle that grabs you dies"},
+        {"map", Command::Map, "map <name>", "goes to a map (c1a0, c2a5...)"},
+        {"changelevel", Command::Map, "changelevel <name>", "the same as map"},
+        {"restart", Command::Restart, "restart", "this map again from its start"},
+        {"save", Command::Save, "save", "quick save"},
+        {"load", Command::Load, "load", "loads the quick save"},
+        {"fov", Command::Fov, "fov <60..110>", "how wide the view is, degrees"},
+        {"crosshair", Command::Crosshair, "crosshair 0/1", "the crosshair off or on"},
+        {"sv_gravity", Command::Gravity, "sv_gravity <n>", "gravity (800 is the game's)"},
+        {"host_timescale", Command::Timescale, "host_timescale <x>", "game speed (0.25..2)"},
     };
+
+    /// The entry of the command called `name`, or null.
+    inline const CommandInfo *commandInfo(const char *name)
+    {
+        for (const CommandInfo &info : kCommands)
+        {
+            if (std::strcmp(info.name, name) == 0)
+                return &info;
+        }
+        return nullptr;
+    }
     inline constexpr int kCommandNames = static_cast<int>(sizeof(kCommands) / sizeof(kCommands[0]));
 
     /// A line, read: what it asks for, and up to three words after it.
@@ -127,8 +140,66 @@ namespace hldata
         }
         if (out.command == Command::GiveAll && out.argc > 0 && std::strcmp(out.verb, "give") == 0)
             out.command = Command::Give;
+        // How one is used: "god help" (the console's way), or "help god".
+        if (std::strcmp(out.verb, "help") == 0 && out.argc > 0 && commandInfo(out.args[0]) != nullptr)
+            out.command = Command::Usage;
+        else if (out.argc > 0 && std::strcmp(out.args[0], "help") == 0 && std::strcmp(out.verb, "help") != 0)
+        {
+            out.command = Command::Usage;
+            std::strcpy(out.args[0], out.verb);
+        }
         return out;
     }
+
+    /// What the console has said: its last kLines lines, each at most
+    /// kColumns letters (the plain 8x8 letters across the touch screen).
+    struct ConsoleLog
+    {
+        static constexpr int kLines = 64;
+        static constexpr int kColumns = 32;
+        char lines[kLines][kColumns + 1] = {};
+        int first = 0; ///< where the oldest is
+        int total = 0;
+
+        int count() const { return total; }
+        /// Line `i`, 0 the oldest kept.
+        const char *line(int i) const { return lines[(first + i) % kLines]; }
+        void add(const char *text, int length)
+        {
+            char *into = lines[(first + total) % kLines];
+            if (total == kLines)
+                first = (first + 1) % kLines;
+            else
+                ++total;
+            length = length > kColumns ? kColumns : length;
+            std::memcpy(into, text, static_cast<std::size_t>(length));
+            into[length] = '\0';
+        }
+        /// `text`, a line at each '\n', and those longer than a line broken
+        /// at a space (or anywhere, if a word is longer).
+        void print(const char *text)
+        {
+            while (true)
+            {
+                const char *end = std::strchr(text, '\n');
+                int length = end != nullptr ? static_cast<int>(end - text) : static_cast<int>(std::strlen(text));
+                while (length > kColumns)
+                {
+                    int cut = kColumns;
+                    while (cut > 0 && text[cut] != ' ')
+                        --cut;
+                    add(text, cut > 0 ? cut : kColumns);
+                    const int skip = cut > 0 ? cut + 1 : kColumns;
+                    text += skip;
+                    length -= skip;
+                }
+                add(text, length);
+                if (end == nullptr)
+                    return;
+                text = end + 1;
+            }
+        }
+    };
 
     /// A number as the console writes it ("800", "-3", "0.5"), times 256.
     /// False if it is not one.

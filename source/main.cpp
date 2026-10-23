@@ -435,34 +435,18 @@ namespace
         {
         case Command::Help:
         {
-            // As many names a page as the screen is wide (about 26
-            // letters, and which page): "help 2" for the next.
-            constexpr std::size_t kWidth = 26;
-            int starts[hldata::kCommandNames + 1];
-            int pages = 0;
-            for (int i = 0, used = static_cast<int>(kWidth) + 1; i < hldata::kCommandNames; ++i)
-            {
-                const int length = static_cast<int>(std::strlen(hldata::kCommands[i].name));
-                if (used + 1 + length > static_cast<int>(kWidth))
-                {
-                    starts[pages++] = i;
-                    used = length;
-                }
-                else
-                {
-                    used += 1 + length;
-                }
-            }
-            starts[pages] = hldata::kCommandNames;
-            int page = 256;
-            number(0, page);
-            page = page >> 8;
-            page = page < 1 ? 1 : (page > pages ? pages : page);
-            std::string text;
-            for (int i = starts[page - 1]; i < starts[page]; ++i)
-                text += std::string(i > starts[page - 1] ? " " : "") + hldata::kCommands[i].name;
-            std::snprintf(said, sizeof(said), " %d/%d", page, pages);
-            return text + said;
+            // Every name, the console wraps them.
+            std::string text = "commands (<command> help: how):\n";
+            for (int i = 0; i < hldata::kCommandNames; ++i)
+                text += std::string(i > 0 ? " " : "") + hldata::kCommands[i].name;
+            return text;
+        }
+        case Command::Usage:
+        {
+            const hldata::CommandInfo *info = hldata::commandInfo(line.args[0]);
+            if (info == nullptr)
+                return std::string("unknown: ") + line.args[0] + " (try help)";
+            return std::string("usage: ") + info->usage + "\n  " + info->about;
         }
         case Command::Map:
         {
@@ -648,12 +632,18 @@ namespace
         return line.verb[0] == '\0' ? std::string() : std::string("unknown: ") + line.verb + " (try help)";
     }
 
-    /// Show the keyboard, take a line, run it. The game stands still
-    /// meanwhile, and its sound with it (the caller's pause is still on).
-    std::string commandLine()
+    /// A line typed at the console: run, and what it said. What takes the
+    /// player somewhere else (another map, a save, the start again, death)
+    /// closes the console once done.
+    hlrt::Menu::ConsoleReply consoleLine(const std::string &typed)
     {
-        std::string typed;
-        return hlrt::menu.typeLine(typed) ? runCommand(typed) : std::string();
+        using hldata::Command;
+        hlrt::Menu::ConsoleReply reply;
+        reply.text = runCommand(typed);
+        const Command command = hldata::parseCommand(typed.c_str()).command;
+        reply.close = reply.text.empty() && (command == Command::Map || command == Command::Restart ||
+                                             command == Command::Load || command == Command::Kill);
+        return reply;
     }
 
     /// A development aid (tools/emu): a card with debug_start.txt on it starts
@@ -1009,18 +999,16 @@ int main(int argc, char *argv[])
                     }
                     else if (item == Menu::Action::Command)
                     {
-                        // The debug command line. Whatever it has to say is
-                        // left on the screen until the pad is next drawn.
-                        // (The sound stands still with the game for as long
-                        // as the keyboard is up, as on the menu's other
-                        // pages; a map the line asks for is loaded with it
-                        // still, and heard once the line is done with.)
-                        const std::string said = commandLine();
+                        // The console: lines typed and run, and what they
+                        // said, until it is closed -- then straight back to
+                        // the game. (The sound stands still with the game
+                        // for as long as it is up, as on the menu's other
+                        // pages; a map a line asks for is loaded with it
+                        // still, and heard once the console is closed.)
+                        hlrt::menu.console(consoleLine);
                         paused = false;
                         hlrt::sound.setPaused(false);
                         hlrt::bottomScreen.showPad();
-                        if (!said.empty())
-                            hlrt::bottomScreen.showMessage(said.c_str(), "START, then RESUME");
                         lastVblank = Global::vblanks();
                     }
                     else if (item == Menu::Action::Resume || hlrt::input.startPressed)

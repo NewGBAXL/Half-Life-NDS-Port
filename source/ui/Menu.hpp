@@ -42,10 +42,21 @@ namespace hlrt
         int slot() const { return slot_; }
         /// Once a frame while it is open (after the keys have been scanned).
         Action frame();
-        /// A line typed on the keyboard. False if it was given up (B).
-        /// Stands the game still meanwhile. The sound is whatever it was
-        /// (the menu's caller has it paused); the keys' own clicks are heard.
-        bool typeLine(std::string &typed);
+        /// What a console line said, and whether it closes the console.
+        struct ConsoleReply
+        {
+            std::string text;
+            bool close = false;
+        };
+        using ConsoleRun = ConsoleReply (*)(const std::string &line);
+        /// The console: the game's own, on the touch screen -- what it has
+        /// said above, the line being typed, the keyboard. Each line given
+        /// (ENTER, A) is run by `run`, and it and what it said are added
+        /// above; it is closed by CANCEL, B or START, or by a line that
+        /// says so. Stands the game still meanwhile. The sound is whatever
+        /// it was (the menu's caller has it paused); the keys' own clicks
+        /// are heard.
+        void console(ConsoleRun run);
 
     private:
         enum class Page
