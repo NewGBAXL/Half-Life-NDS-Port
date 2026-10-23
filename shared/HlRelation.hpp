@@ -84,10 +84,13 @@ namespace hldata
         case ActorKind::Generic: // (monster_generic: the game's PLAYER_ALLY)
             return kClassPlayerAlly;
         case ActorKind::Headcrab:
+        case ActorKind::BabyCrab:
             return kClassAlienPrey;
         case ActorKind::Zombie:
         case ActorKind::Houndeye:
         case ActorKind::Barnacle:
+        case ActorKind::Gargantua:
+        case ActorKind::Ichthyosaur:
             return kClassAlienMonster;
         case ActorKind::Slave:
         case ActorKind::AlienGrunt:
@@ -101,10 +104,12 @@ namespace hldata
         case ActorKind::Bullsquid:
             return kClassAlienPredator;
         case ActorKind::Grunt:
+        case ActorKind::Assassin:
             return kClassHumanMilitary;
         case ActorKind::Miniturret:
         case ActorKind::Sentry:
         case ActorKind::Turret:
+        case ActorKind::Osprey:
             return kClassMachine;
         case ActorKind::Player:
             return kClassPlayer;

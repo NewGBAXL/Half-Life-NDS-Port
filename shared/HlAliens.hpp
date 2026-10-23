@@ -1569,6 +1569,1061 @@ namespace hldata
         }
     } // namespace leech
 
+    // ================================================================ round 4
+    //
+    //   gargantua   gargantua.cpp  only what burns, crushes or blows up hurts
+    //                              it; swipes up close, a sweep of flame a
+    //                              little further off, and from afar a stomp
+    //                              that runs along the ground at its enemy
+    //                              (HlMonsters.hpp's shots: kShotStomp)
+    //   baby crab   headcrab.cpp   (CBabyCrab) a headcrab, smaller, weaker,
+    //                              higher-voiced, that leaps from closer
+    //   ichthyosaur ichthyosaur.cpp its own swimming think, as the leech's:
+    //                              about its water, round what it is after,
+    //                              at it, and a bite that shakes
+
+    // ============================================================== gargantua
+
+    namespace garg
+    {
+        inline constexpr int kAttackDist = 80;   ///< GARG_ATTACKDIST
+        inline constexpr int kFlameLength = 330; ///< GARG_FLAME_LENGTH
+        inline constexpr int kSlashLeft = 1;     ///< GARG_AE_SLASH_LEFT
+        inline constexpr int kLeftFoot = 3;      ///< GARG_AE_LEFT_FOOT
+        inline constexpr int kRightFoot = 4;     ///< GARG_AE_RIGHT_FOOT
+        inline constexpr int kStomp = 5;         ///< GARG_AE_STOMP
+        inline constexpr int kBreathe = 6;       ///< GARG_AE_BREATHE
+        // sk_gargantua_*, at "normal".
+        inline constexpr int kHealth = 800;
+        inline constexpr int kDmgSlash = 30;
+        inline constexpr int kDmgFire = 5;
+        /// GARG_DAMAGE: all that hurts it (DMG_MORTAR is a blast here).
+        inline constexpr std::uint32_t kHurtBy = kDmgEnergyBeam | kDmgCrush | kDmgBlast;
+        // m_flameTime: time1; m_seeTime: time2; m_painSoundTime: time3; its
+        // flames are on: flag1; m_flameY, m_flameX: aimYaw, aimPitch (65536
+        // to the circle, as its bone controllers have them); how many of the
+        // blasts it dies in have gone off: count1.
+
+        enum : std::uint8_t
+        {
+            kTaskSoundAttack = kTaskLastCommon + 1, ///< TASK_SOUND_ATTACK
+            kTaskFlameSweep,                        ///< TASK_FLAME_SWEEP
+        };
+
+        inline constexpr AiTask tlFlame[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFaceEnemy, 0},
+            {kTaskSoundAttack, 0},
+            {kTaskSetActivity, kActMeleeAttack2},
+            {kTaskFlameSweep, 4500},
+            {kTaskSetActivity, kActIdle},
+        };
+        inline constexpr AiSchedule slFlame = {tlFlame, 6, 0, 0, "GargFlame"};
+        inline constexpr AiTask tlSwipe[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFaceEnemy, 0},
+            {kTaskMeleeAttack1, 0},
+        };
+        inline constexpr AiSchedule slSwipe = {tlSwipe, 3, kCondCanMeleeAttack2, 0, "GargSwipe"};
+
+        inline int yawSpeed(AiCtx &c)
+        {
+            return c.m.activity == kActTurnLeft || c.m.activity == kActTurnRight ? 180 : 60;
+        }
+
+        /// Where a flame comes out: its two arms. (The game's attachments 1
+        /// and 2, on the forearms; this port does not pose a monster to
+        /// think, so they are where the arms are held to throw it.)
+        inline void nozzle(const AiCtx &c, int side, fx *at)
+        {
+            fx forward[3], right[3];
+            aiForward(c.me.yaw, forward);
+            aiRight(c.me.yaw, right);
+            for (int k = 0; k < 3; ++k)
+                at[k] = c.me.pos[k] + forward[k] * 48 + right[k] * (side == 0 ? 40 : -40);
+            at[2] += fxFromInt(100);
+        }
+
+        /// FlameDamage: whatever is near the flame's line and that it can
+        /// reach, less the further from it -- not the gargantua's own kind.
+        inline void flameDamage(AiCtx &c, const fx *start, const fx *end)
+        {
+            fx mid[3], aim[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                mid[k] = (start[k] + end[k]) / 2;
+                aim[k] = end[k] - start[k];
+            }
+            const fx length = fxLength(aim);
+            if (length <= 0)
+                return;
+            for (int k = 0; k < 3; ++k)
+                aim[k] = static_cast<fx>((static_cast<std::int64_t>(aim[k]) << kFxShift) / length);
+            const fx radius = length / 2;
+            auto burn = [&](std::int16_t id, const fx *spot)
+            {
+                const fx d[3] = {spot[0] - mid[0], spot[1] - mid[1], spot[2] - mid[2]};
+                if (fxLength(d) > radius + fxFromInt(64))
+                    return;
+                fx along = fxMul(aim[0], d[0]) + fxMul(aim[1], d[1]) + fxMul(aim[2], d[2]);
+                along = along > radius ? radius : (along < -radius ? radius : along); // (the game's, both ways)
+                fx src[3];
+                for (int k = 0; k < 3; ++k)
+                    src[k] = mid[k] + fxMul(aim[k], along);
+                if (!lineClear(*c.w.world, src, spot))
+                    return;
+                const fx off[3] = {spot[0] - src[0], spot[1] - src[1], spot[2] - src[2]};
+                const int far = fxToInt(fxLength(off));
+                const int damage = far > 64 ? kDmgFire - (far - 64) * 2 / 5 : kDmgFire;
+                if (damage > 0)
+                    aiDamageTarget(c, id, damage, kDmgBurn);
+            };
+            if (c.player.health > 0)
+                burn(kAiPlayer, c.player.origin);
+            for (int i = 0; i < c.a.count; ++i)
+            {
+                const ActorState &other = c.a.states[i];
+                if (i == c.index || !other.active || other.ai >= kAiDying || !canBeHurt(other.kind) ||
+                    kindClass(other.kind) == kClassAlienMonster)
+                    continue;
+                fx lo[3], hi[3];
+                targetBox(other, lo, hi);
+                const fx spot[3] = {(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2};
+                burn(static_cast<std::int16_t>(i), spot);
+            }
+        }
+
+        /// FlameUpdate: each of the two flames to where it is aimed, and what
+        /// it reaches burned. (Drawn as the game's two beams each: the long
+        /// orange one, and a short blue one in it.)
+        inline void flameUpdate(AiCtx &c)
+        {
+            const std::uint16_t yaw = static_cast<std::uint16_t>(c.me.yaw + c.me.aimYaw);
+            fx sine, cosine, ps, pc;
+            fxSinCos(yaw, sine, cosine);
+            fxSinCos(static_cast<std::uint16_t>(-c.me.aimPitch), ps, pc);
+            const fx forward[3] = {fxMul(cosine, pc), fxMul(sine, pc), ps};
+            for (int side = 0; side < 2; ++side)
+            {
+                fx start[3], end[3];
+                nozzle(c, side, start);
+                aiTraceLine(c, start, forward, kFlameLength, end);
+                Effect &outer = effectAdd(c.a, kEffectBeam, start, end, 12, 150);
+                outer.colour = 0x2E1F; // (255, 130, 90)
+                fx inner[3];
+                for (int k = 0; k < 3; ++k)
+                    inner[k] = start[k] + (end[k] - start[k]) * 2 / 5;
+                Effect &core = effectAdd(c.a, kEffectBeam, start, inner, 6, 150);
+                core.colour = 0x7DE0; // (0, 120, 255)
+                flameDamage(c, start, end);
+            }
+        }
+
+        /// FlameControls: the flames turned towards where it wants them, a
+        /// little at a time, within 45 degrees either way.
+        inline void flameControls(AiCtx &c, int angleX, int angleY)
+        {
+            angleY = angleY < -8192 ? -8192 : (angleY > 8192 ? 8192 : angleY);
+            auto approach = [](int target, int value, int speed)
+            {
+                const int d = static_cast<std::int16_t>(target - value);
+                return d > speed ? value + speed : (d < -speed ? value - speed : target);
+            };
+            // (4 and 8 degrees a think.)
+            c.me.aimPitch = approach(angleX, c.me.aimPitch, 4 * 65536 / 360);
+            c.me.aimYaw = approach(angleY, c.me.aimYaw, 8 * 65536 / 360);
+        }
+
+        inline void flameDestroy(AiCtx &c)
+        {
+            if (c.m.flag1)
+                detail::aiSay(c, CommonSound::GargFlameOff);
+            c.m.flag1 = false;
+        }
+
+        /// StompAttack: a shock that runs along the ground from its feet at
+        /// its enemy, as far as the first wall, faster and faster.
+        inline void stompAttack(AiCtx &c)
+        {
+            fx forward[3];
+            aiForward(c.me.yaw, forward);
+            const fx start[3] = {c.me.pos[0] + forward[0] * 35, c.me.pos[1] + forward[1] * 35, c.me.pos[2] + fxFromInt(60)};
+            fx aim[3] = {forward[0], forward[1], 0};
+            AiTarget t;
+            if (c.m.enemy != kAiNone && aiTargetOf(c.w, c.player, c.m.enemy, t))
+            {
+                const fx d[3] = {t.center[0] - start[0], t.center[1] - start[1], t.center[2] - start[2]};
+                const fx far = fxLength(d);
+                for (int k = 0; far > 0 && k < 3; ++k)
+                    aim[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) << kFxShift) / far);
+            }
+            const fx end[3] = {start[0] + aim[0] * 1024, start[1] + aim[1] * 1024, start[2] + aim[2] * 1024};
+            const Shot wall = traceShot(*c.w.world, start, end);
+            const int length = static_cast<int>((1024LL * wall.fraction) >> kFractionShift);
+            if (Projectile *shot = projectileAdd(c.a, kShotStomp, start, aim, 0))
+            {
+                shot->sprite = 30;     // (its framerate: how fast it gathers speed)
+                shot->leftMs = length; // (and a speed of nothing)
+            }
+            shakeStart(c.w, fxFromInt(12), 2000);
+            detail::aiSay(c, CommonSound::GargStomp);
+        }
+
+        inline void animEvent(AiCtx &c, int event)
+        {
+            switch (event)
+            {
+            case kSlashLeft:
+            {
+                const std::int16_t hit = aiHullAttack(c, kAttackDist + 10, kDmgSlash, kDmgSlash);
+                if (hit != kAiNone)
+                {
+                    detail::aiPunch(c, hit, -fxFromInt(30), fxFromInt(30));
+                    fx right[3];
+                    aiRight(c.me.yaw, right);
+                    const fx shove[3] = {-right[0] * 100, -right[1] * 100, 0};
+                    detail::aiShove(c, hit, shove);
+                    detail::aiSay(c, CommonSound::ClawStrike);
+                }
+                else
+                {
+                    detail::aiSay(c, CommonSound::ClawMiss);
+                }
+                break;
+            }
+            case kLeftFoot:
+            case kRightFoot:
+            {
+                const fx d[3] = {c.player.origin[0] - c.me.pos[0], c.player.origin[1] - c.me.pos[1],
+                                 c.player.origin[2] - c.me.pos[2]};
+                if (fxLength(d) < fxFromInt(750))
+                    shakeStart(c.w, fxFromInt(4), 1000);
+                detail::aiSay(c, CommonSound::GargStep);
+                break;
+            }
+            case kStomp:
+                stompAttack(c);
+                c.m.time2 = c.ai.now + 12000;
+                break;
+            case kBreathe:
+                detail::aiSay(c, CommonSound::GargBreathe);
+                break;
+            default:
+                break;
+            }
+        }
+
+        inline void sound(AiCtx &c, int which)
+        {
+            switch (which)
+            {
+            case kAiSoundIdle:  detail::aiSay(c, CommonSound::GargIdle); break;
+            case kAiSoundAlert: detail::aiSay(c, CommonSound::GargAlert); break;
+            default: break; // (its pain is its TraceAttack's, below)
+            }
+        }
+
+        inline void prescheduleThink(AiCtx &c)
+        {
+            if (!aiHas(c, kCondSeeEnemy))
+                c.m.time2 = c.ai.now + 5000;
+        }
+
+        /// Swipe.
+        inline bool checkMelee1(AiCtx &, fx dot, fx dist)
+        {
+            return dot >= fxDot(0.7) && dist <= fxFromInt(kAttackDist);
+        }
+        /// Flames.
+        inline bool checkMelee2(AiCtx &c, fx dot, fx dist)
+        {
+            return c.ai.now > c.m.time1 && dot >= fxDot(0.8) && dist > fxFromInt(kAttackDist) &&
+                   dist <= fxFromInt(kFlameLength);
+        }
+        /// Stomp.
+        inline bool checkRange1(AiCtx &c, fx dot, fx dist)
+        {
+            return c.ai.now > c.m.time2 && dot >= fxDot(0.7) && dist > fxFromInt(kAttackDist);
+        }
+
+        /// TraceAttack and TakeDamage: what does not burn, crush or blow up
+        /// glances off (a hundredth of it, which is nothing); it cries out
+        /// at what does.
+        inline bool takeDamage(AiCtx &c, AiDamage &d)
+        {
+            if (c.me.ai >= kAiDying)
+                return true;
+            if ((d.type & (kHurtBy | kDmgBlast)) && c.m.time3 < c.ai.now)
+            {
+                detail::aiSay(c, CommonSound::GargPain);
+                c.m.time3 = c.ai.now + aiRandomMs(c.a, 2500, 4000);
+            }
+            if ((d.type & kHurtBy) == 0)
+            {
+                d.amount /= 100;
+                if (d.type & kDmgBullet)
+                {
+                    fx spark[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + fxFromInt(64)};
+                    if (d.hasFrom)
+                    {
+                        const fx toward[3] = {d.from[0] - spark[0], d.from[1] - spark[1], 0};
+                        const fx far = fxLength(toward);
+                        for (int k = 0; far > 0 && k < 2; ++k)
+                            spark[k] += static_cast<fx>((static_cast<std::int64_t>(toward[k]) * 40) / (far >> kFxShift > 0 ? far >> kFxShift : 1));
+                    }
+                    effectAdd(c.a, kEffectMuzzle, spark, nullptr, 4, 100); // (UTIL_Ricochet)
+                }
+            }
+            if (d.type & kDmgBlast)
+                aiSet(c, kCondLightDamage);
+            d.type |= kDmgNeverGib; // (its Killed: GIB_NEVER)
+            return true;
+        }
+
+        inline const AiSchedule *scheduleOfType(AiCtx &c, int type)
+        {
+            flameDestroy(c);
+            if (type == kSchedMeleeAttack2)
+                return &slFlame;
+            if (type == kSchedMeleeAttack1)
+                return &slSwipe;
+            return aiBaseScheduleOfType(c, type);
+        }
+
+        inline bool startTask(AiCtx &c, const AiTask &task)
+        {
+            switch (task.task)
+            {
+            case kTaskFlameSweep:
+                // FlameCreate
+                c.m.flag1 = true;
+                detail::aiSay(c, CommonSound::GargFlameRun);
+                aiSound(c.a, kSoundCombat, c.me.pos, 384, 300);
+                c.m.waitFinished = c.ai.now + task.data;
+                c.m.time1 = c.ai.now + 6000;
+                c.me.aimYaw = c.me.aimPitch = 0;
+                return true;
+            case kTaskSoundAttack:
+                if (aiRandomLong(c.a, 0, 100) < 30)
+                    detail::aiSay(c, CommonSound::GargAttack);
+                aiTaskComplete(c);
+                return true;
+            case kTaskDie:
+                // DeathEffect: blasts climbing up it (frame, below).
+                c.m.waitFinished = c.ai.now + 1600;
+                c.m.count1 = 0;
+                c.m.time3 = c.ai.now;
+                return false; // (and the base's own)
+            default:
+                return false;
+            }
+        }
+
+        /// One of the blasts it goes up in, higher and greater each time
+        /// (SpawnExplosion's, which hurt nothing).
+        inline void deathBlast(AiCtx &c)
+        {
+            const fx at[3] = {c.me.pos[0] + fxFromInt(aiRandomLong(c.a, -70, 70)),
+                              c.me.pos[1] + fxFromInt(aiRandomLong(c.a, -70, 70)),
+                              c.me.pos[2] + fxFromInt(32 + c.m.count1 * 30)};
+            explodeAt(c.w, c.player, at, 60 + c.m.count1 * 40, true, true, false);
+            ++c.m.count1;
+        }
+
+        inline bool runTask(AiCtx &c, const AiTask &task)
+        {
+            if (task.task == kTaskDie)
+            {
+                if (c.ai.now <= c.m.waitFinished)
+                    return false;
+                // Gone, in pieces -- and the last of its blasts, which in the
+                // game are things of their own and go off after it, now.
+                while (c.m.count1 < 4)
+                    deathBlast(c);
+                c.me.health = -100;
+                if (!gibBurst(c.w, c.index))
+                {
+                    c.me.active = false;
+                    actorPlaceBox(c.a, c.index);
+                }
+                aiDied(c);
+                return true;
+            }
+            if (task.task != kTaskFlameSweep)
+                return false;
+            if (c.ai.now > c.m.waitFinished)
+            {
+                flameDestroy(c);
+                aiTaskComplete(c);
+                c.me.aimYaw = c.me.aimPitch = 0;
+                return true;
+            }
+            bool cancel = false;
+            int angleX = 0, angleY = 0;
+            flameUpdate(c);
+            AiTarget t;
+            if (c.m.enemy != kAiNone && aiTargetOf(c.w, c.player, c.m.enemy, t))
+            {
+                const fx org[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + fxFromInt(64)};
+                const fx dir[3] = {t.center[0] - org[0], t.center[1] - org[1], t.center[2] - org[2]};
+                const fx flat[3] = {dir[0], dir[1], 0};
+                angleY = static_cast<std::int16_t>(fxAtan2Turns(dir[1], dir[0]) - c.me.yaw);
+                angleX = static_cast<std::int16_t>(fxAtan2Turns(dir[2], fxLength(flat)));
+                if (fxLength(dir) > fxFromInt(400))
+                    cancel = true;
+            }
+            if (angleY > 60 * 65536 / 360 || angleY < -60 * 65536 / 360)
+                cancel = true;
+            if (cancel)
+            {
+                c.m.waitFinished -= 500;
+                c.m.time1 -= 500;
+            }
+            flameControls(c, angleX, angleY);
+            return true;
+        }
+
+        /// Each frame, dying: its blasts, one each 0.6 of a second.
+        inline void frame(AiCtx &c, int)
+        {
+            if (c.me.ai < kAiDying || c.m.deadflag == 0 || c.m.count1 >= 4 || c.m.time3 == 0)
+                return;
+            if (c.ai.now >= c.m.time3 + c.m.count1 * 600)
+                deathBlast(c);
+        }
+
+        inline const AiKind &kind()
+        {
+            static const AiKind k = []
+            {
+                AiKind k;
+                k.kind = static_cast<std::uint8_t>(ActorKind::Gargantua);
+                k.health = kHealth;
+                // (It has no eyes of its own in the game -- they are at its
+                // feet -- which a map's bumps would hide everything from.)
+                k.eye = fxFromInt(64);
+                k.fov = fxDot(-0.2);
+                k.blood = kBloodYellow;
+                k.capability = kCapDoorsGroup;
+                k.yawSpeed = yawSpeed;
+                k.sound = sound;
+                k.animEvent = animEvent;
+                k.prescheduleThink = prescheduleThink;
+                k.checkMelee1 = checkMelee1;
+                k.checkMelee2 = checkMelee2;
+                k.checkRange1 = checkRange1;
+                k.takeDamage = takeDamage;
+                k.scheduleOfType = scheduleOfType;
+                k.startTask = startTask;
+                k.runTask = runTask;
+                k.frame = frame;
+                return k;
+            }();
+            return k;
+        }
+    } // namespace garg
+
+    // ============================================================== baby crab
+
+    namespace babycrab
+    {
+        inline constexpr AiTask tlRangeAttack1Fast[] = {
+            {kTaskStopMoving, 0},
+            {kTaskFaceIdeal, 0},
+            {kTaskRangeAttack1, 0},
+            {kTaskSetActivity, kActIdle},
+        };
+        inline constexpr AiSchedule slRangeAttack1Fast = {tlRangeAttack1Fast, 4, kCondEnemyOccluded | kCondNoAmmoLoaded,
+                                                          0, "HCRAFast"};
+
+        inline int yawSpeed(AiCtx &) { return 120; }
+
+        /// Its voice: the headcrab's, higher, and not as loud
+        /// (GetVoicePitch, GetSoundVolue).
+        inline void say(AiCtx &c, CommonSound sound)
+        {
+            if (c.w.heard != nullptr)
+                c.w.heard->add(sound, c.me.pos, 101, kRadiusLarge, 100 + aiRandomLong(c.a, 40, 50));
+        }
+        inline void sound(AiCtx &c, int which)
+        {
+            switch (which)
+            {
+            case kAiSoundAlert: say(c, CommonSound::HeadcrabAlert); break;
+            case kAiSoundPain:  say(c, CommonSound::HeadcrabPain); break;
+            case kAiSoundDeath: say(c, CommonSound::HeadcrabDie); break;
+            default: break;
+            }
+        }
+
+        /// LeapTouch, with its bite: three tenths of a grown one's.
+        inline void touch(AiCtx &c, std::int16_t other)
+        {
+            AiTarget t;
+            if (!aiTargetOf(c.w, c.player, other, t) || t.cls == aiClassify(c))
+                return;
+            if (c.m.inAir)
+            {
+                say(c, CommonSound::HeadcrabBite);
+                aiDamageTarget(c, other, headcrab::kDmgBite * 3 / 10, kDmgSlash);
+            }
+            c.m.touchArmed = false;
+        }
+
+        /// A little less sure of itself, but it jumps from closer.
+        inline bool checkRange1(AiCtx &c, fx dot, fx dist)
+        {
+            return !c.m.inAir && dist <= fxFromInt(180) && dot >= fxDot(0.55);
+        }
+
+        inline const AiSchedule *scheduleOfType(AiCtx &c, int type)
+        {
+            // (If it fails, it tries to jump.)
+            if ((type == kSchedFail && c.m.enemy != kAiNone) || type == kSchedRangeAttack1)
+                return &slRangeAttack1Fast;
+            return headcrab::scheduleOfType(c, type);
+        }
+
+        inline const AiKind &kind()
+        {
+            static const AiKind k = []
+            {
+                AiKind k = headcrab::kind();
+                k.kind = static_cast<std::uint8_t>(ActorKind::BabyCrab);
+                k.health = 10 / 4; // (a quarter of a grown one's)
+                k.eye = fxFromInt(12);
+                k.center = fxFromInt(4);
+                k.yawSpeed = yawSpeed;
+                k.sound = sound;
+                k.touch = touch;
+                k.checkRange1 = checkRange1;
+                k.scheduleOfType = scheduleOfType;
+                return k;
+            }();
+            return k;
+        }
+    } // namespace babycrab
+
+    // ============================================================ ichthyosaur
+
+    namespace icky
+    {
+        inline constexpr int kShakeRight = 1; ///< ICHTHYOSAUR_AE_SHAKE_RIGHT
+        inline constexpr int kShakeLeft = 2;  ///< ICHTHYOSAUR_AE_SHAKE_LEFT
+        inline constexpr int kHealth = 400;   ///< sk_ichthyosaur_health
+        inline constexpr int kDmgShake = 35;  ///< sk_ichthyosaur_shake
+        inline constexpr int kProbe = 150;    ///< PROBE_LENGTH
+        inline constexpr int kHalf = 32;      ///< its box: 64 across, about its middle
+        // Its own think, as the leech's (the game's is a CFlyingMonster's
+        // schedules over its Swim; what they come to is here, in the order
+        // its GetSchedule chooses them). m_SaveVelocity: vec1; m_flightSpeed:
+        // value1; m_idealDist: value2; m_flEnemyTouched: time1;
+        // m_flNextAlert: time2; m_flBlink: time3; m_bOnAttack: flag1; on its
+        // way at its enemy (SCHED_CHASE_ENEMY): flag2; m_flMinSpeed: count1;
+        // m_flMaxSpeed, m_flMaxDist: moveGoal[0], moveGoal[1] (it goes by
+        // none of the routes those are for); when it last saw its enemy:
+        // waitFinished. `pos` is its middle. Its pitch and roll are drawn
+        // (65536 to the circle, nose up): aimPitch, aimYaw; the turn of its
+        // tail (its bone controller): wantYaw.
+
+        inline bool inWater(const AiCtx &c, const fx *at)
+        {
+            return pointContents(*c.w.world, at) == kContentsWater;
+        }
+
+        inline fx unit(fx *v)
+        {
+            const fx length = fxLength(v);
+            for (int k = 0; length > 0 && k < 3; ++k)
+                v[k] = static_cast<fx>((static_cast<std::int64_t>(v[k]) << kFxShift) / length);
+            return length;
+        }
+        inline void cross(const fx *a, const fx *b, fx *out)
+        {
+            out[0] = fxMul(a[1], b[2]) - fxMul(a[2], b[1]);
+            out[1] = fxMul(a[2], b[0]) - fxMul(a[0], b[2]);
+            out[2] = fxMul(a[0], b[1]) - fxMul(a[1], b[0]);
+        }
+        inline fx dot(const fx *a, const fx *b) { return fxMul(a[0], b[0]) + fxMul(a[1], b[1]) + fxMul(a[2], b[2]); }
+
+        /// Its forward, right and up, as its yaw and pitch have them.
+        inline void axes(const AiCtx &c, fx *forward, fx *right, fx *up)
+        {
+            fx sy, cy, sp, cp;
+            fxSinCos(c.me.yaw, sy, cy);
+            fxSinCos(static_cast<std::uint16_t>(c.me.aimPitch), sp, cp);
+            forward[0] = fxMul(cp, cy);
+            forward[1] = fxMul(cp, sy);
+            forward[2] = sp;
+            right[0] = sy;
+            right[1] = -cy;
+            right[2] = 0;
+            cross(right, forward, up);
+        }
+
+        inline void say(AiCtx &c, CommonSound sound)
+        {
+            if (c.w.heard != nullptr)
+                c.w.heard->add(sound, c.me.pos, 127, kRadiusLarge, aiRandomLong(c.a, 95, 105));
+        }
+
+        /// ProbeZ, then a trace of its hull: how far along the probe it gets
+        /// (Q12), and what it meets there -- the top of the water is a wall
+        /// to it, whose normal is straight down.
+        inline fx probe(AiCtx &c, const fx *to, fx *normal)
+        {
+            normal[0] = normal[1] = 0;
+            normal[2] = -kFxOne;
+            fx frac = kFxOne;
+            if (!inWater(c, to))
+            {
+                // (Where the water ends, in halvings.)
+                fx lo = 0, hi = kFxOne;
+                for (int n = 0; n < 8; ++n)
+                {
+                    const fx mid = (lo + hi) / 2;
+                    const fx at[3] = {c.me.pos[0] + fxMul(to[0] - c.me.pos[0], mid),
+                                      c.me.pos[1] + fxMul(to[1] - c.me.pos[1], mid),
+                                      c.me.pos[2] + fxMul(to[2] - c.me.pos[2], mid)};
+                    if (inWater(c, at))
+                        lo = mid;
+                    else
+                        hi = mid;
+                }
+                frac = lo;
+            }
+            const Shot wall = traceShot(*c.w.world, c.me.pos, to);
+            const fx hit = static_cast<fx>(wall.fraction >> (kFractionShift - kFxShift));
+            if (hit < kFxOne * 99 / 100 && hit < frac)
+            {
+                frac = hit;
+                fx at[3], n[3];
+                if (traceShotWall(*c.w.world, c.me.pos, to, at, n))
+                    for (int k = 0; k < 3; ++k)
+                        normal[k] = n[k];
+            }
+            return frac;
+        }
+
+        /// DoProbe: a push away from what the probe meets, as hard as it
+        /// was going at it.
+        inline void doProbe(AiCtx &c, const fx *to, fx *steer)
+        {
+            steer[0] = steer[1] = steer[2] = 0;
+            fx normal[3];
+            const fx frac = probe(c, to, normal);
+            if (frac >= kFxOne)
+                return;
+            fx dir[3] = {to[0] - c.me.pos[0], to[1] - c.me.pos[1], to[2] - c.me.pos[2]};
+            unit(dir);
+            fx across[3], push[3];
+            cross(dir, normal, across);
+            cross(across, dir, push);
+            if (unit(push) == 0)
+                return;
+            fx going[3] = {c.m.vec1[0], c.m.vec1[1], c.m.vec1[2]};
+            unit(going);
+            fx force = fxMul(fxMul(c.m.value1, kFxOne - frac), dot(normal, going));
+            force = force < 0 ? -force : force;
+            for (int k = 0; k < 3; ++k)
+                steer[k] = fxMul(push[k], force);
+        }
+
+        /// Swim: steered off what is ahead, its speed and its turn from
+        /// that, ten times a second.
+        inline void swim(AiCtx &c)
+        {
+            if (c.m.flag1 && c.m.value1 < c.m.moveGoal[0])
+                c.m.value1 += fxFromInt(40);
+            // (Its swim, slow; its thrust, fast: each played at its speed.)
+            const std::uint8_t want = c.m.value1 < fxFromInt(180) ? kActWalk : kActRun;
+            if ((c.m.activity == kActWalk || c.m.activity == kActRun) && c.m.activity != want)
+                aiSetActivity(c, want);
+            fx way[3] = {c.m.vec1[0], c.m.vec1[1], c.m.vec1[2]};
+            if (unit(way) == 0)
+                aiForward(c.me.yaw, way);
+            fx sy, cy;
+            const fx flat[3] = {way[0], way[1], 0};
+            const std::uint16_t wayYaw = fxAtan2Turns(way[1], way[0]);
+            fxSinCos(wayYaw, sy, cy);
+            const fx right[3] = {sy, -cy, 0};
+            fx up[3];
+            cross(right, way, up);
+            const fx start[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2]};
+            fx steer[3] = {0, 0, 0};
+            const struct
+            {
+                int along, side, lift;
+            } kProbes[] = {{kProbe, 0, 0}, {kProbe / 3, 1, 0}, {kProbe / 3, -1, 0}, {kProbe / 3, 0, 1}, {kProbe / 3, 0, -1}};
+            for (const auto &p : kProbes)
+            {
+                fx to[3], s[3];
+                for (int k = 0; k < 3; ++k)
+                    to[k] = start[k] + way[k] * p.along + right[k] * p.side + up[k] * p.lift;
+                doProbe(c, to, s);
+                for (int k = 0; k < 3; ++k)
+                    steer[k] += s[k];
+            }
+            fx velocity[3];
+            for (int k = 0; k < 3; ++k)
+                velocity[k] = c.m.vec1[k] + steer[k] / 2;
+            unit(velocity);
+            fx forward[3], r[3], u[3];
+            axes(c, forward, r, u);
+            const fx facing = dot(forward, velocity);
+            const fx speed = facing > kFxOne / 2 ? c.m.value1
+                             : facing > 0         ? fxMul(c.m.value1, facing + kFxOne / 2)
+                                                  : fxFromInt(80);
+            for (int k = 0; k < 3; ++k)
+            {
+                c.m.vec1[k] = fxMul(velocity[k], speed);
+                c.me.velocity[k] = c.m.vec1[k];
+            }
+            // Its pitch towards the way it goes, five degrees a think, within
+            // 80 either way; its yaw at a tenth of its speed in degrees, and
+            // its roll against the turn.
+            const std::int32_t pitch = fxAtan2Turns(velocity[2], fxLength(flat));
+            const int wantPitch = static_cast<std::int16_t>(pitch);
+            const int most = 80 * 65536 / 360, step = 5 * 65536 / 360;
+            int p = static_cast<std::int16_t>(c.me.aimPitch);
+            p = wantPitch > p + step ? p + step : (wantPitch < p - step ? p - step : wantPitch);
+            c.me.aimPitch = p < -most ? -most : (p > most ? most : p);
+            const int velYaw = static_cast<std::int16_t>(fxAtan2Turns(velocity[1], velocity[0]) - c.me.yaw);
+            const int turnMost = fxToInt(c.m.value1) * 65536 / 3600; // (speed * 0.1 degrees)
+            const int turn = velYaw > turnMost ? turnMost : (velYaw < -turnMost ? -turnMost : velYaw);
+            c.me.yaw = static_cast<std::uint16_t>(c.me.yaw + turn);
+            c.m.idealYaw = c.me.yaw;
+            int roll = static_cast<std::int16_t>(c.me.aimYaw) - turn;
+            const int rollMost = 20 * 65536 / 360;
+            c.me.aimYaw = roll < -rollMost ? -rollMost : (roll > rollMost ? rollMost : roll);
+            c.me.wantYaw = c.me.wantYaw * 4 / 5 + turn;
+        }
+
+        /// CIRCLE_ENEMY: round what it is after, as far off as it likes to
+        /// be, nearer and quicker while it is not looked at; further and
+        /// slower while it is.
+        inline void circle(AiCtx &c, const AiTarget &t, bool sees)
+        {
+            if (!sees)
+            {
+                c.m.time2 = c.ai.now + 200;
+                return;
+            }
+            fx delta[3] = {c.me.pos[0] - t.eye[0], c.me.pos[1] - t.eye[1], c.me.pos[2] - t.eye[2]};
+            unit(delta);
+            const fx z[3] = {0, 0, kFxOne};
+            fx side[3];
+            cross(delta, z, side);
+            unit(side);
+            if (dot(side, c.m.vec1) < 0)
+                for (fx &v : side)
+                    v = -v;
+            fx place[3];
+            for (int k = 0; k < 3; ++k)
+                place[k] = t.eye[k] + fxMul(delta[k], c.m.value2) + side[k] * 32;
+            const Shot room = traceShot(*c.w.world, t.eye, place);
+            if (room.fraction > kFractionOne / 2)
+                for (int k = 0; k < 3; ++k)
+                    place[k] = t.eye[k] + static_cast<fx>((static_cast<std::int64_t>(place[k] - t.eye[k]) * room.fraction) >> kFractionShift);
+            fx to[3] = {place[0] - c.me.pos[0], place[1] - c.me.pos[1], place[2] - c.me.pos[2]};
+            unit(to);
+            for (int k = 0; k < 3; ++k)
+                c.m.vec1[k] = fxMul(c.m.vec1[k], kFxOne * 4 / 5) + fxMul(fxMul(to[k], c.m.value1), kFxOne / 5);
+            if (aiHas(c, kCondEnemyFacingMe))
+            {
+                c.m.time2 -= 100;
+                if (c.m.value2 < c.m.moveGoal[1])
+                    c.m.value2 += fxFromInt(4);
+                if (c.m.value1 > fxFromInt(c.m.count1))
+                    c.m.value1 -= fxFromInt(2);
+                else if (c.m.value1 < fxFromInt(c.m.count1))
+                    c.m.value1 += fxFromInt(2);
+                if (fxFromInt(c.m.count1) < c.m.moveGoal[0])
+                    c.m.count1 += 1; // (half a unit a think, in the game's)
+            }
+            else
+            {
+                c.m.time2 += 100;
+                if (c.m.value2 > fxFromInt(128))
+                    c.m.value2 -= fxFromInt(4);
+                if (c.m.value1 < c.m.moveGoal[0])
+                    c.m.value1 += fxFromInt(4);
+            }
+            if (c.m.time2 < c.ai.now)
+            {
+                say(c, CommonSound::IckyAlert);
+                c.m.time2 = c.ai.now + aiRandomMs(c.a, 3000, 5000);
+            }
+        }
+
+        inline void think(AiCtx &c)
+        {
+            if (c.m.value1 == 0)
+            {
+                // Spawn: off the way it faces, at its swimming speed.
+                c.m.value2 = fxFromInt(384);
+                c.m.count1 = 80;
+                c.m.moveGoal[0] = fxFromInt(300);
+                c.m.moveGoal[1] = fxFromInt(384);
+                c.m.value1 = fxFromInt(150);
+                aiForward(c.me.yaw, c.m.vec1);
+                for (fx &v : c.m.vec1)
+                    v = fxMul(v, c.m.value1);
+                aiSetActivity(c, kActWalk);
+            }
+            if (c.me.ai >= kAiDying)
+                return;
+            // Blinks (its skins): shut a moment every three or four seconds;
+            // mad, on the attack.
+            if (c.m.time3 < c.ai.now)
+            {
+                c.me.skin = 2; // EYE_CLOSED
+                if (c.m.time3 + 200 < c.ai.now)
+                {
+                    c.m.time3 = c.ai.now + aiRandomMs(c.a, 3000, 4000);
+                    c.me.skin = c.m.flag1 ? 1 : 0; // EYE_MAD, EYE_BASE
+                }
+            }
+            // What it sees: the player, in the wide sweep of its eyes, with
+            // nothing between.
+            AiTarget t;
+            bool sees = false;
+            if (c.player.health > 0 && !unseen(c.player) && aiTargetOf(c.w, c.player, kAiPlayer, t))
+            {
+                fx forward[3], r[3], u[3];
+                axes(c, forward, r, u);
+                fx to[3] = {t.center[0] - c.me.pos[0], t.center[1] - c.me.pos[1], t.center[2] - c.me.pos[2]};
+                const fx far = unit(to);
+                sees = far < fxFromInt(2048) && dot(forward, to) > fxDot(-0.7) && lineClear(*c.w.world, c.me.pos, t.eye);
+            }
+            if (sees)
+            {
+                if (c.m.enemy == kAiNone)
+                    say(c, CommonSound::IckyAlert);
+                c.m.enemy = kAiPlayer;
+                c.m.state = kStateCombat;
+                c.m.waitFinished = c.ai.now;
+            }
+            else if (c.m.enemy != kAiNone && c.ai.now > c.m.waitFinished + 5000)
+            {
+                c.m.enemy = kAiNone;
+                c.m.state = kStateAlert;
+                c.m.flag2 = false;
+            }
+            // GetSchedule.
+            if (c.m.state != kStateCombat)
+            {
+                c.m.value1 = fxFromInt(c.m.state == kStateAlert ? 150 : 80);
+                if (c.m.activity != kActWalk && c.m.activity != kActRun)
+                    aiSetActivity(c, kActWalk);
+                if (aiRandomLong(c.a, 0, 99) == 0)
+                    say(c, CommonSound::IckyIdle);
+            }
+            else if (c.m.enemy != kAiNone && aiTargetOf(c.w, c.player, c.m.enemy, t))
+            {
+                c.m.moveGoal[0] = fxFromInt(400);
+                fx forward[3], r[3], u[3];
+                axes(c, forward, r, u);
+                fx to[3] = {t.center[0] - c.me.pos[0], t.center[1] - c.me.pos[1], t.center[2] - c.me.pos[2]};
+                const fx far = unit(to);
+                const fx facing = dot(forward, to);
+                // (Whether it is in its enemy's own view.)
+                if (sees && aiDot2D(t.yaw, t.origin, c.me.pos) > t.fov)
+                    aiSet(c, kCondEnemyFacingMe);
+                else
+                    aiClear(c, kCondEnemyFacingMe);
+                if (c.me.health < kHealth - 20)
+                    c.m.flag1 = true;
+                if (facing >= fxDot(0.7) && c.m.time1 > c.ai.now - 200)
+                {
+                    // MELEE_ATTACK1: its bite (the shakes are its clip's).
+                    if (c.m.activity != kActMeleeAttack1)
+                        aiSetActivity(c, kActMeleeAttack1);
+                }
+                else if (facing > fxDot(-0.7) && (c.m.flag1 || (far <= fxFromInt(192) && c.m.value2 <= fxFromInt(192))))
+                {
+                    // CHASE_ENEMY: straight at it (MoveExecute).
+                    if (!c.m.flag2)
+                        say(c, CommonSound::IckyAttack);
+                    c.m.flag2 = true;
+                    for (int k = 0; k < 3; ++k)
+                        c.m.vec1[k] = fxMul(to[k], c.m.value1);
+                    if (c.m.activity != kActWalk && c.m.activity != kActRun)
+                        aiSetActivity(c, kActRun);
+                }
+                else
+                {
+                    // STANDOFF: round it.
+                    c.m.flag2 = false;
+                    if (c.m.activity != kActWalk && c.m.activity != kActRun)
+                        aiSetActivity(c, kActWalk);
+                    circle(c, t, sees);
+                }
+            }
+            if (c.m.activity == kActMeleeAttack1 && c.m.seqFinished)
+                aiSetActivity(c, kActRun);
+            swim(c);
+        }
+
+        /// Each frame: where its velocity takes it, in the water; touching
+        /// what it is after (BiteTouch); dead, it floats belly up to the top.
+        inline void frame(AiCtx &c, int ms)
+        {
+            fx to[3];
+            if (c.me.ai >= kAiDying)
+            {
+                // TASK_ICHTHYOSAUR_FLOAT, once its death is played.
+                if (c.m.seqFinished && c.m.deadflag == 1)
+                {
+                    c.m.deadflag = 2;
+                    const ModelView *model = actorModel(c.a, c.me);
+                    const int belly = model != nullptr ? model->findClip(nameHash("bellyup")) : -1;
+                    if (belly >= 0)
+                        aiPlayClip(c, belly, true);
+                }
+                if (c.m.deadflag == 2)
+                {
+                    const fx above[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + fxFromInt(24)};
+                    const bool deep = inWater(c, above);
+                    // (Ten times a second in the game's: here as much a frame.)
+                    c.me.velocity[0] = c.me.velocity[0] * (1000 - ms * 2) / 1000;
+                    c.me.velocity[1] = c.me.velocity[1] * (1000 - ms * 2) / 1000;
+                    c.me.velocity[2] += fxFromInt(deep && c.me.velocity[2] < fxFromInt(64) ? 8 : -8) * ms / 100;
+                    if (!deep && c.me.velocity[2] < 0 && inWater(c, c.me.pos))
+                        c.me.velocity[2] = 0;
+                    const int p = static_cast<std::int16_t>(c.me.aimPitch);
+                    c.me.aimPitch = p * (1000 - ms * 2) / 1000;
+                }
+            }
+            for (int k = 0; k < 3; ++k)
+                to[k] = c.me.pos[k] + static_cast<fx>((static_cast<std::int64_t>(c.me.velocity[k]) * ms) / 1000);
+            // (The player is in its way, as a box is in the game's: it stops
+            // against them -- and has touched them.)
+            bool blocked = false;
+            if (c.me.ai < kAiDying && c.player.health > 0)
+            {
+                const fx lo[3] = {to[0] - fxFromInt(kHalf), to[1] - fxFromInt(kHalf), to[2] - fxFromInt(kHalf)};
+                const fx hi[3] = {to[0] + fxFromInt(kHalf), to[1] + fxFromInt(kHalf), to[2] + fxFromInt(kHalf)};
+                blocked = detail::playerTouchesBox(c.player, lo, hi, 0);
+                if (blocked && c.m.enemy == kAiPlayer)
+                {
+                    c.m.time1 = c.ai.now;
+                    c.m.flag1 = true;
+                }
+            }
+            const Shot wall = traceShot(*c.w.world, c.me.pos, to);
+            if (blocked)
+            {
+            }
+            else if (wall.fraction >= kFractionOne && (inWater(c, to) || c.me.ai >= kAiDying))
+            {
+                for (int k = 0; k < 3; ++k)
+                    c.me.pos[k] = to[k];
+            }
+            else if (c.me.ai < kAiDying)
+            {
+                // (Into the wall, or out of the water: it turns away.)
+                c.me.velocity[0] = -c.me.velocity[0] / 2;
+                c.me.velocity[1] = -c.me.velocity[1] / 2;
+                c.me.velocity[2] = -c.me.velocity[2] / 2;
+                for (int k = 0; k < 3; ++k)
+                    c.m.vec1[k] = c.me.velocity[k];
+            }
+            actorPlaceBox(c.a, c.index);
+            if (c.me.ai >= kAiDying || c.m.enemy != kAiPlayer || c.player.health <= 0)
+                return;
+            fx mins[3], maxs[3];
+            targetBox(c.me, mins, maxs);
+            if (detail::playerTouchesBox(c.player, mins, maxs, fxFromInt(4)))
+            {
+                c.m.time1 = c.ai.now;
+                c.m.flag1 = true;
+            }
+        }
+
+        inline void animEvent(AiCtx &c, int event)
+        {
+            if (event != kShakeRight && event != kShakeLeft)
+                return;
+            AiTarget t;
+            if (c.m.enemy != kAiNone && aiTargetOf(c.w, c.player, c.m.enemy, t) && lineClear(*c.w.world, c.me.pos, t.eye))
+            {
+                fx to[3] = {t.center[0] - c.me.pos[0], t.center[1] - c.me.pos[1], t.center[2] - c.me.pos[2]};
+                const fx far = unit(to);
+                fx forward[3], right[3], up[3];
+                axes(c, forward, right, up);
+                if ((c.m.time1 >= c.ai.now - 200 || far <= fxFromInt(32 + 16 + 32)) && dot(to, forward) > fxDot(0.707))
+                {
+                    c.m.flag1 = true;
+                    detail::aiPunch(c, c.m.enemy, fxFromInt(5), -fxFromInt(18));
+                    const fx shove[3] = {-right[0] * 300, -right[1] * 300, 0};
+                    detail::aiShove(c, c.m.enemy, shove);
+                    aiDamageTarget(c, c.m.enemy, kDmgShake, kDmgSlash);
+                }
+            }
+            say(c, CommonSound::IckyBite);
+        }
+
+        /// Hurt: further off, or -- if it was close already -- on the
+        /// attack (its SMALL_FLINCH); hurt badly, on the attack.
+        inline bool takeDamage(AiCtx &c, AiDamage &d)
+        {
+            if (c.me.ai >= kAiDying)
+                return true;
+            say(c, CommonSound::IckyPain);
+            if (c.m.value2 > fxFromInt(128))
+                c.m.moveGoal[1] = c.m.value2 = fxFromInt(512);
+            else
+                c.m.flag1 = true;
+            if (d.amount >= 20)
+                c.m.flag1 = true;
+            if (d.attacker == kAiPlayer)
+            {
+                c.m.enemy = kAiPlayer;
+                c.m.state = kStateCombat;
+                c.m.waitFinished = c.ai.now;
+            }
+            return true;
+        }
+
+        inline bool killed(AiCtx &c)
+        {
+            say(c, CommonSound::IckyDie);
+            c.me.ai = kAiDying;
+            c.m.deadflag = 1;
+            c.m.state = c.m.idealState = kStateDead;
+            c.me.velocity[0] = c.me.velocity[1] = c.me.velocity[2] = 0;
+            c.me.skin = 0;
+            aiSetActivity(c, kActDieSimple);
+            c.m.seqFinished = false;
+            actorPlaceBox(c.a, c.index);
+            return true;
+        }
+
+        inline const AiKind &kind()
+        {
+            static const AiKind k = []
+            {
+                AiKind k;
+                k.kind = static_cast<std::uint8_t>(ActorKind::Ichthyosaur);
+                k.health = kHealth;
+                k.eye = fxFromInt(16);
+                k.fov = fxDot(-0.7); // (VIEW_FIELD_WIDE)
+                k.blood = kBloodYellow;
+                k.capability = kCapRangeAttack1 | kCapSwim;
+                k.think = think;
+                k.frame = frame;
+                k.animEvent = animEvent;
+                k.takeDamage = takeDamage;
+                k.killed = killed;
+                return k;
+            }();
+            return k;
+        }
+    } // namespace icky
+
+    inline const AiKind *aiMilitaryKindOf(std::uint8_t kind); // (HlMilitary.hpp)
+
     inline const AiKind *aiAlienKindOf(std::uint8_t kind)
     {
         switch (static_cast<ActorKind>(kind))
@@ -1578,7 +2633,10 @@ namespace hldata
         case ActorKind::AlienGrunt: return &agrunt::kind();
         case ActorKind::Controller: return &controller::kind();
         case ActorKind::Leech:      return &leech::kind();
-        default:                    return nullptr;
+        case ActorKind::Gargantua:  return &garg::kind();
+        case ActorKind::BabyCrab:   return &babycrab::kind();
+        case ActorKind::Ichthyosaur: return &icky::kind();
+        default:                    return aiMilitaryKindOf(kind);
         }
     }
 } // namespace hldata

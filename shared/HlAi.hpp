@@ -764,10 +764,13 @@ namespace hldata
         if (w.actors != nullptr && w.actors->ai != nullptr)
             playerWeaponVolume(w.actors->ai->sounds, volume);
     }
-    /// Whether a barnacle has hold of actor `index`.
+    /// In AiWorld::held: a soldier let down on a rope by an osprey
+    /// (HlMilitary.hpp): he does nothing until he is down.
+    inline constexpr std::uint8_t kHeldRope = 2;
+    /// Whether a barnacle has hold of actor `index`, or a rope.
     inline bool aiHeld(const ActorWorld &a, int index)
     {
-        return a.ai != nullptr && index >= 0 && index < a.ai->actorCount && (a.ai->held[index] & 1) != 0;
+        return a.ai != nullptr && index >= 0 && index < a.ai->actorCount && (a.ai->held[index] & (1 | kHeldRope)) != 0;
     }
 
     inline std::uint32_t aiRandom(ActorWorld &a)

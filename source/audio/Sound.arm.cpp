@@ -515,7 +515,18 @@ namespace hlrt
             playOnce(event);
             return;
         }
-        stopLoop(event.tag); // (it does not start twice)
+        // Already going round: it is where it is now (what moves as it makes
+        // it -- an osprey), and it does not start twice.
+        for (int v = 0; v < Mixer::kVoices; ++v)
+        {
+            const MixVoice &mix = mixer_.voices[v];
+            if (mix.active && mix.layer == event.layer && mix.leftMs < 0 && mix.tag == event.tag)
+            {
+                for (int k = 0; k < 3; ++k)
+                    voices_[v].pos[k] = event.pos[k];
+                return;
+            }
+        }
         int volume = event.volume, pan = 64;
         const bool placed = !(event.flags & kSoundHere);
         if (placed)

@@ -81,8 +81,10 @@ Milestone 11, "levels of detail".
   triggers, relays, multi_managers, multisources, delays and killtargets.
   Moving brushes carry and push the player, and turn back when blocked.
 - Maps chain: level changes with landmarks carry the player (and the tram
-  they are riding) into the next map. The opening tram ride runs from c0a0 to
+  or lift they are riding) into the next map. The opening tram ride runs from c0a0 to
   the station in c0a0e by itself, platforms that lower the tram included.
+  A lift goes on along the next map's own path, even where the two maps'
+  corners do not line up (c1a3a's and c1a3b's; `liftCornerAhead`).
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
@@ -223,6 +225,23 @@ Milestone 11, "levels of detail".
   name; plating turns a bullet; one nearly done for goes wild. The big one
   has to spin up. Their guns are aimed by the models' own bone controllers,
   which the converter now keeps (the barnacle's tongue is one too).
+- Round 4 of the monsters, each from its file in the game's code
+  (`shared/HlMilitary.hpp`, `shared/HlAliens.hpp`; `test_military` plays each
+  on its own map). The osprey flies its path of corners on the game's
+  spline, its rotors tipping and heard from far off, and at a corner of
+  speed 0 hovers and lets soldiers down on ropes in the places of those of
+  the map's who have died; shot down (only a blast, or a hit to the cockpit
+  or an engine, counts), it falls burning and goes up. The gargantua is hurt
+  only by what burns, crushes or blows up: it swipes up close, sweeps its
+  flames a little further off, and from afar stomps, a shock that runs along
+  the ground faster and faster; it dies in blasts, and is gone in pieces.
+  The ichthyosaur swims its water by the game's steering, circles what comes
+  into it, nearer and quicker while it is not looked at, charges, bites, and
+  floats belly up when it dies; it is drawn nosed up or down and rolled. The
+  assassin leaps, shoots as it falls, throws a grenade once it is frustrated
+  and runs for cover (it is cloaked only at the game's hard skill, which
+  this port is not). The baby crab is a smaller, weaker headcrab that leaps
+  from closer; the dead in their suits lie as the game poses them.
 - A hit to the head counts three times, as in the game. Where a shot lands
   is found on the model's own hit boxes, posed as the monster stands; a shot
   that goes through its outline but between the boxes still counts, as a
@@ -783,10 +802,12 @@ the game's code left in the program.
 
 ## Not yet
 
-Friends who follow and talk; the rest of the game's weapons and
-monsters; `env_bubbles`; the suit's voice, the chatter of scientists
+Friends who follow and talk; the rest of the game's weapons; the
+tentacle, the apache, the big momma, the Nihilanth, the flocks of flyers,
+`monster_grunt_repel` (soldiers come down ropes from an osprey only) and
+`func_tank`; `env_bubbles`; the suit's voice, the chatter of scientists
 and guards, the sounds of trains and lifts. Soldiers fight the player only
-(not the aliens), do not drop their guns, do not come down ropes, and are
+(not the aliens), do not drop their guns, and are
 not eaten by barnacles; the player cannot yet lay a tripmine. What breaks
 still comes apart into plain scraps (it is monsters, and what the maps throw
 out, that have the game's pieces). Scientists and guards do not

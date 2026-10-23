@@ -407,13 +407,26 @@ namespace
         check(doorMoved, "and then the door opens");
     }
 
-    /// The lift between c1a3d and c1a3a (a func_train known by the same
-    /// name in both): ridden up from one map into the next, it carries the
-    /// player on to the top of the next -- it does not start again at the
-    /// bottom of the shaft, from under their feet.
+    /// A lift between two maps (a func_train known by the same name in
+    /// both): ridden up from one map into the next, it carries the player on
+    /// to the top of the next -- it does not start again at the bottom of the
+    /// shaft, from under their feet, nor stop halfway.
+    struct Lift
+    {
+        const char *from;
+        const char *to;
+        const char *name;
+        /// Where the top of its path in `to` is, its middle's height; 0 =
+        /// not checked.
+        int top;
+    };
+    /// c1a3d's to c1a3a, whose corners line up; and c1a3a's to c1a3b, whose
+    /// do not (c1a3a's top corner is 24 units higher).
+    constexpr Lift kLifts[] = {{"c1a3d", "c1a3a", "c1a3_lift01", 0}, {"c1a3a", "c1a3b", "c1a3_lift02", 608}};
+
     /// The lift, by its own name; and with `asOld`, every train's global
     /// name forgotten, as in a map converted before it was kept.
-    int liftOf(Game &g, bool asOld)
+    int liftOf(Game &g, const char *name, bool asOld)
     {
         int lift = -1;
         for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
@@ -423,23 +436,24 @@ namespace
                 continue;
             if (asOld)
                 record.extra[3] = 0;
-            if (record.name != 0 && g.view.nameHashes[record.name] == nameHash("c1a3_lift01"))
+            if (record.name != 0 && g.view.nameHashes[record.name] == nameHash(name))
                 lift = static_cast<int>(i);
         }
         return lift;
     }
 
-    void testTheLift(const char *dir, bool asOld)
+    void testTheLift(const char *dir, const Lift &which, bool asOld)
     {
+        std::printf("test_track: the lift from %s to %s%s\n", which.from, which.to, asOld ? " (as old)" : "");
         Globals globals;
         auto game = std::make_unique<Game>();
         std::string error;
-        if (!game->bsp.load(std::string(dir) + "/maps/c1a3d.bsp", error))
+        if (!game->bsp.load(std::string(dir) + "/maps/" + which.from + ".bsp", error))
             return;
         finish(*game, &globals);
-        const int lift = game->ok ? liftOf(*game, asOld) : -1;
+        const int lift = game->ok ? liftOf(*game, which.name, asOld) : -1;
         check(lift >= 0 && (asOld || game->view.logic[lift].extra[3] != 0),
-              "c1a3d's lift is there (known by a global name, in a map converted now)");
+              "the first map's lift is there (known by a global name, in a map converted now)");
         if (lift < 0)
             return;
         // Stood on it, in the middle, and it is set going.
@@ -462,25 +476,25 @@ namespace
             const Arrival arrival =
                 makeArrival(game->logic, game->view.landmarks, game->view.landmarkCount, game->player, record);
             const std::string map = game->view.strings + game->view.logic[record].extra[0];
-            check(map == "c1a3a", "the lift's level change is to c1a3a");
+            check(map == which.to, "the lift's level change is to the next map");
             auto next = std::make_unique<Game>();
             if (!next->bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error))
                 return;
             finish(*next, &globals);
-            liftOf(*next, asOld);
+            liftOf(*next, which.name, asOld);
             applyArrival(next->logic, next->view.landmarks, next->view.landmarkCount, next->view.nameHashes,
                          next->view.nameCount, next->player, arrival);
             game = std::move(next);
             crossed = true;
         }
-        check(crossed, "ridden up, the lift takes the player into c1a3a");
+        check(crossed, "ridden up, the lift takes the player into the next map");
         if (!crossed)
             return;
-        const int up = liftOf(*game, asOld);
+        const int up = liftOf(*game, which.name, asOld);
         check(up >= 0 && (asOld || (game->view.brushes[game->view.logic[up].brush].flags & kBrushRoams)),
-              "c1a3a's lift is there, and (converted now) seen wherever it goes");
+              "the next map's lift is there, and (converted now) seen wherever it goes");
         // (The lift that came is that one: on its way up.)
-        check(up >= 0 && game->states[up].move == MoveState::GoingUp, "the lift that came up is c1a3a's lift");
+        check(up >= 0 && game->states[up].move == MoveState::GoingUp, "the lift that came up is the next map's lift");
         const fx arrivedAt = game->player.origin[2];
         double worstBelow = 0;
         bool backDown = false;
@@ -494,9 +508,16 @@ namespace
                 worstBelow = std::max(worstBelow, toUnits(hull.maxs[2] - (game->player.origin[2] - fxFromInt(36))));
             }
         }
-        check(up >= 0 && worstBelow < 4, "in c1a3a the player stands on the lift all the way");
-        check(!backDown && game->player.health > 0, "... and is not sent back down to c1a3d");
+        check(up >= 0 && worstBelow < 4, "in the next map the player stands on the lift all the way");
+        check(!backDown && game->player.health > 0, "... and is not sent back down");
         check(game->player.origin[2] - arrivedAt > fxFromInt(250), "... which carries them on up to the top");
+        if (which.top != 0 && up >= 0)
+        {
+            const MoverHull &hull = game->movers[game->view.logic[up].brush];
+            const double middle = toUnits((hull.mins[2] + hull.maxs[2]) / 2);
+            std::printf("test_track: %s's lift stops with its middle at z %.1f\n", which.to, middle);
+            check(middle > which.top - 2 && middle < which.top + 2, "... and stops at the top of this map's path");
+        }
     }
 
     void testTheRide()
@@ -519,8 +540,11 @@ namespace
         }
         check(ride(dir, 2, Passenger::Idle, true), "... and with a save and a load on the way");
         testTheGuard(dir);
-        testTheLift(dir, false);
-        testTheLift(dir, true); // (maps from a converter before the lift's global name was kept)
+        for (const Lift &lift : kLifts)
+        {
+            testTheLift(dir, lift, false);
+            testTheLift(dir, lift, true); // (maps from a converter before the lift's global name was kept)
+        }
     }
 } // namespace
 

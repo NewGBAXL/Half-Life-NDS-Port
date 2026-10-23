@@ -67,7 +67,10 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
                kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt) ||
                kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
-               kind == static_cast<std::uint8_t>(ActorKind::Snark);
+               kind == static_cast<std::uint8_t>(ActorKind::Snark) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Gargantua) ||
+               kind == static_cast<std::uint8_t>(ActorKind::BabyCrab) ||
+               kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur);
     }
 
     inline bool isGrunt(std::uint8_t kind)
@@ -82,6 +85,17 @@ namespace hldata
                kind == static_cast<std::uint8_t>(ActorKind::Guard) ||
                kind == static_cast<std::uint8_t>(ActorKind::Sitter);
     }
+    /// The military's machines (HlMilitary.hpp): they fight, and do not
+    /// bleed.
+    inline bool isMachine(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Osprey);
+    }
+    /// The military's assassins: they fight, and bleed red.
+    inline bool isAssassin(std::uint8_t kind)
+    {
+        return kind == static_cast<std::uint8_t>(ActorKind::Assassin);
+    }
     /// What comes out of something that is hit, as the game has it: red
     /// from people (and from the barnacle, which is made of what it has
     /// eaten), yellow from the aliens, nothing from a machine.
@@ -90,7 +104,7 @@ namespace hldata
     inline constexpr int kBloodYellow = 2;
     inline int bloodOf(std::uint8_t kind)
     {
-        if (isGrunt(kind) || isPerson(kind) || kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
+        if (isGrunt(kind) || isPerson(kind) || isAssassin(kind) || kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
             kind == static_cast<std::uint8_t>(ActorKind::Player))
             return kBloodRed;
         return isMonster(kind) ? kBloodYellow : kBloodNone;
@@ -157,6 +171,23 @@ namespace hldata
                                                 "float", "run", "flinch1", "die1"};
         static const MonsterKind kSnark = {2, true, fxFromInt(6), fxFromInt(8), fxFromInt(300),
                                            "run", "run", "run", "run"};
+        // Round 4. (The osprey's box is the game's height, -100 to 32 about
+        // where it is (targetBox), and less wide than its 800: that is its
+        // rotors' reach, which shots go through.)
+        static const MonsterKind kOsprey = {400, false, fxFromInt(200), fxFromInt(132), 0,
+                                            "rotor", "rotor", "rotor", "rotor"};
+        // (The gargantua walks as something 64 across, as the game's does
+        // (monsterHull); what is shot at is more of it, though not the
+        // game's whole 214 -- its swipe comes from the middle of this.)
+        static const MonsterKind kGargantua = {800, false, fxFromInt(48), fxFromInt(128), fxFromInt(100),
+                                               "idle1", "walk", "Flinchlight", "die"};
+        static const MonsterKind kBabyCrab = {2, true, fxFromInt(12), fxFromInt(24), fxFromInt(140),
+                                              "idle1", "run", "flinch", "dieback"};
+        static const MonsterKind kAssassin = {50, false, fxFromInt(16), fxFromInt(72), fxFromInt(200),
+                                              "idle1", "run", "idle1", "die_simple"};
+        // (Its box is about its middle: targetBox.)
+        static const MonsterKind kIchthyosaur = {400, false, fxFromInt(32), fxFromInt(64), fxFromInt(150),
+                                                 "swim", "swim", "smflinch", "die1"};
         switch (static_cast<ActorKind>(kind))
         {
         case ActorKind::Cockroach:  return kCockroach;
@@ -164,6 +195,11 @@ namespace hldata
         case ActorKind::AlienGrunt: return kAlienGrunt;
         case ActorKind::Controller: return kController;
         case ActorKind::Snark:      return kSnark;
+        case ActorKind::Osprey:     return kOsprey;
+        case ActorKind::Gargantua:  return kGargantua;
+        case ActorKind::BabyCrab:   return kBabyCrab;
+        case ActorKind::Assassin:   return kAssassin;
+        case ActorKind::Ichthyosaur: return kIchthyosaur;
         default:                    break;
         }
         if (kind == static_cast<std::uint8_t>(ActorKind::Grunt))
@@ -215,7 +251,8 @@ namespace hldata
         // game's 64.)
         if (kind == static_cast<std::uint8_t>(ActorKind::Bullsquid) ||
             kind == static_cast<std::uint8_t>(ActorKind::AlienGrunt) ||
-            kind == static_cast<std::uint8_t>(ActorKind::Controller))
+            kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
+            kind == static_cast<std::uint8_t>(ActorKind::Gargantua))
             return kWalkLarge;
         return monsterKind(kind).small ? kWalkCrouched : kWalkStanding;
     }
@@ -482,7 +519,7 @@ namespace hldata
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
-        const bool human = isGrunt(actor.kind) || isPerson(actor.kind);
+        const bool human = isGrunt(actor.kind) || isPerson(actor.kind) || isAssassin(actor.kind);
         const int model = human ? a.humanGibs : a.alienGibs;
         const int pieces = gibPieces(a, model);
         if (pieces == 0)
@@ -1043,6 +1080,79 @@ namespace hldata
         /// A snark's next bite and how many it has had (Projectile::sprite).
         inline int snarkBites(const Projectile &shot) { return shot.sprite & 0xFF; }
 
+        /// A gargantua's stomp, a frame on (CStomp::Think, in the frame's
+        /// time rather than tenths of a second): it gathers speed, and its
+        /// speed gathers speed; whatever is in its way just ahead is hurt
+        /// (the player once); it leaves sparks on the ground where it has
+        /// been, and is gone at the wall.
+        inline void stompTick(LogicWorld &w, PlayerState &player, Projectile &shot, int ms)
+        {
+            ActorWorld &a = *w.actors;
+            constexpr int kDmgStomp = 100; // sk_gargantua_dmg_stomp
+            std::int32_t length = shot.leftMs & kStompLengthMask;
+            std::int64_t speed = shot.leftMs >> kStompSpeedShift; // (sixteenths)
+            const int framerate = shot.sprite & ~kStompHitPlayer;
+            // (deltaTime, a quarter of the time: the game's.)
+            speed += static_cast<std::int64_t>(framerate) * 16 * ms / 4000;
+            const int faster = framerate + 1500 * ms / 4000;
+            const fx step = static_cast<fx>((speed * kFxOne * ms) / (16 * 1000));
+            // In its way: the head hull's reach ahead of it, 30 up.
+            const fx from[3] = {shot.pos[0], shot.pos[1], shot.pos[2] + fxFromInt(30)};
+            const fx reach = step + fxFromInt(16);
+            const fx to[3] = {from[0] + fxMul(shot.velocity[0], reach), from[1] + fxMul(shot.velocity[1], reach),
+                              from[2] + fxMul(shot.velocity[2], reach)};
+            std::uint16_t hit = shot.sprite & kStompHitPlayer;
+            if (!hit && player.health > 0)
+            {
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx lo[3] = {player.origin[0] - fxFromInt(32), player.origin[1] - fxFromInt(32), player.origin[2] - tall - fxFromInt(18)};
+                const fx hi[3] = {player.origin[0] + fxFromInt(32), player.origin[1] + fxFromInt(32), player.origin[2] + tall + fxFromInt(18)};
+                std::int64_t enter = 0;
+                if (lineEntersBox(from, to, lo, hi, enter))
+                {
+                    playerHurt(player, kDmgStomp, shot.pos);
+                    a.got |= kGotHurt;
+                    hit = kStompHitPlayer;
+                }
+            }
+            for (int i = 0; i < a.count; ++i)
+            {
+                const ActorState &other = a.states[i];
+                if (!other.active || other.ai >= kAiDying || !canBeHurt(other.kind) ||
+                    other.kind == static_cast<std::uint8_t>(ActorKind::Gargantua))
+                    continue;
+                fx lo[3], hi[3];
+                targetBox(other, lo, hi);
+                std::int64_t enter = 0;
+                if (lineEntersBox(from, to, lo, hi, enter))
+                    monsterHurt(w, i, kDmgStomp, false, kHitGeneric, kDmgSonic, kAiNone, shot.pos);
+            }
+            // On, and the sparks it leaves on the ground under it (two each
+            // fortieth of a second in the game's; here one each 32 units it
+            // goes, which is as many as there is room for).
+            for (int k = 0; k < 3; ++k)
+                shot.pos[k] += fxMul(shot.velocity[k], step);
+            const std::int32_t was = length;
+            length -= fxToInt(step) > 0 ? fxToInt(step) : 0;
+            if (was / 32 != length / 32)
+            {
+                const fx down[3] = {shot.pos[0], shot.pos[1], shot.pos[2] - fxFromInt(500)};
+                const Shot ground = traceShot(*w.world, shot.pos, down);
+                fx spark[3];
+                for (int k = 0; k < 3; ++k)
+                    spark[k] = shot.pos[k] + static_cast<fx>((static_cast<std::int64_t>(down[k] - shot.pos[k]) * ground.fraction) >> kFractionShift);
+                effectAdd(a, kEffectBurst, spark, nullptr, 24, 300);
+            }
+            if (length <= 0)
+            {
+                shot.active = false;
+                return;
+            }
+            const std::int64_t most = (std::int64_t(1) << (31 - kStompSpeedShift)) - 1;
+            shot.leftMs = static_cast<std::int32_t>(((speed > most ? most : speed) << kStompSpeedShift) | length);
+            shot.sprite = static_cast<std::uint16_t>((faster > 0x7FFF ? 0x7FFF : faster) | hit);
+        }
+
         inline void projectilesTick(LogicWorld &w, PlayerState &player, int ms)
         {
             ActorWorld &a = *w.actors;
@@ -1121,6 +1231,11 @@ namespace hldata
             {
                 if (!shot.active)
                     continue;
+                if (shot.kind == kShotStomp)
+                {
+                    stompTick(w, player, shot, ms);
+                    continue;
+                }
                 // (An armed mine keeps its beam's length there, not a time.)
                 if (!(shot.kind == kShotMine && shot.sprite == 1))
                     shot.leftMs -= ms;
@@ -2520,7 +2635,8 @@ namespace hldata
     /// the soldiers and the mines.
     inline bool fights(std::uint8_t kind)
     {
-        return isMonster(kind) || isTurret(kind) || isGrunt(kind) || isMine(kind);
+        return isMonster(kind) || isTurret(kind) || isGrunt(kind) || isMine(kind) || isMachine(kind) ||
+               isAssassin(kind);
     }
     inline bool canBeHurt(std::uint8_t kind)
     {
@@ -2589,6 +2705,26 @@ namespace hldata
             return;
         }
         const MonsterKind &kind = monsterKind(actor.kind);
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Osprey))
+        {
+            for (int i = 0; i < 2; ++i)
+            {
+                mins[i] = actor.pos[i] - kind.half;
+                maxs[i] = actor.pos[i] + kind.half;
+            }
+            mins[2] = actor.pos[2] - fxFromInt(100);
+            maxs[2] = actor.pos[2] + fxFromInt(32);
+            return;
+        }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                mins[i] = actor.pos[i] - kind.half;
+                maxs[i] = actor.pos[i] + kind.half;
+            }
+            return;
+        }
         // (A barnacle hangs from its "feet", the mouth on the ceiling: its
         // body is below them, as the game's box is, -32 to 0.)
         const bool hangs = actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle);
@@ -4482,4 +4618,5 @@ namespace hldata
 #include "HlAiTalk.hpp"
 #include "HlAiPeople.hpp"
 #include "HlAliens.hpp"
+#include "HlMilitary.hpp"
 #include "HlPeople.hpp"

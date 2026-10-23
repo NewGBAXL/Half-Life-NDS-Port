@@ -52,14 +52,14 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 33;
+    inline constexpr std::uint16_t kLevelVersion = 34;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
     /// say, after the soldiers' table in Section::Speech, which a build
     /// before would refuse; 33: the round 3 monsters, kinds a build before
-    /// has not got.)
-    inline constexpr std::uint16_t kLevelMinReader = 33;
+    /// has not got; 34: round 4's, the same.)
+    inline constexpr std::uint16_t kLevelMinReader = 34;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -71,7 +71,9 @@ namespace hldata
     /// 32 -> 33 the cockroach, leech, alien grunt, controller and snark
     /// (cooked after every other actor; their sounds after the others) and
     /// the nodes in the air (after those on the ground and in the water),
-    /// none that a save points at.
+    /// 33 -> 34 the osprey, gargantua, ichthyosaur, assassin, baby crab and
+    /// dead scientist in the suit (cooked after every other actor, as round
+    /// 3's are; their sounds after the others), none that a save points at.
     inline constexpr std::uint16_t kLevelSaveSince = 26;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
@@ -774,6 +776,12 @@ namespace hldata
         AlienGrunt, ///< the hornet gun, and big fists
         Controller, ///< flies; throws balls of energy
         Snark,      ///< a monstermaker's: hunts, bites, bursts
+        // Round 4 (HlMilitary.hpp, HlAliens.hpp).
+        Osprey,     ///< flies its corners; lets soldiers down on ropes
+        Gargantua,  ///< flames, a stomp, and only what blows up hurts it
+        BabyCrab,   ///< a monstermaker's small headcrab
+        Assassin,   ///< the black-clad soldier: leaps, a silenced pistol
+        Ichthyosaur, ///< swims its water, circles, charges and bites
         Count
     };
 
@@ -806,6 +814,11 @@ namespace hldata
         case ActorKind::AlienGrunt:
         case ActorKind::Controller:
         case ActorKind::Snark:
+        case ActorKind::Osprey:
+        case ActorKind::Gargantua:
+        case ActorKind::BabyCrab:
+        case ActorKind::Assassin:
+        case ActorKind::Ichthyosaur:
             return true;
         default:
             return false;
@@ -1173,7 +1186,9 @@ namespace hldata
         /// Name id of what an item fires when it is taken, or a turret when
         /// it comes out, folds away or is destroyed; 0 = nothing.
         std::uint16_t target;
-        /// For an ActorKind::Item: its ItemKind. For anything else: its
+        /// For an ActorKind::Item: its ItemKind. For an osprey: the corner
+        /// it flies to first, plus one (0: none), in the low 16 bits -- it
+        /// has one skin, and sets nothing off. For anything else: its
         /// skin in bits 8..15 (kActorSkinShift), and for a soldier which
         /// weapons he has in the low 8 (kGrunt*) and the name id of his
         /// squad in the top 16. A tripmine's low 8 are how far up it

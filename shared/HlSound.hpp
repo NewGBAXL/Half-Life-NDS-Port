@@ -346,6 +346,27 @@ namespace hldata
         ControllerPain1,
         ControllerPain2,
         ControllerDie,
+        // ... and round 4's (from level version 34: kCommonSoundsBefore34),
+        // each kind's together.
+        OspreyRotor,
+        MortarHit,
+        GargIdle,
+        GargAlert,
+        GargPain,
+        GargAttack,
+        GargStep,
+        GargBreathe,
+        GargStomp,
+        GargFlameRun,
+        GargFlameOff,
+        IckyIdle,
+        IckyAlert,
+        IckyAttack,
+        IckyBite,
+        IckyPain,
+        IckyDie,
+        AssassinShot1,
+        AssassinShot2,
         Count
     };
     /// How many of these a map of level version 29 or before has.
@@ -356,6 +377,8 @@ namespace hldata
     inline constexpr std::uint16_t kCommonSoundsBefore32 = static_cast<std::uint16_t>(CommonSound::ScientistPain2);
     /// ... and of version 32.
     inline constexpr std::uint16_t kCommonSoundsBefore33 = static_cast<std::uint16_t>(CommonSound::RoachWalk);
+    /// ... and of version 33.
+    inline constexpr std::uint16_t kCommonSoundsBefore34 = static_cast<std::uint16_t>(CommonSound::OspreyRotor);
     /// How many of them a map of level version `version` has (its sounds
     /// after those are its own).
     inline constexpr std::uint16_t commonsOf(std::uint16_t version)
@@ -364,6 +387,7 @@ namespace hldata
                : version < 31 ? kCommonSoundsBefore31
                : version < 32 ? kCommonSoundsBefore32
                : version < 33 ? kCommonSoundsBefore33
+               : version < 34 ? kCommonSoundsBefore34
                               : static_cast<std::uint16_t>(CommonSound::Count);
     }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -437,7 +461,14 @@ namespace hldata
             "agrunt/ag_attack1.wav",    "agrunt/ag_pain1.wav",     "agrunt/ag_pain3.wav",
             "agrunt/ag_die1.wav",       "agrunt/ag_die4.wav",      "controller/con_idle1.wav",
             "controller/con_alert1.wav", "controller/con_attack1.wav", "controller/con_pain1.wav",
-            "controller/con_pain2.wav", "controller/con_die1.wav"};
+            "controller/con_pain2.wav", "controller/con_die1.wav",
+            "apache/ap_rotor4.wav",     "weapons/mortarhit.wav",   "garg/gar_idle1.wav",
+            "garg/gar_alert1.wav",      "garg/gar_pain1.wav",      "garg/gar_attack1.wav",
+            "garg/gar_step1.wav",       "garg/gar_breathe1.wav",   "garg/gar_stomp1.wav",
+            "garg/gar_flamerun1.wav",   "garg/gar_flameoff1.wav",  "ichy/ichy_idle1.wav",
+            "ichy/ichy_alert2.wav",     "ichy/ichy_attack1.wav",   "ichy/ichy_bite1.wav",
+            "ichy/ichy_pain2.wav",      "ichy/ichy_die2.wav",      "weapons/pl_gun1.wav",
+            "weapons/pl_gun2.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }
@@ -528,6 +559,10 @@ namespace hldata
     /// sound is one that does) until kSoundLoopOff is heard with its tag.
     inline constexpr std::uint8_t kSoundLoopOn = 4;
     inline constexpr std::uint8_t kSoundLoopOff = 8; ///< `sound` is not looked at
+    /// A loop's tag is its logic record's; one an actor makes as it goes
+    /// (an osprey's rotors) is this and the actor's number. Heard again while
+    /// it goes round, a loop is moved to where it is now, not started again.
+    inline constexpr std::uint16_t kSoundTagActor = 0x8000;
 
     inline constexpr int kMaxSoundEvents = 24;
 

@@ -192,6 +192,16 @@ namespace hldata
     /// ... and its zap ball (CControllerZapBall): straight, and a jolt where
     /// it lands.
     inline constexpr std::uint8_t kShotZapBall = 14;
+    /// A gargantua's stomp (CStomp): runs the way it was sent (`velocity`,
+    /// a unit vector, Q12), faster and faster, as far as the wall it was
+    /// aimed at. `leftMs` is not a time: its low 12 bits are how far it has
+    /// still to go, in units, and the rest its speed, in sixteenths of a unit
+    /// a second (kStomp*). `sprite` is how fast it gathers speed (the game's
+    /// framerate), with kStompHitPlayer once it has hurt the player.
+    inline constexpr std::uint8_t kShotStomp = 15;
+    inline constexpr std::int32_t kStompLengthMask = 0xFFF;
+    inline constexpr int kStompSpeedShift = 12;
+    inline constexpr std::uint16_t kStompHitPlayer = 0x8000;
     /// How many may be in flight at once: all of these on a DSi, half on a
     /// DS (ActorWorld::shotLimit).
     inline constexpr int kMaxProjectiles = 16;
@@ -524,6 +534,19 @@ namespace hldata
             controls[1] = ceiling ? actor.aimPitch : -actor.aimPitch;
             return true;
         }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+        {
+            // Its tail, against its turn (the game's yaw_adj / 4).
+            controls[0] = -(static_cast<std::int16_t>(actor.wantYaw) / 4);
+            return controls[0] != 0;
+        }
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Osprey))
+        {
+            // Its rotors, tipped from up (0) to forward (a quarter turn
+            // down) as it gathers speed.
+            controls[0] = actor.aimPitch;
+            return controls[0] != 0;
+        }
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Barnacle))
         {
             // Its tongue let down to `reach`: the slide is what is added to
@@ -669,7 +692,9 @@ namespace hldata
         actor.nameHash = a.nameHashes != nullptr ? a.nameHashes[record.name] : 0;
         actor.yaw = record.yaw;
         actor.body = record.body;
-        if (record.kind != static_cast<std::uint8_t>(ActorKind::Item))
+        // (An osprey's `item` is where it flies: it has the one skin.)
+        const bool flies = record.kind == static_cast<std::uint8_t>(ActorKind::Osprey);
+        if (record.kind != static_cast<std::uint8_t>(ActorKind::Item) && !flies)
             actor.skin = static_cast<std::uint8_t>(record.item >> kActorSkinShift);
         actor.kind = record.kind;
         actor.flags = record.flags;
@@ -677,7 +702,8 @@ namespace hldata
         // (An item's kind; a soldier's weapons; and for a soldier or a monster
         // that thinks, when it sets off what it sets off.)
         actor.item = record.kind == static_cast<std::uint8_t>(ActorKind::Item) ||
-                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) || actorThinks(record.kind)
+                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) ||
+                             (actorThinks(record.kind) && !flies)
                          ? static_cast<std::uint8_t>(record.item)
                          : std::uint8_t(0);
         if (record.kind == static_cast<std::uint8_t>(ActorKind::Tripmine))
@@ -703,6 +729,8 @@ namespace hldata
                            // (What flies, and what swims, is where it is put.)
                            record.kind == static_cast<std::uint8_t>(ActorKind::Controller) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Leech) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Osprey) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur) ||
                            isTurret(record.kind);
         if (stays)
         {

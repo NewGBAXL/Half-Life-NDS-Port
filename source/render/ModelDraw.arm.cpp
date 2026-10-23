@@ -678,7 +678,24 @@ namespace hlrt
             // Turned about the vertical, the way it faces.
             fx sine, cosine;
             fxSinCos(actor.yaw, sine, cosine);
-            const fx turn[9] = {cosine, -sine, 0, sine, cosine, 0, 0, 0, kFxOne};
+            fx turn[9] = {cosine, -sine, 0, sine, cosine, 0, 0, 0, kFxOne};
+            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+            {
+                // ... and, swimming, nosed up or down and rolled (HlAliens.hpp,
+                // icky): its forward, left and up are the columns.
+                fx sp, cp, sr, cr;
+                fxSinCos(static_cast<std::uint16_t>(actor.aimPitch), sp, cp);
+                fxSinCos(static_cast<std::uint16_t>(actor.aimYaw), sr, cr);
+                const fx forward[3] = {fxMul(cp, cosine), fxMul(cp, sine), sp};
+                const fx left0[3] = {-sine, cosine, 0};
+                const fx up0[3] = {-fxMul(sp, cosine), -fxMul(sp, sine), cp};
+                for (int r = 0; r < 3; ++r)
+                {
+                    turn[r * 3 + 0] = forward[r];
+                    turn[r * 3 + 1] = fxMul(left0[r], cr) + fxMul(up0[r], sr);
+                    turn[r * 3 + 2] = fxMul(up0[r], cr) - fxMul(left0[r], sr);
+                }
+            }
             // A turret under a ceiling is the same model upside down: turned
             // over about the way it faces (the game's half turn of pitch,
             // and of yaw to make up for it).

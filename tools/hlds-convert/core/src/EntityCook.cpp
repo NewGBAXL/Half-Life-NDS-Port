@@ -67,7 +67,9 @@ namespace hlds
                 "monster_tripmine", "weapon_crossbow", "ammo_crossbow", "weapon_satchel", "weapon_tripmine",
                 "weapon_snark", "weapon_rpg", "ammo_rpgclip", "weapon_gauss", "ammo_gaussclip", "ammo_egonclip",
                 "weapon_egon", "weapon_hornetgun", "weaponbox", "monster_cockroach", "monster_leech",
-                "monster_alien_grunt", "monster_alien_controller", "monster_snark"};
+                "monster_alien_grunt", "monster_alien_controller", "monster_snark", "monster_osprey",
+                "monster_gargantua", "monster_babycrab", "monster_hevsuit_dead",
+                "monster_human_assassin", "monster_ichthyosaur"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -292,9 +294,48 @@ namespace hlds
                 info = {true, ActorKind::Tripmine, "models/v_tripmine.mdl", {"world"}, "world"};
                 info.solid = false;
             }
+            // Round 4 (HlMilitary.hpp).
+            else if (cls == "monster_osprey")
+            {
+                info = {true, ActorKind::Osprey, "models/osprey.mdl", {"rotor"}, "rotor"};
+                info.solid = false; // (in the sky; and its box would be its rotors')
+            }
+            else if (cls == "monster_gargantua")
+            {
+                info = {true, ActorKind::Gargantua, "models/garg.mdl", {"idle1", "walk", "run", "die"}, "idle1"};
+            }
+            else if (cls == "monster_human_assassin")
+            {
+                // (Its flight is no activity's: by name, as its code plays it.)
+                info = {true, ActorKind::Assassin, "models/hassassin.mdl",
+                        {"idle1", "run", "shoot", "jump", "fly_up", "fly_attack", "fly_down", "landfromjump",
+                         "grenadethrow", "die_simple"},
+                        "idle1"};
+            }
+            else if (cls == "monster_ichthyosaur")
+            {
+                info = {true, ActorKind::Ichthyosaur, "models/icky.mdl", {"swim", "thrust", "bite_r", "bite_l",
+                                                                          "die1", "bellyup"},
+                        "swim"};
+            }
+            else if (cls == "monster_babycrab")
+            {
+                info = {true, ActorKind::BabyCrab, "models/baby_headcrab.mdl",
+                        {"idle1", "run", "jump", "flinch", "dieback"}, "idle1"};
+            }
             else if (spare != 0)
             {
                 return info; // a maker of something there is not
+            }
+            else if (cls == "monster_hevsuit_dead")
+            {
+                // (The game's is player.mdl; the suit it lies in is the
+                // same as the one a player in a game between consoles wears,
+                // which is not called "player" here: kPlayerModelName.)
+                static const char *const kPoses[] = {"deadback", "deadsitting", "deadstomach", "deadtable"};
+                const char *clip = kPoses[std::clamp(pose, 0, 3)];
+                info = {true, ActorKind::Pose, "models/player/gordon/gordon.mdl", {clip}, clip};
+                info.solid = false;
             }
             else if (cls == "monster_hgrunt_dead")
             {
@@ -426,6 +467,12 @@ namespace hlds
                 return static_cast<int>(ActorKind::Houndeye);
             if (cls == "monster_human_grunt")
                 return static_cast<int>(ActorKind::Grunt);
+            if (cls == "monster_gargantua")
+                return static_cast<int>(ActorKind::Gargantua);
+            if (cls == "monster_human_assassin")
+                return static_cast<int>(ActorKind::Assassin);
+            if (cls == "monster_ichthyosaur")
+                return static_cast<int>(ActorKind::Ichthyosaur);
             return -1;
         }
 
@@ -604,12 +651,15 @@ namespace hlds
         {
             const ActorInfo info = actorOf(entity);
             if (info.is && (info.kind == ActorKind::Grunt || info.kind == ActorKind::Scientist ||
-                            info.kind == ActorKind::Guard || info.kind == ActorKind::Sitter))
+                            info.kind == ActorKind::Guard || info.kind == ActorKind::Sitter ||
+                            info.kind == ActorKind::Assassin))
                 people = true;
-            else if (info.is && (info.kind == ActorKind::Headcrab || info.kind == ActorKind::Zombie ||
+            else if (info.is && (info.kind == ActorKind::Headcrab || info.kind == ActorKind::BabyCrab ||
+                                 info.kind == ActorKind::Zombie ||
                                  info.kind == ActorKind::Barnacle || info.kind == ActorKind::Slave ||
                                  info.kind == ActorKind::Bullsquid || info.kind == ActorKind::Houndeye ||
-                                 info.kind == ActorKind::AlienGrunt || info.kind == ActorKind::Controller))
+                                 info.kind == ActorKind::AlienGrunt || info.kind == ActorKind::Controller ||
+                                 info.kind == ActorKind::Gargantua || info.kind == ActorKind::Ichthyosaur))
                 aliens = true;
             const std::string cls(entity.className());
             const std::string thrown = cls == "gibshooter" ? "models/hgibs.mdl"
@@ -626,6 +676,15 @@ namespace hlds
             add(needOf((weapons & 8) ? "models/w_shotgun.mdl" : "models/w_9mmar.mdl"), "idle");
             if (weapons & 4)
                 add(needOf("models/w_argrenade.mdl"), "idle");
+        }
+        // ... and how soldiers come down from an osprey: on a rope.
+        for (const Entity &entity : entities)
+        {
+            if (lowered(entity.className()) != "monster_osprey")
+                continue;
+            ModelNeed &grunt = needOf("models/hgrunt.mdl");
+            add(grunt, "repel_repel");
+            add(grunt, "repel_land");
         }
         // ... and what a guard drops: his pistol.
         for (const Entity &entity : entities)
@@ -2467,15 +2526,19 @@ namespace hlds
         // (In rounds, each after all of the one before: what each version of
         // the format added comes after everything that was there before it,
         // so an actor a save points at keeps its place -- the later items,
-        // then the last ones, then round 3's monsters.)
-        for (int round = 0; round < 4; ++round)
+        // then the last ones, then round 3's monsters, then round 4's.)
+        for (int round = 0; round < 5; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
             const ActorInfo info = actorOf(entity);
             if (!info.is)
                 continue;
-            const int itemRound = info.item == ItemKind::None
+            // (Round 4's include the dead man in the suit, who is a pose.)
+            const bool round4 = static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Osprey) ||
+                                lowered(entity.className()) == "monster_hevsuit_dead";
+            const int itemRound = round4 ? 4
+                                  : info.item == ItemKind::None
                                       ? (static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Cockroach) ? 3 : 0)
                                   : static_cast<int>(info.item) >= static_cast<int>(kItemFirstLast) ? 2
                                   : static_cast<int>(info.item) >= static_cast<int>(kItemFirstMore) ? 1
@@ -2592,6 +2655,16 @@ namespace hlds
                 if (spawnflags & 128)
                     actor.flags |= kActorWaitScript;
             }
+            else if (info.kind == ActorKind::Osprey)
+            {
+                // Where it flies to first: the corner it targets (plus one;
+                // 0, nowhere). It waits to be switched on, with the game's
+                // flag 64.
+                const auto corner = cornerOfName.find(std::string(entity.value("target")));
+                actor.item = corner != cornerOfName.end() ? static_cast<std::uint32_t>(corner->second) + 1 : 0;
+                if (static_cast<int>(numberKey(entity, "spawnflags")) & 64)
+                    actor.flags |= kActorCeiling; // (osprey::kActorWaitTrigger)
+            }
             else if (actorThinks(actor.kind) && info.spare == 0)
             {
                 // A monster as the game has it: its squad (or whom it calls
@@ -2632,6 +2705,10 @@ namespace hlds
                 // without.
                 const int which = std::clamp(body, 0, 3);
                 actor.body = static_cast<std::uint8_t>(((which & 1) ? 1 : 0) + (which >= 2 ? 8 : 0));
+            }
+            else if (actorClass == "monster_hevsuit_dead")
+            {
+                actor.body = 0; // (the suit's model has the one body)
             }
             else if (info.kind == ActorKind::Tripmine)
             {
@@ -2879,7 +2956,8 @@ namespace hlds
                 use(CommonSound::GuardPain, CommonSound::GuardDie);
                 use(CommonSound::GuardPain2, CommonSound::GuardShot);
             }
-            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Headcrab))
+            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Headcrab) ||
+                actor.kind == static_cast<std::uint8_t>(ActorKind::BabyCrab))
                 use(CommonSound::HeadcrabAlert, CommonSound::HeadcrabBite);
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Zombie))
                 use(CommonSound::ZombieAlert, CommonSound::ClawMiss);
@@ -2927,6 +3005,17 @@ namespace hlds
             }
             else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Snark))
                 use(CommonSound::SnarkDeploy, CommonSound::SnarkBlast);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Osprey))
+                use(CommonSound::OspreyRotor, CommonSound::MortarHit);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Assassin))
+                use(CommonSound::AssassinShot1, CommonSound::AssassinShot2);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Ichthyosaur))
+                use(CommonSound::IckyIdle, CommonSound::IckyDie);
+            else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Gargantua))
+            {
+                use(CommonSound::GargIdle, CommonSound::GargFlameOff);
+                use(CommonSound::ClawStrike, CommonSound::ClawMiss);
+            }
         }
         // What the people say (the game's talkmonster groups): for each voice
         // whose model the map has (its own people, and those who may come in

@@ -125,6 +125,65 @@ namespace hldata
         return 0;
     }
 
+    /// Where a lift that came from the map before goes on to, when no corner
+    /// of this map is where the corner it was heading to was: the two maps'
+    /// corners need not line up (c1a3a's lift02c is 24 units higher than
+    /// c1a3b's), and in the game the lift goes on along this map's own path.
+    /// So: the corner at the far end of the stretch of this map's path the
+    /// lift is on, the way it was going (`way`, from its middle `at`, both in
+    /// this map); else the one after the corner it is at. kNoCorner if it is
+    /// on no path of this map.
+    inline std::uint16_t liftCornerAhead(const LogicWorld &w, const fx *at, const fx *way)
+    {
+        // (In whole units, so that the squares fit 64 bits.)
+        std::int64_t p[3], v[3];
+        for (int a = 0; a < 3; ++a)
+        {
+            p[a] = fxToInt(at[a]);
+            v[a] = fxToInt(way[a]);
+        }
+        for (int c = 0; c < w.cornerCount; ++c)
+        {
+            const std::uint16_t next = w.corners[c].next;
+            if (next == kNoCorner || next >= w.cornerCount)
+                continue;
+            std::int64_t d[3], r[3];
+            for (int a = 0; a < 3; ++a)
+            {
+                d[a] = fxToInt(w.corners[next].pos[a]) - fxToInt(w.corners[c].pos[a]);
+                r[a] = p[a] - fxToInt(w.corners[c].pos[a]);
+            }
+            const std::int64_t dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            const std::int64_t along = r[0] * d[0] + r[1] * d[1] + r[2] * d[2];
+            // On this stretch (from its start, not yet at its end), going
+            // the way it goes...
+            if (dd == 0 || along < 0 || along >= dd || v[0] * d[0] + v[1] * d[1] + v[2] * d[2] <= 0)
+                continue;
+            // ... and within two units of it.
+            const std::int64_t cross[3] = {r[1] * d[2] - r[2] * d[1], r[2] * d[0] - r[0] * d[2],
+                                           r[0] * d[1] - r[1] * d[0]};
+            if (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2] <= 4 * dd)
+                return next;
+        }
+        std::uint16_t nearest = kNoCorner;
+        std::int64_t best = 8 * 8 + 1;
+        for (int c = 0; c < w.cornerCount; ++c)
+        {
+            std::int64_t sum = 0;
+            for (int a = 0; a < 3; ++a)
+            {
+                const std::int64_t d = fxToInt(w.corners[c].pos[a]) - p[a];
+                sum += d * d;
+            }
+            if (sum < best)
+            {
+                best = sum;
+                nearest = static_cast<std::uint16_t>(c);
+            }
+        }
+        return nearest == kNoCorner ? kNoCorner : w.corners[nearest].next;
+    }
+
     /// Pack what crosses, for the ChangeLevel record `index` of the map being
     /// left. The view angles are the caller's to fill in: they are not part of
     /// the movement state.
@@ -485,6 +544,16 @@ namespace hldata
                     }
                     if (same)
                         heading = static_cast<std::uint16_t>(c);
+                }
+                if (heading == kNoCorner)
+                {
+                    fx middle[3], way[3];
+                    for (int a = 0; a < 3; ++a)
+                    {
+                        middle[a] = here->origin[a] + arrival.trainOffset[a];
+                        way[a] = mark.offset[a] - arrival.trainOffset[a];
+                    }
+                    heading = liftCornerAhead(w, middle, way);
                 }
                 if (heading != kNoCorner)
                 {
