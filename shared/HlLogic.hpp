@@ -1212,7 +1212,8 @@ namespace hldata
 
     /// Hurt the player (or, with a negative amount, heal them: never past
     /// 100). Dying is the caller's to act on: it sees health at 0 or below.
-    inline void logicHurt(PlayerState &player, std::int32_t amount)
+    /// `kinds`: what kinds of hurt it is that the display shows (kHurt*).
+    inline void logicHurt(PlayerState &player, std::int32_t amount, std::uint8_t kinds = 0)
     {
         if (amount > 0 && godMode(player))
             return;
@@ -1221,6 +1222,7 @@ namespace hldata
         {
             player.hurt += amount;
             player.hurtKnown = false;
+            player.hurtKinds.value |= kinds;
         }
         if (player.health > 100)
             player.health = 100;
@@ -3757,7 +3759,7 @@ namespace hldata
                     state.phase -= ms;
                     if (inside && !state.running && state.phase <= 0)
                     {
-                        logicHurt(player, static_cast<std::int32_t>(record.extra[0]) / 2);
+                        logicHurt(player, static_cast<std::int32_t>(record.extra[0]) / 2, hurtKindsOf(record.extra[1]));
                         state.phase = 500;
                         if (record.target != 0 && !(state.bits & 1))
                         {

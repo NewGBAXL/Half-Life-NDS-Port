@@ -1576,6 +1576,10 @@ namespace hlds
                     record.kind = static_cast<std::uint8_t>(LogicKind::TriggerHurt);
                     record.extra[0] = static_cast<std::uint32_t>(
                         static_cast<std::int32_t>(std::lround(numberKey(entity, "dmg"))));
+                    // (What kind of hurt it is: the game's DMG_* bits. A map
+                    // cooked before this has none, and its hurt shows no
+                    // picture of its kind.)
+                    record.extra[1] = static_cast<std::uint32_t>(std::lround(numberKey(entity, "damagetype")));
                     if (spawnflags & 2)
                         record.flags |= kLogicStartOpen; // starts off
                 }

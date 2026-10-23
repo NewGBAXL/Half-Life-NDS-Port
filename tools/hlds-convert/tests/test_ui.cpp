@@ -580,6 +580,66 @@ namespace
                           solid(kHudAmmoAr) > 20 && solid(kHudCrosshair) > 4,
                       "... and the cross, the suit, each kind of ammunition, the crosshair");
             }
+            SprFile hud7, hud8, hud9, pain;
+            const bool read640 = hud7.load(valve + "/sprites/640hud7.spr", error) &&
+                                 hud8.load(valve + "/sprites/640hud8.spr", error) &&
+                                 hud9.load(valve + "/sprites/640hud9.spr", error) &&
+                                 pain.load(valve + "/sprites/640_pain.spr", error) && read;
+            check(read640, "the game's 640 head-up display sprites read");
+            if (read640)
+            {
+                const RgbaImage atlas = hudAtlas640(hud7, hud8, hud9, pain, crosshairs);
+                auto solid = [&](UiRect r)
+                {
+                    int count = 0;
+                    for (int y = r.y; y < r.y + r.h; ++y)
+                    {
+                        for (int x = r.x; x < r.x + r.w; ++x)
+                            count += atlas.at(x, y)[3] > 64;
+                    }
+                    return count;
+                };
+                // Nothing laid out over anything else, nor off the texture.
+                std::vector<UiRect> all = {kHud640SuitFull,  kHud640SuitEmpty, kHud640Cross,    kHud640LampEmpty,
+                                           kHud640LampFull,  kHud640LampBeam,  kHud640Crosshair, kHud640Solid};
+                for (int n = 0; n < 10; ++n)
+                    all.push_back(hud640Digit(n));
+                for (int n = 0; n < kHudAmmo640Count; ++n)
+                    all.push_back(hud640Ammo(n));
+                for (int n = 0; n < 8; ++n)
+                    all.push_back(hud640Hurt(n));
+                for (const UiRect &r : kHud640Pain)
+                    all.push_back(r);
+                bool apart = true;
+                for (std::size_t i = 0; i < all.size(); ++i)
+                {
+                    const UiRect &a = all[i];
+                    apart = apart && a.x + a.w <= kHudAtlasWidth && a.y + a.h <= kHudAtlasHeight;
+                    for (std::size_t j = i + 1; j < all.size(); ++j)
+                    {
+                        const UiRect &b = all[j];
+                        apart = apart && (a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+                    }
+                }
+                check(apart, "the 640 set's pieces each have their own place in the atlas");
+                bool digits = true;
+                for (int n = 0; n < 10; ++n)
+                    digits = digits && solid(hud640Digit(n)) > 10;
+                check(digits && solid(hud640Digit(1)) < solid(hud640Digit(8)),
+                      "its digits, 0.4 of the game's 20 by 24, are there");
+                bool ammo = true, hurts = true, marks = true;
+                for (int n = 0; n < kHudAmmo640Count; ++n)
+                    ammo = ammo && solid(hud640Ammo(n)) > 8;
+                for (int n = 0; n < 8; ++n)
+                    hurts = hurts && solid(hud640Hurt(n)) > 40;
+                for (const UiRect &r : kHud640Pain)
+                    marks = marks && solid(r) > 40;
+                check(ammo && hurts && marks && solid(kHud640Cross) > 20 &&
+                          solid(kHud640SuitFull) > solid(kHud640SuitEmpty) && solid(kHud640LampFull) > 10 &&
+                          solid(kHud640Crosshair) > 4 && solid(kHud640Solid) == 64,
+                      "... and each kind of ammunition, of hurt, the marks of where from, the suit, the lamp, "
+                      "the crosshair");
+            }
         }
     }
 } // namespace

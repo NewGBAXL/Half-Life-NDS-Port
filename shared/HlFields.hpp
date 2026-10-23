@@ -23,6 +23,19 @@ namespace hldata
     struct FieldCount;
     inline constexpr int kFieldsMost = 80;
 
+    /// A field kept with a structure that is no part of its saved state --
+    /// what is only of the moment, read and cleared the same frame. A save
+    /// passes over it: one written before it was added reads the same.
+    template <class T>
+    struct Unsaved
+    {
+        T value{};
+    };
+    template <class T>
+    inline constexpr bool kIsUnsaved = false;
+    template <class T>
+    inline constexpr bool kIsUnsaved<Unsaved<T>> = true;
+
 #define HL_FIELDS(Type, count)                                                                                         \
     template <>                                                                                                        \
     struct FieldCount<Type>                                                                                            \

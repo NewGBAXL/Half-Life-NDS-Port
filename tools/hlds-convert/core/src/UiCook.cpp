@@ -210,6 +210,125 @@ namespace hlds
         return atlas;
     }
 
+    RgbaImage hudAtlas640(const SprFile &hud7, const SprFile &hud8, const SprFile &hud9, const SprFile &pain,
+                          const SprFile &crosshairs)
+    {
+        RgbaImage atlas;
+        atlas.width = hldata::kHudAtlasWidth;
+        atlas.height = hldata::kHudAtlasHeight;
+        atlas.rgba.assign(static_cast<std::size_t>(atlas.width) * atlas.height * 4, 0);
+        // A frame as it is, how bright a pixel is becoming how solid (the
+        // game adds all of these to the picture).
+        auto frame = [](const SprFile &spr, int index)
+        {
+            RgbaImage image;
+            if (index >= static_cast<int>(spr.frames.size()))
+                return image;
+            const SprFrame &f = spr.frames[index];
+            image.width = f.width;
+            image.height = f.height;
+            image.rgba.assign(static_cast<std::size_t>(f.width) * f.height * 4, 0);
+            for (int i = 0; i < f.width * f.height; ++i)
+            {
+                const int c = f.pixels[i];
+                if (spr.format == kSprAlphaTest && c == 255)
+                    continue;
+                int r = spr.palette[c][0], g = spr.palette[c][1], b = spr.palette[c][2];
+                const int a = spr.format == kSprIndexAlpha ? c : std::max(r, std::max(g, b));
+                if (spr.format == kSprIndexAlpha)
+                    r = g = b = 255;
+                else if (a > 0)
+                {
+                    r = r * 255 / a;
+                    g = g * 255 / a;
+                    b = b * 255 / a;
+                }
+                std::uint8_t *p = &image.rgba[static_cast<std::size_t>(i) * 4];
+                p[0] = static_cast<std::uint8_t>(r);
+                p[1] = static_cast<std::uint8_t>(g);
+                p[2] = static_cast<std::uint8_t>(b);
+                p[3] = static_cast<std::uint8_t>(a);
+            }
+            return image;
+        };
+        const RgbaImage sheet7 = frame(hud7, 0), sheet8 = frame(hud8, 0), sheet9 = frame(hud9, 0),
+                        cross = frame(crosshairs, 0);
+        // The piece of `from` at (sx, sy), `w` by `h`, made the size of `to`:
+        // each pixel the average of what it covers (by how much of each
+        // source pixel it covers), its colour weighted by how solid.
+        // `brightest`: as bright as the brightest of it instead (a picture
+        // of lines one pixel wide, which an average would all but lose).
+        auto shrink = [&](const RgbaImage &from, int sx, int sy, int w, int h, hldata::UiRect to,
+                          bool brightest = false)
+        {
+            const double fx = static_cast<double>(w) / to.w, fy = static_cast<double>(h) / to.h;
+            for (int y = 0; y < to.h; ++y)
+            {
+                for (int x = 0; x < to.w; ++x)
+                {
+                    double sum[4] = {0, 0, 0, 0}, area = 0, most = 0;
+                    const double x0 = x * fx, x1 = (x + 1) * fx, y0 = y * fy, y1 = (y + 1) * fy;
+                    for (int py = static_cast<int>(y0); py < y1 && py < h; ++py)
+                    {
+                        const double cy = std::min<double>(py + 1, y1) - std::max<double>(py, y0);
+                        for (int px = static_cast<int>(x0); px < x1 && px < w; ++px)
+                        {
+                            const double cover = cy * (std::min<double>(px + 1, x1) - std::max<double>(px, x0));
+                            area += cover;
+                            if (sx + px >= from.width || sy + py >= from.height)
+                                continue;
+                            const std::uint8_t *p = from.at(sx + px, sy + py);
+                            most = std::max<double>(most, p[3]);
+                            const double a = p[3] * cover;
+                            for (int k = 0; k < 3; ++k)
+                                sum[k] += p[k] * a;
+                            sum[3] += a;
+                        }
+                    }
+                    if (area <= 0 || sum[3] <= 0)
+                        continue;
+                    std::uint8_t *q = atlas.at(to.x + x, to.y + y);
+                    for (int k = 0; k < 3; ++k)
+                        q[k] = static_cast<std::uint8_t>(std::lround(sum[k] / sum[3]));
+                    q[3] = static_cast<std::uint8_t>(std::lround(brightest ? most : std::min(255.0, sum[3] / area)));
+                }
+            }
+        };
+        // Where each is in the 640 set (sprites/hud.txt, weapon_*.txt).
+        for (int n = 0; n < 10; ++n)
+            shrink(sheet7, 24 * n, 0, 20, 24, hldata::hud640Digit(n));
+        shrink(sheet7, 80, 24, 32, 32, hldata::kHud640Cross);
+        shrink(sheet7, 0, 24, 40, 40, hldata::kHud640SuitFull);
+        shrink(sheet7, 40, 24, 40, 40, hldata::kHud640SuitEmpty);
+        shrink(sheet7, 112, 24, 32, 32, hldata::kHud640LampEmpty);
+        shrink(sheet7, 160, 24, 32, 32, hldata::kHud640LampFull);
+        shrink(sheet7, 144, 24, 16, 32, hldata::kHud640LampBeam);
+        for (int n = 0; n < hldata::kHudAmmo640Count; ++n)
+            shrink(sheet7, 24 * (n % 6), 72 + 24 * (n / 6), 24, 24, hldata::hud640Ammo(n));
+        shrink(cross, 24, 0, 24, 24, hldata::kHud640Crosshair, true);
+        // The kinds of hurt, in kHurt* order: the pictures the game shows for
+        // them (health.cpp's, one along from "dmg_bio" in hud.txt).
+        const struct
+        {
+            const RgbaImage *sheet;
+            int x;
+        } kHurts[8] = {{&sheet8, 128}, {&sheet8, 0}, {&sheet9, 64}, {&sheet8, 64},
+                       {&sheet9, 128}, {&sheet9, 0}, {&sheet9, 192}, {&sheet8, 192}};
+        for (int k = 0; k < 8; ++k)
+            shrink(*kHurts[k].sheet, kHurts[k].x, 0, 64, 64, hldata::hud640Hurt(k));
+        for (int side = 0; side < 4; ++side)
+        {
+            const RgbaImage mark = frame(pain, side);
+            shrink(mark, 0, 0, mark.width, mark.height, hldata::kHud640Pain[side]);
+        }
+        for (int y = 0; y < hldata::kHud640Solid.h; ++y)
+        {
+            for (int x = 0; x < hldata::kHud640Solid.w; ++x)
+                std::memset(atlas.at(hldata::kHud640Solid.x + x, hldata::kHud640Solid.y + y), 255, 4);
+        }
+        return atlas;
+    }
+
     std::vector<std::uint8_t> weaponIcons(const SprFile &hud, int width, int height)
     {
         // Where each weapon's picture is in the sheet, 80 by 20 (the game's

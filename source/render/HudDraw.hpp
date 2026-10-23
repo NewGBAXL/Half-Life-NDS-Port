@@ -15,6 +15,11 @@
 // what it shows changes: the bottom row (health, armour, ammunition), the
 // lamp, the crosshair; and the red of being hurt, a sheet of sprites over all
 // of it, as bright as the hurt is. The loading picture is still a quad.
+//
+// A card that has the game's 640 set (HlUi.hpp, kHud640File) has it drawn as
+// the game draws it at 640 by 480 (HlHudLayout.hpp): its sizes, its places,
+// its marks of where a hurt came from and its pictures of the kinds of hurt.
+// One cooked before that has the 320 set, in the places this first had.
 
 #include <cstdint>
 
@@ -61,6 +66,9 @@ namespace hlrt
             for (int i = 0; i < 4; ++i)
                 pain_[i] = pain[i];
         }
+        /// Hurt by these kinds (HlPlayerMove.hpp's kHurt* bits): each one's
+        /// picture shown at the left for a while, as the game shows them.
+        void addHurt(unsigned kinds) { hurtKinds_ |= kinds; }
         /// Once a frame, after the pass: what the sprites are to show.
         void draw();
         /// From the vertical blank interrupt: what draw() said, to the
@@ -70,6 +78,9 @@ namespace hlrt
     private:
         void compose(); ///< draw()'s work, into the sprites' copy
         void drawQuads(); ///< ... in two-pass: as 3D quads, each pass
+        // ... with the 640 set, where the game has each piece (HlHudLayout.hpp).
+        void compose640();
+        void drawQuads640();
 
     public:
         /// The marks' texture (an NEA_Material: HlUi.hpp, kDecalAtlasFile),
@@ -102,6 +113,7 @@ namespace hlrt
 
     private:
         bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
+        bool atlas640_ = false; ///< ... and they are the 640 set's (kHud640File)
         void *material_ = nullptr; ///< ... and, in two-pass, a texture (drawQuads)
         void *lampMaterial_ = nullptr;
         void *decalMaterial_ = nullptr;
@@ -126,6 +138,7 @@ namespace hlrt
         bool lampSuit_ = false; ///< the suit is worn: its lamp is shown, alight or not
         int flash_ = 0;
         int pain_[4] = {0, 0, 0, 0};
+        unsigned hurtKinds_ = 0;
         int lampPercent_ = 100;
         int health_ = 100, armor_ = 0, weapon_ = 0, clip_ = 0, spare_ = 0, extra_ = -1;
     };

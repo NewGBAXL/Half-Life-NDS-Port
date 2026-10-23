@@ -119,6 +119,7 @@ if(HLDS_BUILD_TESTS)
             test_talk
             test_soldiers
             test_ui
+            test_hud
             test_lod
             test_titles
             test_view

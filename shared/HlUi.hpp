@@ -135,6 +135,56 @@ namespace hldata
     inline constexpr UiRect kHudAmmoUranium = {90, 64, 18, 18};
     inline constexpr UiRect kHudAmmoHornet = {108, 64, 18, 18};
 
+    // ... and as the game draws it at 640 by 480: its 640 set (sprites/
+    // 640hud7..9, 640_pain, crosshairs), each piece made 0.4 of its size --
+    // what 640 by 480 is on 256 by 192 -- in a texture of its own. A card
+    // cooked before it has only the one above, and shows that.
+    inline constexpr const char *kHud640File = "ui/hud640.128x128.htx";
+    inline constexpr int kHud640Scale10 = 4; ///< tenths: the shrink
+    inline constexpr int kHud640DigitWidth = 8;
+    inline constexpr int kHud640DigitHeight = 10;
+    inline constexpr UiRect hud640Digit(int n)
+    {
+        return UiRect{static_cast<std::uint8_t>(8 * n), 103, 8, 10};
+    }
+    /// The pictures of the kinds of hurt (kHurt*, in their order), 26 square.
+    inline constexpr UiRect hud640Hurt(int kind)
+    {
+        return UiRect{static_cast<std::uint8_t>(26 * (kind & 3)), static_cast<std::uint8_t>(26 * (kind >> 2)), 26, 26};
+    }
+    /// The marks of where a hurt came from: front, right, back, left.
+    inline constexpr UiRect kHud640Pain[4] = {{19, 52, 51, 19}, {0, 52, 19, 51}, {19, 71, 51, 19}, {104, 0, 19, 51}};
+    inline constexpr UiRect kHud640SuitFull = {70, 52, 16, 16};
+    inline constexpr UiRect kHud640SuitEmpty = {86, 52, 16, 16};
+    inline constexpr UiRect kHud640Cross = {102, 52, 13, 13};
+    inline constexpr UiRect kHud640LampEmpty = {115, 52, 13, 13};
+    inline constexpr UiRect kHud640LampFull = {70, 68, 13, 13};
+    inline constexpr UiRect kHud640LampBeam = {83, 68, 6, 13};
+    inline constexpr UiRect kHud640Crosshair = {89, 68, 10, 10};
+    inline constexpr UiRect kHud640Solid = {99, 68, 8, 8}; ///< all bright: the bars
+    /// Each kind of ammunition's picture, 10 square, in the order of
+    /// kHudAmmo640*.
+    enum HudAmmo640 : int
+    {
+        kHudAmmo640_9mm,
+        kHudAmmo640_357,
+        kHudAmmo640ArGrenade,
+        kHudAmmo640Buckshot,
+        kHudAmmo640Bolt,
+        kHudAmmo640Rocket,
+        kHudAmmo640Uranium,
+        kHudAmmo640Hornet,
+        kHudAmmo640Grenade,
+        kHudAmmo640Satchel,
+        kHudAmmo640Snark,
+        kHudAmmo640Tripmine,
+        kHudAmmo640Count
+    };
+    inline constexpr UiRect hud640Ammo(int kind)
+    {
+        return UiRect{static_cast<std::uint8_t>(10 * kind), 113, 10, 10};
+    }
+
     // ------------------------------------------------------------- marks
     //
     // What shots, blows, blood and blasts leave on a wall: the game's own

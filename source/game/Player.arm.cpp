@@ -13,6 +13,7 @@
 #include "game/GameApi.hpp"
 #include "game/Input.hpp"
 #include "render/Camera.hpp"
+#include "render/HudDraw.hpp"
 
 // ARM code (the file name says so), for the movement's 64-bit multiplies; NOT
 // in fast memory. The movement runs once a frame, and its ten thousand
@@ -250,6 +251,10 @@ namespace hlrt
                 }
                 state.hurt = 0;
             }
+            // The kinds of it, for their pictures (drowning and the like hurt
+            // without the rest of this).
+            hudDraw.addHurt(state.hurtKinds.value);
+            state.hurtKinds.value = 0;
             const fx flat[3] = {state.velocity[0], state.velocity[1], 0};
             const fx s = sinLerp(static_cast<s16>(camera.yaw >> 1)), c = cosLerp(static_cast<s16>(camera.yaw >> 1));
             const fx side = static_cast<fx>((static_cast<std::int64_t>(state.velocity[0]) * s -
@@ -261,6 +266,7 @@ namespace hlrt
         {
             view = ViewState();
             state.hurt = 0;
+            state.hurtKinds.value = 0;
         }
         camera.kickPitch = static_cast<std::int16_t>(viewTurns(view.punch[0]));
         camera.kickYaw = static_cast<std::int16_t>(viewTurns(view.punch[1]));

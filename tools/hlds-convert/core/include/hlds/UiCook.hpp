@@ -49,6 +49,12 @@ namespace hlds
     /// game's 320-wide set (sprites/320hud2.spr and crosshairs.spr).
     RgbaImage hudAtlas(const SprFile &hud, const SprFile &crosshairs);
 
+    /// ... and the one of the 640-wide set (HlUi.hpp: kHud640File), each
+    /// piece averaged down to 0.4 of its size: `hud7` .. `hud9` are
+    /// sprites/640hud7..9.spr, `pain` 640_pain.spr.
+    RgbaImage hudAtlas640(const SprFile &hud7, const SprFile &hud8, const SprFile &hud9, const SprFile &pain,
+                          const SprFile &crosshairs);
+
     /// The weapons' pictures for the touch screen's slots (HlUi.hpp:
     /// IconsHeader and what follows), from the game's 320-wide set
     /// (sprites/320hud1.spr): what each picture fills of its box, fitted

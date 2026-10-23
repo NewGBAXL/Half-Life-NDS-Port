@@ -22,6 +22,7 @@
 // code the console runs. Sine and cosine are not available here (the DS's
 // tables live in libnds), so the caller hands in the view's horizontal axes.
 
+#include "HlFields.hpp"
 #include "HlMovers.hpp"
 
 namespace hldata
@@ -165,6 +166,31 @@ namespace hldata
     inline constexpr std::uint16_t kArsenalLaserOff = 1u << 14;  ///< the RPG's laser is off
     inline constexpr std::uint16_t kArsenalKept = kArsenalWeapons | kArsenalRpgLoaded | kArsenalLaserOff;
 
+    /// The kinds of hurt the head-up display shows a picture of, as bits:
+    /// the game's own (its health.cpp's giDmgFlags), in its order.
+    enum HurtKind : std::uint8_t
+    {
+        kHurtPoison = 1u << 0,
+        kHurtAcid = 1u << 1,
+        kHurtFreeze = 1u << 2,
+        kHurtDrown = 1u << 3,
+        kHurtBurn = 1u << 4,
+        kHurtGas = 1u << 5,
+        kHurtRadiation = 1u << 6,
+        kHurtShock = 1u << 7,
+    };
+    inline constexpr int kHurtKinds = 8;
+    /// ... of the game's DMG_* bits (a trigger_hurt's "damagetype").
+    constexpr std::uint8_t hurtKindsOf(std::uint32_t dmg)
+    {
+        return static_cast<std::uint8_t>(((dmg & (1u << 17)) ? kHurtPoison : 0) | ((dmg & (1u << 20)) ? kHurtAcid : 0) |
+                                         ((dmg & ((1u << 4) | (1u << 22))) ? kHurtFreeze : 0) |
+                                         ((dmg & (1u << 14)) ? kHurtDrown : 0) |
+                                         ((dmg & ((1u << 3) | (1u << 21))) ? kHurtBurn : 0) |
+                                         ((dmg & (1u << 16)) ? kHurtGas : 0) | ((dmg & (1u << 18)) ? kHurtRadiation : 0) |
+                                         ((dmg & (1u << 8)) ? kHurtShock : 0));
+    }
+
     struct PlayerState
     {
         fx origin[3] = {0, 0, 0};
@@ -195,6 +221,8 @@ namespace hldata
         int hurt = 0;
         fx hurtFrom[3] = {0, 0, 0};
         bool hurtKnown = false;
+        /// ... and the kinds of it the display shows (kHurt*).
+        Unsaved<std::uint8_t> hurtKinds;
         /// The brush entity the last move ran into sideways, as a mover
         /// index; -1 if none. What a box that can be pushed is pushed by.
         std::int16_t touchedMover = -1;
@@ -453,6 +481,7 @@ namespace hldata
                     if (s.underMs > 12000 && s.hurtMs <= 0)
                     {
                         s.health -= godMode(s) ? 0 : s.drownStep;
+                        s.hurtKinds.value |= kHurtDrown;
                         if (s.drownStep < 5)
                             ++s.drownStep;
                         s.hurtMs = 1000;
@@ -467,6 +496,8 @@ namespace hldata
                     (s.waterType == kContentsLava || s.waterType == kContentsSlime))
                 {
                     s.health -= godMode(s) ? 0 : (s.waterType == kContentsLava ? 10 : 4) * s.waterLevel;
+                    // (The game's DMG_BURN and DMG_ACID.)
+                    s.hurtKinds.value |= s.waterType == kContentsLava ? kHurtBurn : kHurtAcid;
                     s.hurtMs = 1000;
                 }
             }

@@ -1253,6 +1253,20 @@ namespace hlds
             else
                 result.warnings.push_back("the head-up display's pictures were not made" +
                                           (why.empty() ? std::string() : ": " + why));
+            // ... and at the game's 640 by 480 (the ROM takes this one when
+            // it is there).
+            SprFile hud7, hud8, hud9, pain;
+            bool loaded = !crossFile.empty() && !crosshairs.frames.empty();
+            for (auto [sprite, name] : {std::pair{&hud7, "sprites/640hud7.spr"}, std::pair{&hud8, "sprites/640hud8.spr"},
+                                        std::pair{&hud9, "sprites/640hud9.spr"}, std::pair{&pain, "sprites/640_pain.spr"}})
+            {
+                const fs::path file = findNoCase(options_.gameDir, name);
+                loaded = loaded && !file.empty() && sprite->load(file, why);
+            }
+            if (!loaded || !texture(hudAtlas640(hud7, hud8, hud9, pain, crosshairs), TextureFormat::A3I5,
+                                    hldata::kA3I5Colours, hldata::kTextureA3I5, hldata::kHud640File))
+                result.warnings.push_back("the head-up display's 640 pictures were not made" +
+                                          (why.empty() ? std::string() : ": " + why));
         }
         {
             // The weapons' pictures for the touch screen's slots.

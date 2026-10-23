@@ -10,6 +10,7 @@
 
 #include "Global.hpp"
 #include "HlFont.hpp"
+#include "HlHudLayout.hpp"
 #include "HlLamp.hpp"
 #include "HlPlayerMove.hpp"
 #include "HlUi.hpp"
@@ -94,38 +95,58 @@ namespace hlrt
         /// Which of the sprites' palettes says what colours are: a ramp of
         /// seven steps of brightness in each (colours 1..7); the display's
         /// own also has its red in 8..14 (low health, in the same row).
-        constexpr int kBankHud = 1, kBankWhite = 2, kBankDim = 3, kBankRed = 4, kBankFlash = 5, kBankPain = 6;
+        /// The marks' (one for each side) and the kinds of hurt's change as
+        /// they fade: set in the vertical blank.
+        constexpr int kBankHud = 1, kBankWhite = 2, kBankDim = 3, kBankRed = 4, kBankFlash = 5, kBankPain = 6,
+                      kBankHurts = 10;
 
         /// The sprites: after TopText's sixteen.
         constexpr int kFirstSprite = 16;
         constexpr int kSprites = 32;
         std::uint16_t shadow[kSprites][3];
-        std::uint16_t flashColour = 0, painColour[4] = {0, 0, 0, 0};
+        std::uint16_t flashColour = 0, painColour[4][7] = {}, hurtColour[7] = {};
         /// What the vertical blank puts in the sprites' table: shadow, once
         /// it is whole (a frame's sprites half made are never shown).
         std::uint16_t shown[kSprites][3];
-        std::uint16_t shownFlash = 0, shownPain[4] = {0, 0, 0, 0};
+        std::uint16_t shownFlash = 0, shownPain[4][7] = {}, shownHurt[7] = {};
 
+        /// `colour` at `level` sevenths, and at `strength` (of 256).
+        std::uint16_t shade(std::uint16_t colour, int level, int strength = 256)
+        {
+            const int r = (colour & 31) * level * strength / (7 * 256), g = ((colour >> 5) & 31) * level * strength / (7 * 256),
+                      b = ((colour >> 10) & 31) * level * strength / (7 * 256);
+            return static_cast<std::uint16_t>(r | g << 5 | b << 10);
+        }
         void ramp(int bank, int first, std::uint16_t colour)
         {
             for (int level = 1; level <= 7; ++level)
-            {
-                const int r = (colour & 31) * level / 7, g = ((colour >> 5) & 31) * level / 7,
-                          b = ((colour >> 10) & 31) * level / 7;
-                SPRITE_PALETTE[bank * 16 + first + level - 1] = static_cast<std::uint16_t>(r | g << 5 | b << 10);
-            }
+                SPRITE_PALETTE[bank * 16 + first + level - 1] = shade(colour, level);
+        }
+        /// ... into one of the ramps the vertical blank writes.
+        void ramp(std::uint16_t (&to)[7], std::uint16_t colour, int strength)
+        {
+            for (int level = 1; level <= 7; ++level)
+                to[level - 1] = shade(colour, level, strength);
         }
 
         /// A picture of the atlas onto the sheet at (x, y), brightness as its
         /// colour (+ `base`: 7 for the red of the display's own palette).
-        /// `skip` columns at its left are left out.
-        void blit(int x, int y, UiRect from, int base = 0, int skip = 0)
+        /// `skip` columns at its left are left out, and `skipTop` rows at its
+        /// top. `add`: added to what is there, as the game adds one picture
+        /// over another (a suit's fill over its outline).
+        void blit(int x, int y, UiRect from, int base = 0, int skip = 0, int skipTop = 0, bool add = false)
         {
-            for (int dy = 0; dy < from.h; ++dy)
+            for (int dy = skipTop; dy < from.h; ++dy)
             {
                 for (int dx = skip; dx < from.w; ++dx)
                 {
-                    const int level = atlas[(from.y + dy) * kHudAtlasWidth + from.x + dx] >> 5;
+                    int level = atlas[(from.y + dy) * kHudAtlasWidth + from.x + dx] >> 5;
+                    if (add && level != 0)
+                    {
+                        const int was = sheet.at(x + dx, y + dy);
+                        level += was > base ? was - base : 0;
+                        level = level > 7 ? 7 : level;
+                    }
                     if (level != 0)
                         sheet.pixel(x + dx, y + dy, level + base);
                 }
@@ -159,6 +180,60 @@ namespace hlrt
         {
             shadow[n][0] = 0x0200;
         }
+
+        /// The pictures of the kinds of hurt being shown, and how bright
+        /// they are this frame (0..256).
+        HudHurts hurts;
+        int hurtPulse = 0;
+
+        /// What is in hand: a gun with a clip, or a count of one kind.
+        bool clipped(int weapon)
+        {
+            return weapon == kWeaponGlock || weapon == kWeaponShotgun || weapon == kWeaponMp5 || weapon == kWeaponPython ||
+                   weapon == kWeaponCrossbow || weapon == kWeaponRpg;
+        }
+        bool counted(int weapon)
+        {
+            return weapon == kWeaponGrenade || weapon == kWeaponSatchel || weapon == kWeaponTripmine ||
+                   weapon == kWeaponSnark || weapon == kWeaponGauss || weapon == kWeaponEgon || weapon == kWeaponHornetgun;
+        }
+        /// Its ammunition's picture in the 640 set (the game's weapon_*.txt).
+        UiRect ammo640(int weapon)
+        {
+            switch (weapon)
+            {
+            case kWeaponPython: return hud640Ammo(kHudAmmo640_357);
+            case kWeaponShotgun: return hud640Ammo(kHudAmmo640Buckshot);
+            case kWeaponCrossbow: return hud640Ammo(kHudAmmo640Bolt);
+            case kWeaponRpg: return hud640Ammo(kHudAmmo640Rocket);
+            case kWeaponGauss:
+            case kWeaponEgon: return hud640Ammo(kHudAmmo640Uranium);
+            case kWeaponHornetgun: return hud640Ammo(kHudAmmo640Hornet);
+            case kWeaponGrenade: return hud640Ammo(kHudAmmo640Grenade);
+            case kWeaponSatchel: return hud640Ammo(kHudAmmo640Satchel);
+            case kWeaponSnark: return hud640Ammo(kHudAmmo640Snark);
+            case kWeaponTripmine: return hud640Ammo(kHudAmmo640Tripmine);
+            default: return hud640Ammo(kHudAmmo640_9mm);
+            }
+        }
+        /// `value` (0..999) in a field of three from `x640` (at 640 by
+        /// 480), its digits each put by `put(x, digit)`.
+        template <class Put>
+        void field640(int x640, int value, Put &&put)
+        {
+            value = value < 0 ? 0 : (value > 999 ? 999 : value);
+            const int digit[3] = {value / 100, value / 10 % 10, value % 10};
+            for (int k = hudFieldFirst(value); k < 3; ++k)
+                put(hudDs(x640 + k * kHud640DigitStep), hud640Digit(digit[k]));
+        }
+        /// The game's colours: its yellowish (255, 160, 0), the red of low
+        /// health (250, 0, 0) and of an empty lamp (255, 16, 16).
+        constexpr std::uint16_t kYellowish = RGB15(31, 20, 0);
+        constexpr std::uint16_t kPainRed = RGB15(31, 0, 0);
+        constexpr std::uint16_t kRedish = RGB15(31, 2, 2);
+        /// A mark of where a hurt came from shows from 0.4 of its full
+        /// strength (256) up, and never dimmer than half (health.cpp).
+        constexpr int kPainShows = 103;
 
         NEA_Material *loadingShown = nullptr;
         // The title screen's pictures (showMenu), and the intro's (playIntro).
@@ -289,32 +364,39 @@ namespace hlrt
                 decalPalette_ = palette;
             }
         }
-        // In two-pass, a texture of the display's pictures as well (drawn as
-        // quads: drawQuads).
-        if (global.twoPass && material_ == nullptr && global.hasFat)
+        // The display's pictures: read, not uploaded (its sprites are made
+        // from them: draw()). The 640 set's if the card has it, else the
+        // 320 set's.
+        if (!atlas_ && global.hasFat)
+        {
+            static std::uint8_t body[kHudAtlasWidth * kHudAtlasHeight + 64];
+            hldata::TextureHeader header;
+            for (const char *file : {kHud640File, kHudAtlasFile})
+            {
+                if (TextureCache::readFile(global.commonPath(file).c_str(), kHudAtlasWidth, kHudAtlasHeight, 1, header,
+                                           body, sizeof(body)) &&
+                    header.texelBytes == sizeof(atlas))
+                {
+                    std::memcpy(atlas, body, sizeof(atlas));
+                    atlas_ = true;
+                    atlas640_ = file == kHud640File;
+                    sheetMade = false;
+                    break;
+                }
+            }
+        }
+        // In two-pass, the same as a texture as well (drawn as quads:
+        // drawQuads).
+        if (global.twoPass && material_ == nullptr && atlas_)
         {
             NEA_Material *material = nullptr;
             NEA_Palette *palette = nullptr;
-            if (TextureCache::loadFile(global.commonPath(kHudAtlasFile).c_str(), false, kHudAtlasWidth, kHudAtlasHeight,
-                                       1, material, palette))
+            if (TextureCache::loadFile(global.commonPath(atlas640_ ? kHud640File : kHudAtlasFile).c_str(), false,
+                                       kHudAtlasWidth, kHudAtlasHeight, 1, material, palette))
             {
                 material_ = material;
                 palette_ = palette;
             }
-        }
-        // The display's pictures: read, not uploaded (its sprites are made
-        // from them: draw()).
-        if (atlas_ || !global.hasFat)
-            return;
-        static std::uint8_t body[kHudAtlasWidth * kHudAtlasHeight + 64];
-        hldata::TextureHeader header;
-        if (TextureCache::readFile(global.commonPath(kHudAtlasFile).c_str(), kHudAtlasWidth, kHudAtlasHeight, 1, header,
-                                   body, sizeof(body)) &&
-            header.texelBytes == sizeof(atlas))
-        {
-            std::memcpy(atlas, body, sizeof(atlas));
-            atlas_ = true;
-            sheetMade = false;
         }
     }
 
@@ -326,6 +408,7 @@ namespace hlrt
         material_ = palette_ = nullptr;
         loadingMaterial_ = loadingPalette_ = nullptr;
         loadingShown = nullptr;
+        hurts = HudHurts();
     }
 
     void HudDraw::setStatus(bool suit, int health, int armor, int weapon, int clip, int spare, int extra)
@@ -350,15 +433,28 @@ namespace hlrt
 
     void HudDraw::draw()
     {
+        // The kinds of hurt: those new this frame, those whose time is up.
+        const auto now = static_cast<std::uint32_t>(static_cast<std::uint64_t>(Global::vblanks()) * 1000u / 60u);
+        hurts.add(static_cast<std::uint8_t>(hurtKinds_), now);
+        hurtKinds_ = 0;
+        hurtPulse = HudHurts::pulse(now);
+        hurts.tick(now, hurtPulse);
         if (global.twoPass)
         {
             // (No sprites of ours: bank F is the engine's line.)
             for (int n = 0; n < kSprites; ++n)
                 hide(n);
             flashColour = 0;
-            for (std::uint16_t &c : painColour)
-                c = 0;
-            drawQuads();
+            std::memset(painColour, 0, sizeof(painColour));
+            std::memset(hurtColour, 0, sizeof(hurtColour));
+            if (atlas640_)
+                drawQuads640();
+            else
+                drawQuads();
+        }
+        else if (atlas640_)
+        {
+            compose640();
         }
         else
         {
@@ -368,6 +464,7 @@ namespace hlrt
         std::memcpy(shown, shadow, sizeof(shown));
         shownFlash = flashColour;
         std::memcpy(shownPain, painColour, sizeof(shownPain));
+        std::memcpy(shownHurt, hurtColour, sizeof(shownHurt));
         leaveCriticalSection(state);
     }
 
@@ -378,8 +475,7 @@ namespace hlrt
         for (int n = 0; n < kSprites; ++n)
             hide(n);
         flashColour = 0;
-        for (std::uint16_t &c : painColour)
-            c = 0;
+        std::memset(painColour, 0, sizeof(painColour));
         if (screenFade.curtained() || frameFreeze.frozen() || !atlas_)
             return;
 
@@ -428,7 +524,7 @@ namespace hlrt
             if (pain_[n] <= 0)
                 continue;
             const int level = pain_[n] * 24 / 256;
-            painColour[n] = static_cast<std::uint16_t>((31 * level / 24) | ((3 * level / 24) << 5) | ((2 * level / 24) << 10));
+            painColour[n][0] = static_cast<std::uint16_t>((31 * level / 24) | ((3 * level / 24) << 5) | ((2 * level / 24) << 10));
             const int x = kMarks[n][0], y = kMarks[n][1];
             if (kMarks[n][2] > kMarks[n][3])
             {
@@ -661,6 +757,307 @@ namespace hlrt
         GFX_COLOR = 0x7FFF;
     }
 
+    /// compose() with the 640 set, where the game puts each piece. The sheet
+    /// (bank F, as compose's) is laid out as:
+    ///   rows  0..31, all across:   the bottom row of the screen (y 160..191)
+    ///   rows 32..63, x 0..127:     the marks of a hurt from the front, the back
+    ///   rows 32..63, x 128..255:   four kinds of hurt's pictures
+    ///   rows 64..127, x 0..63:     the solid block (colour 1) of being hurt
+    ///   rows 64..127, x 64..127:   the marks from the right, the left
+    ///   rows 64..95, x 128..255:   the other four kinds of hurt's pictures
+    ///   rows 96..111, x 128..143:  the crosshair; x 160..191: the lamp
+    /// The sprites: 0..3 the bottom row, 4 the lamp, 5 the crosshair, 6..13
+    /// the kinds of hurt, 14..17 the marks, 18..29 the red of being hurt.
+    void HudDraw::compose640()
+    {
+        static int shownHealth = -1, shownArmor = -1, shownWeapon = -1, shownClip = -1, shownSpare = -1,
+                   shownExtra = -2, shownLamp = -1;
+        constexpr int kMarkCell[4][2] = {{0, 32}, {64, 64}, {64, 32}, {96, 64}};
+        constexpr int kLampCell[2] = {160, 96}, kCrosshairCell[2] = {128, 96};
+        auto hurtCell = [](int kind) { return 128 + (kind & 3) * 32; };
+        auto hurtRow = [](int kind) { return kind < 4 ? 32 : 64; };
+        for (int n = 0; n < kSprites; ++n)
+            hide(n);
+        flashColour = 0;
+        std::memset(painColour, 0, sizeof(painColour));
+        std::memset(hurtColour, 0, sizeof(hurtColour));
+        if (screenFade.curtained() || frameFreeze.frozen() || !atlas_)
+            return;
+
+        // (As compose(): the sprites on, bank F theirs, added to the picture.)
+        if (VRAM_F_CR != (VRAM_ENABLE | VRAM_F_MAIN_SPRITE_0x06404000))
+        {
+            vramSetBankF(VRAM_F_MAIN_SPRITE_0x06404000);
+            sheetMade = false;
+        }
+        REG_DISPCNT = (REG_DISPCNT & ~(DISPLAY_SPR_1D | DISPLAY_SPR_1D_BMP)) | DISPLAY_SPR_ACTIVE;
+        REG_BLDCNT = 0x3F00;
+        REG_BLDALPHA = 16 | (16 << 8);
+        if (!sheetMade)
+        {
+            sheet.tiles = reinterpret_cast<std::uint32_t *>(0x06404000);
+            sheet.width = 256;
+            sheet.height = 128;
+            sheet.fill(0, 0, 256, 128, 0);
+            sheet.fill(0, 64, 64, 64, 1);
+            for (int n = 0; n < 4; ++n)
+                blit(kMarkCell[n][0], kMarkCell[n][1], kHud640Pain[n]);
+            for (int k = 0; k < HudHurts::kKinds; ++k)
+                blit(hurtCell(k), hurtRow(k), hud640Hurt(k));
+            blit(kCrosshairCell[0] + 3, kCrosshairCell[1] + 3, kHud640Crosshair);
+            ramp(kBankHud, 1, kYellowish);
+            ramp(kBankHud, 8, kPainRed);
+            ramp(kBankWhite, 1, 0x7FFF);
+            ramp(kBankDim, 1, kDim);
+            ramp(kBankRed, 1, kRedish);
+            shownHealth = shownArmor = shownWeapon = shownClip = shownSpare = shownLamp = -1;
+            shownExtra = -2;
+            sheetMade = true;
+        }
+
+        // Being hurt, which wants no suit: the screen reddened all over, as
+        // compose() has it; the game's mark on each side the hurt came from,
+        // in the display's colour (red when health is low), fading.
+        if (flash_ > 0)
+        {
+            const int red = flash_ * 14 / 256;
+            flashColour = static_cast<std::uint16_t>(red > 31 ? 31 : red);
+            for (int k = 0; k < 12; ++k)
+                sprite(18 + k, (k % 4) * 64, (k / 4) * 64, 0, 3, 0, 64, kBankFlash);
+        }
+        const std::uint16_t painIn = health_ > 25 ? kYellowish : kPainRed;
+        for (int n = 0; n < 4; ++n)
+        {
+            if (pain_[n] < kPainShows)
+                continue;
+            ramp(painColour[n], painIn, pain_[n] > 256 ? 256 : (pain_[n] < 128 ? 128 : pain_[n]));
+            const bool wide = (n & 1) == 0;
+            sprite(14 + n, hudDs(kHud640PainAt[n].x), hudDs(kHud640PainAt[n].y), wide ? 1 : 2, 3, kMarkCell[n][0],
+                   kMarkCell[n][1], kBankPain + n);
+        }
+        // The kinds of hurt, pulsing (which also wants no suit).
+        if (hurts.any())
+        {
+            ramp(hurtColour, kYellowish, hurtPulse);
+            for (int k = 0; k < HudHurts::kKinds; ++k)
+            {
+                if (hurts.stacked[k] >= 0)
+                    sprite(6 + k, hudDs(hud640HurtAt(hurts.stacked[k]).x), hudDs(hud640HurtAt(hurts.stacked[k]).y), 0, 2,
+                           hurtCell(k), hurtRow(k), kBankHurts);
+            }
+        }
+        if (!suit_)
+            return;
+
+        const bool gun = clipped(weapon_), count = counted(weapon_);
+        // The bottom row, drawn again when what it says has changed. (Screen
+        // y 160 is the sheet's row 0.)
+        const int healthShown = health_ <= 25 ? -1000 - health_ : health_;
+        if (healthShown != shownHealth || armor_ != shownArmor || weapon_ != shownWeapon || clip_ != shownClip ||
+            spare_ != shownSpare || extra_ != shownExtra)
+        {
+            shownHealth = healthShown;
+            shownArmor = armor_;
+            shownWeapon = weapon_;
+            shownClip = clip_;
+            shownSpare = spare_;
+            shownExtra = extra_;
+            sheet.fill(0, 0, 256, 32, 0);
+            constexpr int kTop = 160;
+            const int row = hudDs(kHud640NumberY) - kTop;
+            auto bar = [&](int x640) { sheet.fill(hudDs(x640), row, 1, kHud640DigitHeight, 6); };
+            // Health, red when it is low; and its bar.
+            const int red = health_ <= 25 ? 7 : 0;
+            blit(hudDs(kHud640CrossX), hudDs(kHud640RowY) - kTop, kHud640Cross, red);
+            field640(kHud640HealthX, health_, [&](int x, UiRect digit) { blit(x, row, digit, red); });
+            bar(kHud640HealthBarX);
+            // Armour: the suit, filled from the bottom as far as there is.
+            const int suitX = hudDs(kHud640SuitX), suitY = hudDs(kHud640SuitY) - kTop;
+            blit(suitX, suitY, kHud640SuitEmpty);
+            const int empty = hudSuitEmptyRows(armor_);
+            if (empty < kHud640SuitFull.h)
+                blit(suitX, suitY, kHud640SuitFull, 0, 0, empty, true);
+            field640(kHud640ArmorX, armor_, [&](int x, UiRect digit) { blit(x, row, digit); });
+            // What is in hand: clip | the rest, or a count; then its icon.
+            if (gun || count)
+            {
+                int x640 = kHud640CountX;
+                if (gun)
+                {
+                    field640(kHud640ClipX, clip_, [&](int x, UiRect digit) { blit(x, row, digit); });
+                    bar(kHud640ClipBarX);
+                    x640 = kHud640SpareX;
+                }
+                field640(x640, gun ? spare_ : clip_, [&](int x, UiRect digit) { blit(x, row, digit); });
+                blit(hudDs(hud640AmmoIconX(x640)), hudDs(kHud640NumberY - kHud640AmmoIconUp) - kTop, ammo640(weapon_));
+                // The MP5's grenades, a row up, while it has any.
+                if (extra_ > 0)
+                {
+                    const int up = hudDs(kHud640SecondY) - kTop;
+                    field640(kHud640CountX, extra_, [&](int x, UiRect digit) { blit(x, up, digit); });
+                    blit(hudDs(hud640AmmoIconX(kHud640CountX)), hudDs(kHud640SecondY - kHud640AmmoIconUp) - kTop,
+                         hud640Ammo(kHudAmmo640ArGrenade));
+                }
+            }
+        }
+        for (int k = 0; k < 4; ++k)
+            sprite(k, k * 64, 160, 1, 3, k * 64, 0, kBankHud);
+
+        // The lamp, at the top right: its outline, as much of it filled as
+        // there is in it (emptying from the left), its beam while alight.
+        // Dim while it is out, red when it is nearly empty.
+        if (lampSuit_)
+        {
+            const int lampShown = lampPercent_ * 2 + (lampOn_ ? 1 : 0);
+            if (lampShown != shownLamp)
+            {
+                shownLamp = lampShown;
+                sheet.fill(kLampCell[0], kLampCell[1], 32, 16, 0);
+                blit(kLampCell[0], kLampCell[1], kHud640LampEmpty);
+                const int empty = hudLampEmptyColumns(lampPercent_);
+                if (empty < kHud640LampFull.w)
+                    blit(kLampCell[0], kLampCell[1], kHud640LampFull, 0, empty, 0, true);
+                if (lampOn_)
+                    blit(kLampCell[0] + hudDs(kHud640BeamX) - hudDs(kHud640LampX), kLampCell[1], kHud640LampBeam);
+            }
+            const int bank = lampPercent_ < 20 ? kBankRed : (lampOn_ ? kBankHud : kBankDim);
+            sprite(4, hudDs(kHud640LampX), hudDs(kHud640LampY), 1, 2, kLampCell[0], kLampCell[1], bank); // 32 by 16
+        }
+        // The crosshair, for what is aimed (unless the COMMAND line's
+        // crosshair 0 took it away).
+        if (gun && game.crosshair)
+            sprite(5, hudDs(kHud640CrosshairX) - 3, hudDs(kHud640CrosshairY) - 3, 0, 1, kCrosshairCell[0],
+                   kCrosshairCell[1], kBankWhite);
+    }
+
+    /// drawQuads() with the 640 set, where the game puts each piece.
+    void HudDraw::drawQuads640()
+    {
+        if (screenFade.curtained() || frameFreeze.frozen())
+            return;
+        // The red of being hurt all over, as drawQuads() has it.
+        if (flash_ > 0)
+        {
+            GFX_TEX_FORMAT = 0;
+            beginFlat();
+            NEA_PolyFormat(1 + flash_ * 13 / 256, 61, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                           static_cast<NEA_OtherFormatEnum>(0));
+            GFX_COLOR = RGB15(31, 0, 0);
+            GFX_BEGIN = GL_QUADS;
+            corner(0, 0, 0, 0);
+            corner(0, 192, 0, 0);
+            corner(256, 192, 0, 0);
+            corner(256, 0, 0, 0);
+            GFX_COLOR = 0x7FFF;
+        }
+        if (material_ == nullptr)
+            return;
+        NEA_MaterialUse(static_cast<NEA_Material *>(material_));
+        beginFlat();
+        auto picture = [](int x, int y, UiRect from) { quad(x, y, from.w, from.h, from); };
+        // The marks of where a hurt came from, fading (no suit wanted), and
+        // the kinds of hurt, pulsing: as bright as they are, as solid.
+        const std::uint16_t painIn = health_ > 25 ? kYellowish : kPainRed;
+        for (int n = 0; n < 4; ++n)
+        {
+            if (pain_[n] < kPainShows)
+                continue;
+            const int strength = pain_[n] > 256 ? 256 : (pain_[n] < 128 ? 128 : pain_[n]);
+            NEA_PolyFormat(strength * 31 / 256, 59 - n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                           static_cast<NEA_OtherFormatEnum>(0));
+            GFX_COLOR = painIn;
+            picture(hudDs(kHud640PainAt[n].x), hudDs(kHud640PainAt[n].y), kHud640Pain[n]);
+        }
+        if (hurts.any() && hurtPulse * 31 / 256 > 0)
+        {
+            NEA_PolyFormat(hurtPulse * 31 / 256, 55, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                           static_cast<NEA_OtherFormatEnum>(0));
+            GFX_COLOR = kYellowish;
+            for (int k = 0; k < HudHurts::kKinds; ++k)
+            {
+                if (hurts.stacked[k] >= 0)
+                    picture(hudDs(hud640HurtAt(hurts.stacked[k]).x), hudDs(hud640HurtAt(hurts.stacked[k]).y),
+                            hud640Hurt(k));
+            }
+        }
+        if (!suit_)
+        {
+            GFX_COLOR = 0x7FFF;
+            return;
+        }
+        // (No fog, no lights; number 63 of the polygons that blend.)
+        NEA_PolyFormat(31, 63, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+        const int row = hudDs(kHud640NumberY);
+        auto digit = [&](int x, UiRect from) { picture(x, row, from); };
+        auto bar = [&](int x640) { quad(hudDs(x640), row, 1, kHud640DigitHeight, kHud640Solid); };
+        // Health, red when it is low; its bar in the display's colour.
+        GFX_COLOR = health_ > 25 ? kYellowish : kPainRed;
+        picture(hudDs(kHud640CrossX), hudDs(kHud640RowY), kHud640Cross);
+        field640(kHud640HealthX, health_, digit);
+        GFX_COLOR = kYellowish;
+        bar(kHud640HealthBarX);
+        // Armour: the suit, filled from the bottom as far as there is.
+        const int suitX = hudDs(kHud640SuitX), suitY = hudDs(kHud640SuitY);
+        picture(suitX, suitY, kHud640SuitEmpty);
+        const int empty = hudSuitEmptyRows(armor_);
+        if (empty < kHud640SuitFull.h)
+        {
+            UiRect part = kHud640SuitFull;
+            part.y = static_cast<std::uint8_t>(part.y + empty);
+            part.h = static_cast<std::uint8_t>(part.h - empty);
+            quad(suitX, suitY + empty, part.w, part.h, part);
+        }
+        field640(kHud640ArmorX, armor_, digit);
+        // The lamp: its outline, as much filled as there is, its beam while
+        // alight; dim while out, red when nearly empty.
+        if (lampSuit_)
+        {
+            GFX_COLOR = lampPercent_ < 20 ? kRedish : (lampOn_ ? kYellowish : kDim);
+            const int x = hudDs(kHud640LampX), y = hudDs(kHud640LampY);
+            picture(x, y, kHud640LampEmpty);
+            const int gone = hudLampEmptyColumns(lampPercent_);
+            if (gone < kHud640LampFull.w)
+            {
+                UiRect part = kHud640LampFull;
+                part.x = static_cast<std::uint8_t>(part.x + gone);
+                part.w = static_cast<std::uint8_t>(part.w - gone);
+                quad(x + gone, y, part.w, part.h, part);
+            }
+            if (lampOn_)
+                picture(hudDs(kHud640BeamX), y, kHud640LampBeam);
+            GFX_COLOR = kYellowish;
+        }
+        // What is in hand: clip | the rest, or a count; then its icon; the
+        // MP5's grenades a row up while it has any.
+        const bool gun = clipped(weapon_), count = counted(weapon_);
+        if (gun || count)
+        {
+            int x640 = kHud640CountX;
+            if (gun)
+            {
+                field640(kHud640ClipX, clip_, digit);
+                bar(kHud640ClipBarX);
+                x640 = kHud640SpareX;
+            }
+            field640(x640, gun ? spare_ : clip_, digit);
+            picture(hudDs(hud640AmmoIconX(x640)), hudDs(kHud640NumberY - kHud640AmmoIconUp), ammo640(weapon_));
+            if (extra_ > 0)
+            {
+                const int up = hudDs(kHud640SecondY);
+                field640(kHud640CountX, extra_, [&](int x, UiRect from) { picture(x, up, from); });
+                picture(hudDs(hud640AmmoIconX(kHud640CountX)), hudDs(kHud640SecondY - kHud640AmmoIconUp),
+                        hud640Ammo(kHudAmmo640ArGrenade));
+            }
+        }
+        // The crosshair, for what is aimed.
+        if (gun && game.crosshair)
+        {
+            GFX_COLOR = 0x7FFF;
+            picture(hudDs(kHud640CrosshairX), hudDs(kHud640CrosshairY), kHud640Crosshair);
+        }
+        GFX_COLOR = 0x7FFF;
+    }
+
     void HudDraw::onVblank()
     {
         auto *oam = reinterpret_cast<volatile std::uint16_t *>(0x07000000) + kFirstSprite * 4;
@@ -672,7 +1069,12 @@ namespace hlrt
         }
         SPRITE_PALETTE[kBankFlash * 16 + 1] = shownFlash;
         for (int n = 0; n < 4; ++n)
-            SPRITE_PALETTE[(kBankPain + n) * 16 + 1] = shownPain[n];
+        {
+            for (int level = 0; level < 7; ++level)
+                SPRITE_PALETTE[(kBankPain + n) * 16 + 1 + level] = shownPain[n][level];
+        }
+        for (int level = 0; level < 7; ++level)
+            SPRITE_PALETTE[kBankHurts * 16 + 1 + level] = shownHurt[level];
     }
 
     bool HudDraw::showLoading()

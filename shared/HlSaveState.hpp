@@ -59,7 +59,7 @@ namespace hldata
     HL_FIELDS(Piece, 14);
     HL_FIELDS(ActorWorld, 42);
     HL_FIELDS(Inventory, 12);
-    HL_FIELDS(PlayerState, 32);
+    HL_FIELDS(PlayerState, 33);
     HL_FIELDS(ViewState, 8);
     HL_FIELDS(WeaponState, 25);
     HL_FIELDS(LampState, 2);
@@ -137,13 +137,15 @@ namespace hldata
         /// One thing, by what it is: a number or a switch is a value; an
         /// array is each of its elements; a structure is each of its
         /// fields; and a pointer is not state at all -- it is to the map's
-        /// own data, or to an array that is dealt with by whoever owns it.
+        /// own data, or to an array that is dealt with by whoever owns it --
+        /// nor is what is Unsaved.
         template <class A, class T>
         void stateField(A &a, T &v)
         {
             if (a.skips.has(&v, sizeof(T)))
                 return;
-            if constexpr (std::is_pointer_v<T> || std::is_member_pointer_v<T> || std::is_function_v<T>)
+            if constexpr (std::is_pointer_v<T> || std::is_member_pointer_v<T> || std::is_function_v<T> ||
+                          kIsUnsaved<T>)
             {
             }
             else if constexpr (std::is_array_v<T>)
