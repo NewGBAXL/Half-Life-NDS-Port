@@ -595,6 +595,44 @@ namespace hlrt
                 gibOrder_[gibFound_++] = static_cast<std::uint8_t>(i);
             }
         }
+        // The spent casings, as the game's models of them where the map has
+        // them: by the same rules as the pieces above, in a sixth of the
+        // share of their own. (What is left out is drawn as a triangle:
+        // EffectDraw.)
+        pieceFound_ = 0;
+        pieceModelled_ = 0;
+        if (worldDraw.pressure() < 2 && !strained_)
+        {
+            int casingPolygons = 0;
+            for (int i = 0; i < kMaxPieces && i < 64; ++i)
+            {
+                const Piece &piece = actors.pieces[i];
+                const int m = piece.kind != 0 ? game.shellModel(piece.kind) : -1;
+                if (m < 0 || m >= actors.modelCount || actors.models[m].header == nullptr)
+                    continue;
+                const ModelView &model = actors.models[m];
+                const std::int16_t centre[3] = {static_cast<std::int16_t>(fxToInt(piece.pos[0])),
+                                                static_cast<std::int16_t>(fxToInt(piece.pos[1])),
+                                                static_cast<std::int16_t>(fxToInt(piece.pos[2]))};
+                if (!worldDraw.ballVisible(centre, 4))
+                    continue;
+                int p = 0, v = 0;
+                for (int b = 0; b < model.header->batchCount; ++b)
+                {
+                    if (!model.batchInBody(model.batches[b], 0, 0, model.levelCount() - 1))
+                        continue;
+                    p += model.batches[b].polygons;
+                    v += model.batches[b].vertices;
+                }
+                if (polygons + p > kMaxPolygons || vertices + v > kMaxVertices || casingPolygons + p > kMaxPolygons / 6)
+                    continue;
+                polygons += p;
+                vertices += v;
+                casingPolygons += p;
+                pieceOrder_[pieceFound_++] = static_cast<std::uint8_t>(i);
+                pieceModelled_ |= std::uint64_t{1} << i;
+            }
+        }
         // The RPG's laser, where it falls (while it is in hand and on), and
         // a lit rocket's flame.
         if (player.state.inv.current == kWeaponRpg && (player.arsenal.have & kArsenalLaserOff) == 0 &&
@@ -695,7 +733,7 @@ namespace hlrt
     {
         const ActorWorld &actors = game.actors;
         cut += cut_;
-        if (found_ == 0 && gibFound_ == 0 && shotFound_ == 0)
+        if (found_ == 0 && gibFound_ == 0 && shotFound_ == 0 && pieceFound_ == 0)
             return;
         const int found = found_;
         const int *order = order_;
@@ -760,6 +798,28 @@ namespace hlrt
             drawActor(piece, actors.models[gib.model], gib.model, turn, -3 - static_cast<int>(gib.model),
                       actors.models[gib.model].levelCount() - 1);
         }
+        // The casings: each the game's model of it, turned about as it
+        // tumbles in the air, and lying flat once it has come to rest.
+        for (int n = 0; n < pieceFound_; ++n)
+        {
+            const Piece &piece = actors.pieces[pieceOrder_[n]];
+            const int m = piece.kind != 0 ? game.shellModel(piece.kind) : -1;
+            if (m < 0 || m >= actors.modelCount || actors.models[m].header == nullptr)
+                continue;
+            ActorState casing;
+            casing.active = true;
+            casing.kind = static_cast<std::uint8_t>(ActorKind::Generic);
+            casing.model = static_cast<std::uint16_t>(m);
+            casing.light = 22;
+            casing.clip = actors.models[m].header->clipCount != 0 ? 0 : -1;
+            for (int k = 0; k < 3; ++k)
+                casing.pos[k] = piece.pos[k];
+            fx sy, cy, sp, cp;
+            fxSinCos(piece.spin, sy, cy);
+            fxSinCos(piece.bounces >= 2 ? 0 : static_cast<std::uint16_t>(piece.spin * 3), sp, cp);
+            const fx turn[9] = {fxMul(cy, cp), -sy, fxMul(cy, sp), fxMul(sy, cp), cy, fxMul(sy, sp), -sp, 0, cp};
+            drawActor(casing, actors.models[m], static_cast<unsigned>(m), turn, -3 - m, actors.models[m].levelCount() - 1);
+        }
         // The later weapons' things, each turned the way it faces: a bolt
         // along its flight, a tripmine out of its wall, a satchel and a
         // snark the way they go (on the floor: they move as a crouched
@@ -786,6 +846,35 @@ namespace hlrt
                 thing.frame = static_cast<std::uint32_t>(Global::drawClock() * model.clips[0].fps / 60) % whole;
             }
             fx dir[3] = {shot.velocity[0], shot.velocity[1], shot.velocity[2]};
+            // (Each its own way through its spin, by where it is in the list.)
+            const std::uint32_t own = static_cast<std::uint32_t>(shotOrder_[n]) * 37u;
+            if (shot.kind == kShotGrenade)
+            {
+                // A hand grenade (ShootTimed, TumbleThink): spinning through
+                // its "toss" in the air; once it has all but stopped
+                // (HlMonsters.hpp marks it so), its "roll1", as fast as it
+                // rolls (its speed / 200, none below half of that).
+                const bool rolling = shot.sprite == 0xFFFE;
+                const int clip = model.findClip(nameHash(rolling ? "roll1" : "toss"));
+                if (clip >= 0 && model.clips[clip].frameCount > 1)
+                {
+                    thing.clip = static_cast<std::int16_t>(clip);
+                    const fx speed = fxLength(shot.velocity);
+                    int rate = 256;
+                    if (rolling)
+                    {
+                        rate = static_cast<int>((static_cast<std::int64_t>(speed) * 256) / fxFromInt(200));
+                        rate = rate > 256 ? 256 : (rate < 128 ? 0 : rate);
+                    }
+                    const std::uint32_t whole = static_cast<std::uint32_t>(model.clips[clip].frameCount - 1) << 8;
+                    thing.frame = static_cast<std::uint32_t>(
+                                      ((static_cast<std::uint64_t>(Global::drawClock()) + own) * model.clips[clip].fps * rate) /
+                                      (60 * 256)) %
+                                  whole;
+                }
+                // (Facing the way it goes, flat: the clip does the turning.)
+                dir[2] = 0;
+            }
             for (int k = 0; k < 3; ++k)
                 thing.pos[k] = shot.pos[k];
             if (shot.kind == kShotSatchel || snark)
@@ -815,8 +904,19 @@ namespace hlrt
                 cy = static_cast<fx>((static_cast<std::int64_t>(forward[0]) << kFxShift) / cp);
                 sy = static_cast<fx>((static_cast<std::int64_t>(forward[1]) << kFxShift) / cp);
             }
-            const fx sp = -forward[2];
-            const fx turn[9] = {fxMul(cy, cp), -sy, fxMul(cy, sp), fxMul(sy, cp), cy, fxMul(sy, sp), -sp, 0, cp};
+            fx sp = -forward[2];
+            fx cpp = cp;
+            if (shot.kind == kShotContact)
+            {
+                // The launcher's grenade: pointed along its flight, and
+                // tumbling end over end (ShootContact: 100 to 500 degrees a
+                // second; here 300).
+                const std::uint16_t pitch = static_cast<std::uint16_t>(
+                    fxAtan2Turns(-forward[2], cp) +
+                    static_cast<std::uint16_t>((static_cast<std::uint32_t>(Global::drawClock()) + own) * 910u));
+                fxSinCos(pitch, sp, cpp);
+            }
+            const fx turn[9] = {fxMul(cy, cpp), -sy, fxMul(cy, sp), fxMul(sy, cpp), cy, fxMul(sy, sp), -sp, 0, cpp};
             drawActor(thing, model, static_cast<unsigned>(m), turn, -3 - m, model.levelCount() - 1);
         }
         lightOff();

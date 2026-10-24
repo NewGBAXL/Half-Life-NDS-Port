@@ -298,7 +298,9 @@ namespace hldata
     };
     inline constexpr std::uint8_t kPieceShard = 1;
     inline constexpr std::uint8_t kPieceSpeck = 2; ///< plain, tiny, in `colour`
-    inline constexpr std::uint8_t kPieceShell = 3; ///< brass; it rings once as it lands
+    inline constexpr std::uint8_t kPieceShell = 3; ///< brass (models/shell.mdl); it rings once as it lands
+    inline constexpr std::uint8_t kPieceShotShell = 4; ///< a shotgun's (models/shotgunshell.mdl); it rings too
+    inline constexpr std::uint8_t kPieceCan = 5;       ///< a soda can out of its machine (plain, in `colour`)
     inline constexpr int kMaxPieces = 64;
 
     /// What something breaks into, by what it is made of (the game's
@@ -1050,6 +1052,18 @@ namespace hldata
         }
         slot->leftMs = ms * a.lifePercent / 100;
         return *slot;
+    }
+
+    /// A spent casing out of a gun (the game's EjectBrass): `kind` is
+    /// kPieceShell or kPieceShotShell. It is drawn as the game's model of it
+    /// where the map has it and there is room (ModelDraw.arm.cpp), and as a
+    /// small triangle in its colour where not.
+    inline Piece &shellEject(ActorWorld &a, std::uint8_t kind, const fx *from, const fx *velocity)
+    {
+        Piece &shell = pieceAdd(a, kind, from, velocity, 1200);
+        shell.half = 1;
+        shell.colour = static_cast<std::uint16_t>(kind == kPieceShotShell ? (24 | 5 << 5 | 4 << 10) : (27 | 21 << 5 | 6 << 10));
+        return shell;
     }
 
     /// The marks, for `ms` more milliseconds: each goes when its time is

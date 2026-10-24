@@ -8,6 +8,7 @@
 // map's; no more than two of a squad fire at once; cover is somewhere the
 // player cannot see; grenades keep to the game's rules.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -911,6 +912,58 @@ namespace
     }
 
     /// The shotgun: eight shells, one a "burst", five pellets of five.
+    /// Which maps are given the casings' models: where a soldier or an
+    /// assassin is, or the player is armed -- not the tram ride.
+    void testCasingNeeds(const char *dir)
+    {
+        auto casings = [&](const char *map, bool armed)
+        {
+            BspFile bsp;
+            std::vector<Entity> entities;
+            std::string error;
+            if (!bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error) ||
+                !parseEntities(bsp.entities, entities, error))
+                return -1;
+            std::vector<ModelNeed> needs = collectModelNeeds(entities);
+            addCasingNeeds(armed, needs);
+            int found = 0;
+            for (const ModelNeed &need : needs)
+                found += need.name == "shell" || need.name == "shotgunshell" ? 1 : 0;
+            return found;
+        };
+        check(casings("c0a0", false) == 0, "the tram ride has no casings to throw out");
+        check(casings("c1a3d", false) == 2, "a map of soldiers has both casings' models");
+        check(casings("c2a3d", false) == 2, "... and one of assassins");
+        check(casings("c1a1f", true) == 2, "... and a map the player is armed in");
+        // ... and the grenades in flight, as the game's models of them.
+        auto grenades = [&](const char *map, bool hand, bool launcher, bool &spins)
+        {
+            BspFile bsp;
+            std::vector<Entity> entities;
+            std::string error;
+            spins = false;
+            if (!bsp.load(std::string(dir) + "/maps/" + map + ".bsp", error) ||
+                !parseEntities(bsp.entities, entities, error))
+                return -1;
+            std::vector<ModelNeed> needs = collectModelNeeds(entities);
+            addGrenadeNeeds(hand, launcher, needs);
+            int found = 0;
+            for (const ModelNeed &need : needs)
+            {
+                found += need.name == "w_grenade" || need.name == "grenade" ? 1 : 0;
+                if (need.name == "w_grenade")
+                    spins = std::find(need.clips.begin(), need.clips.end(), "toss") != need.clips.end() &&
+                            std::find(need.clips.begin(), need.clips.end(), "roll1") != need.clips.end();
+            }
+            return found;
+        };
+        bool spins = false;
+        check(grenades("c0a0", false, false, spins) == 0, "the tram ride throws no grenades");
+        check(grenades("c1a3d", false, false, spins) == 2 && spins,
+              "a map of soldiers has both grenades, the hand grenade with its spin and its roll");
+        check(grenades("c1a1b", true, false, spins) >= 1 && spins, "... and a map the player has grenades in");
+    }
+
     void testShotgun(const char *dir)
     {
         auto game = load(dir, "c2a2b2");
@@ -935,10 +988,15 @@ namespace
         me.item &= static_cast<std::uint8_t>(~(kGruntGrenades | kGruntLauncher));
         check(me.ammo == kGruntShells && me.body % 4 == 2 && me.body / 4 == 1, "eight shells, and the gun to be seen");
         g.player.health = 100000;
-        int health = g.player.health, shells = 0, last = me.ammo, most = 0, odd = 0;
+        int health = g.player.health, shells = 0, last = me.ammo, most = 0, odd = 0, cases = 0, brass = 0;
         for (int ms = 0; ms < 12000 && me.ammo > 0; ms += 33)
         {
             tickStill(g);
+            for (const Piece &piece : g.actors.pieces)
+            {
+                cases += piece.kind == kPieceShotShell && piece.leftMs > 1100 ? 1 : 0;
+                brass += piece.kind == kPieceShell ? 1 : 0;
+            }
             shells += me.ammo < last ? last - me.ammo : 0;
             last = me.ammo;
             const int took = health - g.player.health;
@@ -949,6 +1007,12 @@ namespace
         std::printf("test_soldiers: c2a2b2: shotgun: %d shells, at most %d a shell at 200 units\n", shells, most);
         check(shells == kGruntShells && g.times(CommonSound::Shotgun) == kGruntShells, "he fires them one at a time");
         check(most > 0 && most <= kGruntPellets * kGruntPellet && odd == 0, "... five pellets of five a shell");
+        bool modelled = false;
+        for (std::uint32_t i = 0; i < g.view.modelRefCount; ++i)
+            modelled = modelled || std::string(g.view.modelRefs[i].name) == "shotgunshell";
+        std::printf("test_soldiers: c2a2b2: %d frames of fresh shotgun shells on the way out\n", cases);
+        check(cases > 0 && brass == 0 && modelled,
+              "... and each throws out a shotgun's shell, which the map has the model of (EjectBrass)");
     }
 
     /// What a monstermaker makes: soldiers, with what the game gives one
@@ -1003,6 +1067,7 @@ int main()
         testGrenades(dir);
         testOddments(dir);
         testLauncher(dir);
+        testCasingNeeds(dir);
         testShotgun(dir);
         testMade(dir);
     }

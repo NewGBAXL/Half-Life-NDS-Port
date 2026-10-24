@@ -3033,9 +3033,13 @@ namespace hldata
             a.noiseMs -= ms;
         if (a.speakMs > 0)
             a.speakMs -= ms;
-        // The small things in flight; a casing rings as it lands.
-        if (piecesTick(a, *w.world, ms) > 0 && w.heard != nullptr)
+        // The small things in flight; a casing rings as it lands (brass, or
+        // a shotgun's shell: TE_BOUNCE_SHELL and TE_BOUNCE_SHOTSHELL).
+        const int rang = piecesTick(a, *w.world, ms);
+        if ((rang & 1) && w.heard != nullptr)
             w.heard->add(CommonSound::Shell, nullptr, 70, kRadiusSmall);
+        if ((rang & 2) && w.heard != nullptr)
+            w.heard->add(CommonSound::ShotShell, nullptr, 70, kRadiusSmall);
         decalsTick(a, ms);
         for (int i = 0; i < w.recordCount; ++i)
         {

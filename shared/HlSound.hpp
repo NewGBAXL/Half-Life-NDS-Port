@@ -393,6 +393,8 @@ namespace hldata
         NihilDie,
         BoidIdle,
         BoidAlert,
+        // ... and a shotgun shell's ring (from version 37: kCommonSoundsBefore37).
+        ShotShell,
         Count
     };
     /// How many of these a map of level version 29 or before has.
@@ -407,6 +409,8 @@ namespace hldata
     inline constexpr std::uint16_t kCommonSoundsBefore34 = static_cast<std::uint16_t>(CommonSound::OspreyRotor);
     /// ... and of version 34.
     inline constexpr std::uint16_t kCommonSoundsBefore35 = static_cast<std::uint16_t>(CommonSound::TentacleAlert);
+    /// ... and of versions 35 and 36.
+    inline constexpr std::uint16_t kCommonSoundsBefore37 = static_cast<std::uint16_t>(CommonSound::ShotShell);
     /// How many of them a map of level version `version` has (its sounds
     /// after those are its own).
     inline constexpr std::uint16_t commonsOf(std::uint16_t version)
@@ -417,6 +421,7 @@ namespace hldata
                : version < 33 ? kCommonSoundsBefore33
                : version < 34 ? kCommonSoundsBefore34
                : version < 35 ? kCommonSoundsBefore35
+               : version < 37 ? kCommonSoundsBefore37
                               : static_cast<std::uint16_t>(CommonSound::Count);
     }
     inline constexpr std::uint16_t kNoSound = 0xFFFF;
@@ -505,7 +510,8 @@ namespace hldata
             "gonarch/gon_die1.wav",     "gonarch/gon_step1.wav",   "debris/beamstart7.wav",
             "x/x_attack1.wav",          "x/x_ballattack1.wav",     "x/x_recharge1.wav",
             "x/x_laugh1.wav",           "x/x_pain1.wav",           "x/x_die1.wav",
-            "boid/boid_idle1.wav",      "boid/boid_alert1.wav"};
+            "boid/boid_idle1.wav",      "boid/boid_alert1.wav",
+            "weapons/sshell1.wav"};
         static_assert(sizeof(kPaths) / sizeof(kPaths[0]) == static_cast<std::size_t>(CommonSound::Count));
         return kPaths[static_cast<int>(sound)];
     }

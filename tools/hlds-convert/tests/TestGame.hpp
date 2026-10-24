@@ -151,6 +151,10 @@ namespace hldstest
                 parseEntities(other.entities, otherEntities, error))
                 addVisitorNeeds(entities, otherEntities, std::string(entity.value("landmark")), needs);
         }
+        // (The casings out of the monsters' guns; the player's weapons are
+        // the converter's to know.)
+        addCasingNeeds(false, needs);
+        addGrenadeNeeds(false, false, needs);
         for (const ModelNeed &need : needs)
         {
             MdlFile mdl;

@@ -355,6 +355,11 @@ namespace hlds
                         need.firstSequence = need.firstSequence || one.clips.empty();
                 }
             }
+            // ... and the spent casings out of the guns (EjectBrass): wherever
+            // the player may have the pistol, the MP5 or the shotgun, or a
+            // soldier or an assassin is (or may come along from next door).
+            addCasingNeeds(kHeld[1].wanted || kHeld[2].wanted || kHeld[4].wanted, needs);
+            addGrenadeNeeds(kHeld[3].wanted, kHeld[4].wanted, needs);
         }
         // A multiplayer map: the others in the game are seen. One model for
         // all of them, the game's own player in the suit, with what a body

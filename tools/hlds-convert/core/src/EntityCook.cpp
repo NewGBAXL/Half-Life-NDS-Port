@@ -655,6 +655,68 @@ namespace hlds
         return count;
     }
 
+    void addCasingNeeds(bool playerArmed, std::vector<ModelNeed> &needs)
+    {
+        bool brass = playerArmed;
+        for (const ModelNeed &need : needs)
+            brass = brass || need.name == "hgrunt" || need.name == "hassassin";
+        if (!brass)
+            return;
+        for (const char *casing : {"shell", "shotgunshell"})
+        {
+            bool had = false;
+            for (ModelNeed &need : needs)
+            {
+                if (need.name == casing)
+                {
+                    need.firstSequence = true;
+                    had = true;
+                }
+            }
+            if (had)
+                continue;
+            ModelNeed need;
+            need.name = casing;
+            need.file = std::string("models/") + casing + ".mdl";
+            need.firstSequence = true;
+            needs.push_back(need);
+        }
+    }
+
+    void addGrenadeNeeds(bool playerGrenades, bool playerLauncher, std::vector<ModelNeed> &needs)
+    {
+        bool soldiers = false;
+        for (const ModelNeed &need : needs)
+            soldiers = soldiers || need.name == "hgrunt";
+        auto want = [&](const char *name, std::vector<std::string> clips)
+        {
+            for (ModelNeed &need : needs)
+            {
+                if (need.name != name)
+                    continue;
+                // (A grenade to pick up is the same model: its clips are
+                // added to.)
+                for (const std::string &clip : clips)
+                {
+                    if (std::find(need.clips.begin(), need.clips.end(), clip) == need.clips.end())
+                        need.clips.push_back(clip);
+                }
+                need.firstSequence = need.firstSequence || clips.empty();
+                return;
+            }
+            ModelNeed need;
+            need.name = name;
+            need.file = std::string("models/") + name + ".mdl";
+            need.clips = std::move(clips);
+            need.firstSequence = need.clips.empty();
+            needs.push_back(need);
+        };
+        if (playerGrenades || soldiers)
+            want("w_grenade", {"idle", "roll1", "toss"});
+        if (playerLauncher || soldiers)
+            want("grenade", {});
+    }
+
     void addMultiplayerNeeds(const std::vector<Entity> &entities, std::vector<ModelNeed> &needs)
     {
         if (!isMultiplayerMap(entities))

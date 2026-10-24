@@ -123,6 +123,20 @@ namespace hlds
     /// whole. Nothing, for any other map.
     void addMultiplayerNeeds(const std::vector<Entity> &entities, std::vector<ModelNeed> &needs);
 
+    /// Add to `needs` the spent casings out of the guns (the game's
+    /// EjectBrass: models/shell.mdl and shotgunshell.mdl), where something
+    /// fires them: the player, if `playerArmed` (the pistol, the MP5 or the
+    /// shotgun may be in hand), or a soldier or an assassin among `needs`
+    /// (the map's own, or one come from next door).
+    void addCasingNeeds(bool playerArmed, std::vector<ModelNeed> &needs);
+
+    /// ... and the grenades in flight, as the game's models of them: a hand
+    /// grenade (models/w_grenade.mdl, with the "toss" it spins through in
+    /// the air and the "roll1" it rolls with) where the player may have one
+    /// (`playerGrenades`), and the launcher's (models/grenade.mdl) where the
+    /// MP5 may be in hand (`playerLauncher`); both where a soldier is.
+    void addGrenadeNeeds(bool playerGrenades, bool playerLauncher, std::vector<ModelNeed> &needs);
+
     /// `models` are the names of the models that were cooked for this map
     /// (ModelNeed::name), in the order they will be in the level: an actor
     /// whose model is not among them is left out.

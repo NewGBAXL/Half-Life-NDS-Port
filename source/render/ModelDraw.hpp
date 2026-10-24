@@ -68,6 +68,10 @@ namespace hlrt
         void drawHeld();
         /// The kept poses are of this map's models: forget them with it.
         void forgetPoses();
+        /// Whether plan() chose the small piece `n` (into ActorWorld::pieces,
+        /// a spent casing) to be drawn as its model: the effects then leave
+        /// it out.
+        bool pieceModelled(int n) const { return n >= 0 && n < 64 && ((pieceModelled_ >> n) & 1) != 0; }
         /// For the readout: the levels the actors are drawn at this pass, a
         /// digit each, nearest first.
         void levelsText(char *out, int size) const;
@@ -104,6 +108,11 @@ namespace hlrt
         /// has them: after the pieces.
         std::uint8_t shotOrder_[hldata::kMaxProjectiles] = {};
         int shotFound_ = 0;
+        /// ... and the spent casings drawn as the game's models of them
+        /// (into ActorWorld::pieces), and the same as a set.
+        std::uint8_t pieceOrder_[hldata::kMaxPieces] = {};
+        int pieceFound_ = 0;
+        std::uint64_t pieceModelled_ = 0;
         int cut_ = 0;
         /// ... by what they were (HlDrawPlan.hpp's kDraw*); how far the
         /// models went over their share for an enemy's sake; and whether

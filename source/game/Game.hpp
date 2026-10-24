@@ -55,12 +55,16 @@ namespace hlrt
         hldata::Cheats cheats;
         /// Whether the crosshair is drawn (the COMMAND line's crosshair).
         bool crosshair = true;
-        /// The models of what the player's later weapons leave about, by the
-        /// projectile's kind (kShotBolt..kShotSnark), found by name when the
-        /// map is set up: -1 where the map has not got one (its mark is drawn
-        /// instead).
+        /// The models of what the player's weapons throw and leave about, by
+        /// the projectile's kind (a hand grenade, the launcher's, and
+        /// kShotBolt..kShotHornet), found by name when the map is set up: -1
+        /// where the map has not got one (its mark is drawn instead).
         int thrownModel(int kind) const
         {
+            if (kind == hldata::kShotGrenade)
+                return grenade_[0];
+            if (kind == hldata::kShotContact)
+                return grenade_[1];
             // (The monsters' snarks and hornets are the player's to look at.)
             if (kind == hldata::kShotSnarkFoe)
                 kind = hldata::kShotSnark;
@@ -69,6 +73,13 @@ namespace hlrt
             else if (kind == hldata::kShotRocketFoe)
                 kind = hldata::kShotRocket; // (a tank's: the RPG's rocket)
             return kind >= hldata::kShotBolt && kind <= hldata::kShotHornet ? thrown_[kind - hldata::kShotBolt] : -1;
+        }
+        /// The model (into the map's ModelRefs) a spent casing of piece
+        /// kind `kind` is drawn as -- shell.mdl, shotgunshell.mdl -- or -1:
+        /// another kind, or a map that has not got it (it is a triangle).
+        int shellModel(int kind) const
+        {
+            return kind == hldata::kPieceShell ? shell_[0] : (kind == hldata::kPieceShotShell ? shell_[1] : -1);
         }
         bool lampLit = false;
         int lampDistance = 0; ///< how far off the lamp's light is, in units
@@ -148,6 +159,8 @@ namespace hlrt
         int inHand_ = -1; ///< the weapon `held` is the model of
         bool radio_ = false; ///< ... and it is the satchels' radio
         std::int16_t thrown_[6] = {-1, -1, -1, -1, -1, -1}; ///< thrownModel
+        std::int16_t shell_[2] = {-1, -1};                    ///< shellModel
+        std::int16_t grenade_[2] = {-1, -1};                  ///< thrownModel: w_grenade, grenade
         /// Whether any satchel charge is out (and so the radio in hand).
         bool satchelsOut() const
         {

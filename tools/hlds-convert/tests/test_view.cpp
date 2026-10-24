@@ -327,11 +327,22 @@ namespace
         for (Piece &piece : a.pieces)
             piece.kind = 0;
         const fx toss[3] = {fxFromInt(40), 0, fxFromInt(60)};
-        pieceAdd(a, kPieceShell, eye, toss, 1200);
-        int rang = 0;
+        shellEject(a, kPieceShell, eye, toss);
+        int rang = 0, rings = 0;
         for (int n = 0; n < 60; ++n)
-            rang += piecesTick(a, g.move, 33);
-        check(rang == 1 && flying(kPieceShell) == 0, "a spent casing rings once as it lands, and is gone within two seconds");
+        {
+            const int now = piecesTick(a, g.move, 33);
+            rang |= now;
+            rings += now != 0 ? 1 : 0;
+        }
+        check(rang == 1 && rings == 1 && flying(kPieceShell) == 0,
+              "a spent casing rings once as it lands, and is gone within two seconds");
+        // ... and a shotgun's, with its own ring (TE_BOUNCE_SHOTSHELL).
+        shellEject(a, kPieceShotShell, eye, toss);
+        rang = 0;
+        for (int n = 0; n < 60; ++n)
+            rang |= piecesTick(a, g.move, 33);
+        check(rang == 2 && flying(kPieceShotShell) == 0, "a shotgun's shell rings as a shotgun's");
     }
 } // namespace
 

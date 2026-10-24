@@ -614,7 +614,7 @@ Milestone 11, "levels of detail".
   - **Breaking** -- what breaks throws pieces *of itself*: small tumbling
     patches of the broken brush's own texture (glass see-through), as
     many and as heavy as its material says, which fall, lie and go. No
-    shard models, no extra video memory. Each piece, speck and casing is
+    shard models, no extra video memory. Each piece and speck is
     one triangle; the solid ones are sent in runs that share everything
     (the plain ones in one, each texture's together) and only broken
     glass takes a turn among what is see-through. They are gone in a
@@ -628,7 +628,18 @@ Milestone 11, "levels of detail".
   - **The view** -- each weapon's own kick when it fires, the bob of a
     walk and the lean into a sidestep (the game's numbers; off unless
     "View bob" in the options turns them on), the dip of a landing, casings thrown
-    from the pistol, the MP5 and the shotgun (`shared/HlView.hpp`).
+    from the pistol, the MP5 and the shotgun (`shared/HlView.hpp`) -- and
+    from the soldiers' guns and the assassins' pistols, as the game's
+    EjectBrass throws them. A casing is the game's own model of it
+    (`models/shell.mdl`, `shotgunshell.mdl`), tumbling as it flies and lying
+    as it rests, with its own ring for each kind; where a frame has no room
+    for them (a sixth of the models' share, nothing under pressure) or a map
+    has not got them, it is a small triangle in its colour instead. A
+    grenade in flight is the game's model of it too: a hand grenade
+    (`w_grenade.mdl`, the player's and the soldiers') spinning through its
+    "toss" in the air and its "roll1" along the floor as fast as it rolls,
+    and the launcher's (`grenade.mdl`, the MP5's and the soldiers') pointed
+    along its flight and tumbling end over end.
 - Two things that could hold the game for good are closed. A player
   stuck fast in something (nothing got them out but a few units' nudge)
   is, after half a second, put somewhere clear up to 128 units off. And

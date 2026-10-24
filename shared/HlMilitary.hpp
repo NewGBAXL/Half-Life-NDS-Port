@@ -683,6 +683,14 @@ namespace hldata
             effectAdd(c.a, kEffectTracer, gun, end, 0, 60);
             const fx flash[3] = {gun[0] + dir[0] * 16, gun[1] + dir[1] * 16, gun[2] + dir[2] * 16};
             effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);
+            {
+                // (Her casing: from her middle, a little ahead.)
+                fx forward[3];
+                aiForward(c.me.yaw, forward);
+                const fx breech[3] = {c.me.pos[0] + forward[0] * 12, c.me.pos[1] + forward[1] * 12,
+                                      c.me.pos[2] + fxFromInt(32)};
+                aiEjectBrass(c, kPieceShell, breech);
+            }
             if (c.w.heard != nullptr)
                 c.w.heard->add(aiRandomLong(c.a, 0, 1) ? CommonSound::AssassinShot1 : CommonSound::AssassinShot2,
                                c.me.pos, 70 + aiRandomLong(c.a, 0, 25), kRadiusLarge);

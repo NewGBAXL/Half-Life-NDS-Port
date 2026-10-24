@@ -328,7 +328,8 @@ namespace hldata
 
     /// The small things in flight, for `ms` more milliseconds: they fall,
     /// turn, land (bouncing once, then lying) and are gone when their time
-    /// is up. Returns how many casings rang on the floor this time.
+    /// is up. Returns which casings rang on the floor this time: bit 0 a
+    /// brass one (or a can), bit 1 a shotgun's.
     inline int piecesTick(ActorWorld &a, const MoveWorld &world, int ms)
     {
         int rang = 0;
@@ -370,8 +371,10 @@ namespace hldata
             // speed, then it lies. (Which way the thing faces is not asked:
             // what a shard lands on is nearly always a floor.)
             ++piece.bounces;
-            if (piece.kind == kPieceShell && piece.bounces == 1)
-                ++rang;
+            if ((piece.kind == kPieceShell || piece.kind == kPieceCan) && piece.bounces == 1)
+                rang |= 1;
+            else if (piece.kind == kPieceShotShell && piece.bounces == 1)
+                rang |= 2;
             const fx speed = piece.velocity[2] < 0 ? -piece.velocity[2] : piece.velocity[2];
             if (piece.bounces >= 2 || speed < fxFromInt(60))
             {

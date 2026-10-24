@@ -461,9 +461,10 @@ namespace hlrt
         // face by turns.)
         fxSinCos(static_cast<std::uint16_t>(piece.spin * 3), unused, tip);
         // (Sixteenths of a unit. A casing is smaller than a unit.)
-        const int wide = piece.kind == kPieceShell ? 6 : piece.half * 16;
+        const bool casing = piece.kind == kPieceShell || piece.kind == kPieceShotShell || piece.kind == kPieceCan;
+        const int wide = casing ? 6 : piece.half * 16;
         int high = piece.bounces >= 2 ? wide : static_cast<int>((static_cast<std::int64_t>(wide) * (tip < 0 ? -tip : tip)) >> 12);
-        if (piece.kind == kPieceShell)
+        if (casing)
             high = wide * 3;
         high = high < 4 ? 4 : high;
         const int s0 = piece.s * 8, t0 = piece.t * 8;
@@ -488,7 +489,7 @@ namespace hlrt
     void EffectDraw::drawPiece(int n)
     {
         const Piece &piece = game.actors.pieces[n];
-        if (piece.kind == 0)
+        if (piece.kind == 0 || modelDraw.pieceModelled(n))
             return;
         // (In its last third of a second it thins away.)
         int alpha = piece.alpha;
@@ -531,9 +532,11 @@ namespace hlrt
         };
         // The plain ones.
         bool plain = false;
-        for (const Piece &piece : a.pieces)
+        for (int n = 0; n < kMaxPieces; ++n)
         {
-            if (piece.kind == 0 || piece.alpha < 31 || !pieceSeen(piece))
+            const Piece &piece = a.pieces[n];
+            // (A casing drawn as its model is not drawn again.)
+            if (piece.kind == 0 || piece.alpha < 31 || !pieceSeen(piece) || modelDraw.pieceModelled(n))
                 continue;
             if (piece.kind == kPieceShard && piece.texture != 0xFFFF && textureCache.present(piece.texture))
                 continue;

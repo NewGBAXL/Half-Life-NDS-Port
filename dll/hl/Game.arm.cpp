@@ -180,6 +180,21 @@ namespace hlrt
                         thrown_[k] = static_cast<std::int16_t>(i);
                 }
             }
+            // (... and the casings out of the guns: brass, a shotgun's.)
+            static const char *const kShells[2] = {"shell", "shotgunshell"};
+            // (... and the grenades: a hand grenade, the launcher's.)
+            static const char *const kGrenades[2] = {"w_grenade", "grenade"};
+            for (int k = 0; k < 2; ++k)
+            {
+                shell_[k] = grenade_[k] = -1;
+                for (std::uint32_t i = 0; i < view.modelRefCount; ++i)
+                {
+                    if (std::strcmp(view.modelRefs[i].name, kShells[k]) == 0)
+                        shell_[k] = static_cast<std::int16_t>(i);
+                    if (std::strcmp(view.modelRefs[i].name, kGrenades[k]) == 0)
+                        grenade_[k] = static_cast<std::int16_t>(i);
+                }
+            }
         }
         // (A DSi has the memory for twice as much lying about.)
         // (A DSi has the memory for twice as much going on at once.)
@@ -838,21 +853,24 @@ namespace hlrt
             // A spent case out of the breech: to the right, up a little,
             // and it falls. (When the weapon says: at the shot for the
             // pistol and the MP5, at the pump for the shotgun -- both
-            // barrels' at once.)
+            // barrels' at once.) Where and how fast, the game's
+            // EV_GetDefaultShellInfo: 20 ahead, 4 right and 12 down of the
+            // eye (the shotgun's 32 and 6), out at 50 to 70 to the right, 100
+            // to 150 up and 25 ahead.
+            const bool shotgun = inHand_ == kWeaponShotgun;
             for (int n = 0; (did & kWeaponShell) && n < weapon_.shells; ++n)
             {
                 static std::uint32_t toss = 3;
                 toss = toss * 1664525u + 1013904223u;
+                const int ahead = shotgun ? 32 : 20, aside = shotgun ? 6 : 4;
                 fx from[3], velocity[3];
                 for (int a = 0; a < 3; ++a)
                 {
-                    from[a] = eye[a] + camera.forward[a] * 14 + camera.right[a] * 5 - camera.up[a] * 5;
-                    velocity[a] = player.state.velocity[a] + camera.right[a] * (70 + static_cast<int>((toss >> 9) % 40)) +
-                                  camera.up[a] * (90 + static_cast<int>((toss >> 15) % 40)) + camera.forward[a] * 15;
+                    from[a] = eye[a] + camera.forward[a] * ahead + camera.right[a] * aside - camera.up[a] * 12;
+                    velocity[a] = player.state.velocity[a] + camera.right[a] * (50 + static_cast<int>((toss >> 9) % 21)) +
+                                  camera.up[a] * (100 + static_cast<int>((toss >> 15) % 51)) + camera.forward[a] * 25;
                 }
-                Piece &shell = pieceAdd(actors, kPieceShell, from, velocity, 1200);
-                shell.half = 1;
-                shell.colour = inHand_ == kWeaponShotgun ? RGB15(24, 5, 4) : RGB15(27, 21, 6);
+                shellEject(actors, shotgun ? kPieceShotShell : kPieceShell, from, velocity);
             }
             // A shot kicks the view, each weapon its own way.
             if (did & (kWeaponFired | kWeaponSecondary))

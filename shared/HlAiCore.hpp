@@ -1429,6 +1429,21 @@ namespace hldata
             dir[k] = length > 0 ? static_cast<fx>((static_cast<std::int64_t>(to[k]) << kFxShift) / length) : 0;
     }
 
+    /// A spent casing out of a monster's gun (EjectBrass, as hgrunt.cpp and
+    /// hassassin.cpp throw it): from `from`, out to its right, up, and a
+    /// little forward or back, by the way it faces. `kind`: kPieceShell or
+    /// kPieceShotShell.
+    inline void aiEjectBrass(AiCtx &c, std::uint8_t kind, const fx *from)
+    {
+        fx forward[3];
+        aiForward(c.me.yaw, forward);
+        const fx right[2] = {forward[1], -forward[0]};
+        const int out = aiRandomLong(c.a, 40, 90), up = aiRandomLong(c.a, 75, 200), ahead = aiRandomLong(c.a, -40, 40);
+        const fx velocity[3] = {right[0] * out + forward[0] * ahead, right[1] * out + forward[1] * ahead,
+                                fxFromInt(up)};
+        shellEject(c.a, kind, from, velocity);
+    }
+
     // --------------------------------------------------- the default AI
 
     inline const AiSchedule *aiScheduleOfType(AiCtx &c, int type);

@@ -715,7 +715,9 @@ namespace hldata
             }
             const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
             effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);
-            // (A casing out to his right.)
+            // (A casing out to his right, from a little behind the muzzle.)
+            const fx breech[3] = {gun[0] - dir[0] * 24, gun[1] - dir[1] * 24, gun[2] - dir[2] * 24};
+            aiEjectBrass(c, shotgun ? kPieceShotShell : kPieceShell, breech);
             if (c.me.ammo > 0)
                 --c.me.ammo;
         }

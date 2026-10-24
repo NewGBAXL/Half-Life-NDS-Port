@@ -403,12 +403,14 @@ namespace
         check(room, "room by the assassin");
         if (!room)
             return;
-        int tracers = 0;
+        int tracers = 0, brass = 0;
         bool leapt = false;
         g_lost = 0;
         for (int t = 0; t < 30 * 20; ++t)
         {
             tickStill(g);
+            for (const Piece &piece : g.actors.pieces)
+                brass += piece.kind == kPieceShell ? 1 : 0;
             for (const Effect &effect : g.actors.effects)
                 tracers += effect.kind == kEffectTracer && effect.leftMs > 0 ? 1 : 0;
             const AiMonster *m = aiFind(g.actors, k);
@@ -421,6 +423,7 @@ namespace
                     tracers, g_lost, leapt ? 1 : 0,
                     aiFind(g.actors, k) && aiFind(g.actors, k)->schedule ? aiFind(g.actors, k)->schedule->name : "-");
         check(tracers > 0 && g_lost > 0, "an assassin shoots the player");
+        check(brass > 0, "... and her pistol throws out its brass");
         check(leapt, "... and leaps");
         for (int n = 0; n < 12 && a.ai < kAiDying; ++n)
             monsterHurt(g.logic, k, 8, true);
