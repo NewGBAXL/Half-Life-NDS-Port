@@ -379,9 +379,6 @@ namespace hlrt
             // (What is only seen -- sprites, beams, bursts -- is costed
             // with the models: the world has what both leave.)
             effectDraw.gather(modelPolygons_, modelVertices_);
-            // (... and the head-up display, which is drawn over it all.)
-            modelPolygons_ += hudDraw.polygons();
-            modelVertices_ += hudDraw.vertices();
             // (... and room for the lamp's light: as much as it lit the pass
             // before and a little more -- all it may have, the pass it comes on.)
             lampPolygons_ = lampVertices_ = 0;

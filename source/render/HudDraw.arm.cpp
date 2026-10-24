@@ -422,39 +422,13 @@ namespace hlrt
                 shownTrain = -1;
             }
         }
-        if (global.twoPass && trainMaterial_ == nullptr && train_)
-        {
-            NEA_Material *material = nullptr;
-            NEA_Palette *palette = nullptr;
-            if (TextureCache::loadFile(global.commonPath(kHudTrainFile).c_str(), false, kHudTrainWidth,
-                                       kHudTrainHeight, 1, material, palette))
-            {
-                trainMaterial_ = material;
-                trainPalette_ = palette;
-            }
-        }
-        // In two-pass, the same as a texture as well (drawn as quads:
-        // drawQuads).
-        if (global.twoPass && material_ == nullptr && atlas_)
-        {
-            NEA_Material *material = nullptr;
-            NEA_Palette *palette = nullptr;
-            if (TextureCache::loadFile(global.commonPath(atlas640_ ? kHud640File : kHudAtlasFile).c_str(), false,
-                                       kHudAtlasWidth, kHudAtlasHeight, 1, material, palette))
-            {
-                material_ = material;
-                palette_ = palette;
-            }
-        }
     }
 
     void HudDraw::forget()
     {
         // (NEA has let go of them itself, with everything else.)
         lampMaterial_ = nullptr;
-        trainMaterial_ = trainPalette_ = nullptr;
         decalMaterial_ = decalPalette_ = nullptr;
-        material_ = palette_ = nullptr;
         loadingMaterial_ = loadingPalette_ = nullptr;
         loadingShown = nullptr;
         hurts = HudHurts();
@@ -471,15 +445,6 @@ namespace hlrt
         extra_ = extra;
     }
 
-    int HudDraw::polygons() const
-    {
-        return global.twoPass ? kPolygons3D : 0;
-    }
-    int HudDraw::vertices() const
-    {
-        return global.twoPass ? kVertices3D : 0;
-    }
-
     void HudDraw::draw()
     {
         // The kinds of hurt: those new this frame, those whose time is up.
@@ -488,20 +453,7 @@ namespace hlrt
         hurtKinds_ = 0;
         hurtPulse = HudHurts::pulse(now);
         hurts.tick(now, hurtPulse);
-        if (global.twoPass)
-        {
-            // (No sprites of ours: bank F is the engine's line.)
-            for (int n = 0; n < kSprites; ++n)
-                hide(n);
-            flashColour = 0;
-            std::memset(painColour, 0, sizeof(painColour));
-            std::memset(hurtColour, 0, sizeof(hurtColour));
-            if (atlas640_)
-                drawQuads640();
-            else
-                drawQuads();
-        }
-        else if (atlas640_)
+        if (atlas640_)
         {
             compose640();
         }
@@ -688,143 +640,6 @@ namespace hlrt
             }
             sprite(30, 94, 140, 0, 2, 64, 32, kBankHud);
         }
-    }
-
-    /// The display as 3D quads, in front of everything, from the display's
-    /// texture: as it was drawn before it was sprites (the game's own way --
-    /// its pictures added to the picture, their brightness their alpha).
-    void HudDraw::drawQuads()
-    {
-        if (screenFade.curtained() || frameFreeze.frozen())
-            return;
-        // Being hurt, which wants no suit: the screen reddened all over, and
-        // a red bar on each side of its middle the hurt came from.
-        if (flash_ > 0 || pain_[0] > 0 || pain_[1] > 0 || pain_[2] > 0 || pain_[3] > 0)
-        {
-            GFX_TEX_FORMAT = 0;
-            beginFlat();
-            auto plain = [](int x, int y, int w, int h)
-            {
-                GFX_BEGIN = GL_QUADS;
-                corner(x, y, 0, 0);
-                corner(x, y + h, 0, 0);
-                corner(x + w, y + h, 0, 0);
-                corner(x + w, y, 0, 0);
-            };
-            if (flash_ > 0)
-            {
-                NEA_PolyFormat(1 + flash_ * 13 / 256, kIdHudFlash, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
-                               static_cast<NEA_OtherFormatEnum>(0));
-                GFX_COLOR = RGB15(31, 0, 0);
-                plain(0, 0, 256, 192);
-            }
-            static constexpr std::int16_t kMarks[4][4] = {{104, 52, 48, 5}, {166, 72, 5, 48}, {104, 135, 48, 5}, {85, 72, 5, 48}};
-            GFX_COLOR = kRed;
-            for (int n = 0; n < 4; ++n)
-            {
-                if (pain_[n] <= 0)
-                    continue;
-                NEA_PolyFormat(1 + pain_[n] * 24 / 256, kIdHudPainFirst + n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
-                               static_cast<NEA_OtherFormatEnum>(0));
-                plain(kMarks[n][0], kMarks[n][1], kMarks[n][2], kMarks[n][3]);
-            }
-            GFX_COLOR = 0x7FFF;
-        }
-        if (material_ == nullptr || !suit_)
-            return;
-        NEA_MaterialUse(static_cast<NEA_Material *>(material_));
-        // (No fog, no lights; number 63 of the polygons that blend.)
-        NEA_PolyFormat(31, kIdHudSuit, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
-        beginFlat();
-        auto picture = [](int x, int y, UiRect from) { quad(x, y, from.w, from.h, from); };
-        auto number = [&](int right, int y, int value)
-        {
-            value = value < 0 ? 0 : (value > 999 ? 999 : value);
-            int x = right;
-            do
-            {
-                x -= kHudDigitWidth;
-                picture(x, y, hudDigit(value % 10));
-                value /= 10;
-            } while (value != 0);
-            return x;
-        };
-        // Health and armour.
-        GFX_COLOR = health_ < 25 ? kRed : kOrange;
-        picture(6, 170, kHudCross);
-        number(62, 170, health_);
-        GFX_COLOR = kOrange;
-        picture(70, 168, armor_ > 0 ? kHudSuitFull : kHudSuitEmpty);
-        number(128, 170, armor_);
-        // The lamp: its outline, as much of it filled as there is in it, its
-        // beam while alight; dim while out, red when nearly empty.
-        if (lampSuit_)
-        {
-            GFX_COLOR = lampPercent_ < 20 ? kRed : (lampOn_ ? kOrange : kDim);
-            const int x = 256 - 8 - kHudLampBeam.w - kHudLampFull.w, y = 6;
-            picture(x, y, kHudLampEmpty);
-            const int full = kHudLampFull.w * lampPercent_ / 100;
-            if (full > 0)
-            {
-                UiRect part = kHudLampFull;
-                part.x = static_cast<std::uint8_t>(part.x + part.w - full);
-                part.w = static_cast<std::uint8_t>(full);
-                quad(x + kHudLampFull.w - full, y, full, part.h, part);
-            }
-            if (lampOn_)
-                picture(x + kHudLampFull.w, y, kHudLampBeam);
-            GFX_COLOR = kOrange;
-        }
-        // What is in hand (as compose() has it).
-        const bool gun = weapon_ == kWeaponGlock || weapon_ == kWeaponShotgun || weapon_ == kWeaponMp5 ||
-                         weapon_ == kWeaponPython || weapon_ == kWeaponCrossbow || weapon_ == kWeaponRpg;
-        const bool counted = weapon_ == kWeaponGrenade || weapon_ == kWeaponSatchel || weapon_ == kWeaponTripmine ||
-                             weapon_ == kWeaponSnark || weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ||
-                             weapon_ == kWeaponHornetgun;
-        if (gun || counted)
-        {
-            const UiRect icon = weapon_ == kWeaponShotgun    ? kHudAmmoBuck
-                                : weapon_ == kWeaponPython   ? kHudAmmo357
-                                : weapon_ == kWeaponGrenade  ? kHudAmmoGrenade
-                                : weapon_ == kWeaponCrossbow ? kHudAmmoBolt
-                                : weapon_ == kWeaponSatchel  ? kHudAmmoSatchel
-                                : weapon_ == kWeaponTripmine ? kHudAmmoTripmine
-                                : weapon_ == kWeaponSnark    ? kHudAmmoSnark
-                                : weapon_ == kWeaponRpg      ? kHudAmmoRocket
-                                : weapon_ == kWeaponGauss || weapon_ == kWeaponEgon ? kHudAmmoUranium
-                                : weapon_ == kWeaponHornetgun ? kHudAmmoHornet
-                                                             : kHudAmmo9mm;
-            picture(236, 169, icon);
-            if (gun)
-            {
-                const int at = number(232, 170, spare_);
-                number(at - 10, 170, clip_);
-            }
-            else
-            {
-                number(232, 170, clip_);
-            }
-            if (extra_ >= 0)
-            {
-                picture(236, 148, kHudAmmoAr);
-                number(232, 149, extra_);
-            }
-        }
-        // The crosshair, for what is aimed.
-        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
-        {
-            GFX_COLOR = 0x7FFF;
-            picture(128 - kHudCrosshair.w / 2, 96 - kHudCrosshair.h / 2, kHudCrosshair);
-        }
-        // At a train's controls: how it is going (compose's place).
-        const int train = trainMaterial_ != nullptr ? trainSpeedStep(game.logic) : -1;
-        if (train >= 0)
-        {
-            NEA_MaterialUse(static_cast<NEA_Material *>(trainMaterial_));
-            GFX_COLOR = kOrange;
-            picture(94, 140, hudTrain(train));
-        }
-        GFX_COLOR = 0x7FFF;
     }
 
     /// compose() with the 640 set, where the game puts each piece. The sheet
@@ -1014,142 +829,6 @@ namespace hlrt
         }
     }
 
-    /// drawQuads() with the 640 set, where the game puts each piece.
-    void HudDraw::drawQuads640()
-    {
-        if (screenFade.curtained() || frameFreeze.frozen())
-            return;
-        // The red of being hurt all over, as drawQuads() has it.
-        if (flash_ > 0)
-        {
-            GFX_TEX_FORMAT = 0;
-            beginFlat();
-            NEA_PolyFormat(1 + flash_ * 13 / 256, kIdHudFlash, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
-                           static_cast<NEA_OtherFormatEnum>(0));
-            GFX_COLOR = RGB15(31, 0, 0);
-            GFX_BEGIN = GL_QUADS;
-            corner(0, 0, 0, 0);
-            corner(0, 192, 0, 0);
-            corner(256, 192, 0, 0);
-            corner(256, 0, 0, 0);
-            GFX_COLOR = 0x7FFF;
-        }
-        if (material_ == nullptr)
-            return;
-        NEA_MaterialUse(static_cast<NEA_Material *>(material_));
-        beginFlat();
-        auto picture = [](int x, int y, UiRect from) { quad(x, y, from.w, from.h, from); };
-        // The marks of where a hurt came from, fading (no suit wanted), and
-        // the kinds of hurt, pulsing: as bright as they are, as solid.
-        const std::uint16_t painIn = health_ > 25 ? kYellowish : kPainRed;
-        for (int n = 0; n < 4; ++n)
-        {
-            if (pain_[n] < kPainShows)
-                continue;
-            const int strength = pain_[n] > 256 ? 256 : (pain_[n] < 128 ? 128 : pain_[n]);
-            NEA_PolyFormat(strength * 31 / 256, kIdHudPainFirst + n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
-                           static_cast<NEA_OtherFormatEnum>(0));
-            GFX_COLOR = painIn;
-            picture(hudDs(kHud640PainAt[n].x), hudDs(kHud640PainAt[n].y), kHud640Pain[n]);
-        }
-        if (hurts.any() && hurtPulse * 31 / 256 > 0)
-        {
-            NEA_PolyFormat(hurtPulse * 31 / 256, kIdHudHurt, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
-                           static_cast<NEA_OtherFormatEnum>(0));
-            GFX_COLOR = kYellowish;
-            for (int k = 0; k < HudHurts::kKinds; ++k)
-            {
-                if (hurts.stacked[k] >= 0)
-                    picture(hudDs(hud640HurtAt(hurts.stacked[k]).x), hudDs(hud640HurtAt(hurts.stacked[k]).y),
-                            hud640Hurt(k));
-            }
-        }
-        if (!suit_)
-        {
-            GFX_COLOR = 0x7FFF;
-            return;
-        }
-        // (No fog, no lights; number 63 of the polygons that blend.)
-        NEA_PolyFormat(31, kIdHudSuit, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
-        const int row = hudDs(kHud640NumberY);
-        auto digit = [&](int x, UiRect from) { picture(x, row, from); };
-        auto bar = [&](int x640) { quad(hudDs(x640), row, 1, kHud640DigitHeight, kHud640Solid); };
-        // Health, red when it is low; its bar in the display's colour.
-        GFX_COLOR = health_ > 25 ? kYellowish : kPainRed;
-        picture(hudDs(kHud640CrossX), hudDs(kHud640RowY), kHud640Cross);
-        field640(kHud640HealthX, health_, digit);
-        GFX_COLOR = kYellowish;
-        bar(kHud640HealthBarX);
-        // Armour: the suit, filled from the bottom as far as there is.
-        const int suitX = hudDs(kHud640SuitX), suitY = hudDs(kHud640SuitY);
-        picture(suitX, suitY, kHud640SuitEmpty);
-        const int empty = hudSuitEmptyRows(armor_);
-        if (empty < kHud640SuitFull.h)
-        {
-            UiRect part = kHud640SuitFull;
-            part.y = static_cast<std::uint8_t>(part.y + empty);
-            part.h = static_cast<std::uint8_t>(part.h - empty);
-            quad(suitX, suitY + empty, part.w, part.h, part);
-        }
-        field640(kHud640ArmorX, armor_, digit);
-        // The lamp: its outline, as much filled as there is, its beam while
-        // alight; dim while out, red when nearly empty.
-        if (lampSuit_)
-        {
-            GFX_COLOR = lampPercent_ < 20 ? kRedish : (lampOn_ ? kYellowish : kDim);
-            const int x = hudDs(kHud640LampX), y = hudDs(kHud640LampY);
-            picture(x, y, kHud640LampEmpty);
-            const int gone = hudLampEmptyColumns(lampPercent_);
-            if (gone < kHud640LampFull.w)
-            {
-                UiRect part = kHud640LampFull;
-                part.x = static_cast<std::uint8_t>(part.x + gone);
-                part.w = static_cast<std::uint8_t>(part.w - gone);
-                quad(x + gone, y, part.w, part.h, part);
-            }
-            if (lampOn_)
-                picture(hudDs(kHud640BeamX), y, kHud640LampBeam);
-            GFX_COLOR = kYellowish;
-        }
-        // What is in hand: clip | the rest, or a count; then its icon; the
-        // MP5's grenades a row up while it has any.
-        const bool gun = clipped(weapon_), count = counted(weapon_);
-        if (gun || count)
-        {
-            int x640 = kHud640CountX;
-            if (gun)
-            {
-                field640(kHud640ClipX, clip_, digit);
-                bar(kHud640ClipBarX);
-                x640 = kHud640SpareX;
-            }
-            field640(x640, gun ? spare_ : clip_, digit);
-            picture(hudDs(hud640AmmoIconX(x640)), hudDs(kHud640NumberY - kHud640AmmoIconUp), ammo640(weapon_));
-            if (extra_ > 0)
-            {
-                const int up = hudDs(kHud640SecondY);
-                field640(kHud640CountX, extra_, [&](int x, UiRect from) { picture(x, up, from); });
-                picture(hudDs(hud640AmmoIconX(kHud640CountX)), hudDs(kHud640SecondY - kHud640AmmoIconUp),
-                        hud640Ammo(kHudAmmo640ArGrenade));
-            }
-        }
-        // The crosshair, for what is aimed.
-        if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
-        {
-            GFX_COLOR = 0x7FFF;
-            picture(hudDs(kHud640CrosshairX), hudDs(kHud640CrosshairY), kHud640Crosshair);
-        }
-        // At a train's controls: how it is going.
-        const int train = trainMaterial_ != nullptr && suit_ ? trainSpeedStep(game.logic) : -1;
-        if (train >= 0)
-        {
-            NEA_MaterialUse(static_cast<NEA_Material *>(trainMaterial_));
-            GFX_COLOR = kYellowish;
-            picture(hudDs(kHud640TrainX), hudDs(kHud640TrainY), hudTrain(train));
-        }
-        GFX_COLOR = 0x7FFF;
-    }
-
     void HudDraw::onVblank()
     {
         auto *oam = reinterpret_cast<volatile std::uint16_t *>(0x07000000) + kFirstSprite * 4;
@@ -1182,9 +861,8 @@ namespace hlrt
             loadingPalette_ = palette;
         }
         loadingShown = static_cast<NEA_Material *>(loadingMaterial_);
-        // Enough pictures of it that it is what the whole screen shows (both
-        // halves of it, in two-pass).
-        for (int n = 0; n < global.processFramesWhole(); ++n)
+        // Enough pictures of it that it is what the screen shows.
+        for (int n = 0; n < 2; ++n)
         {
             NEA_WaitForVBL(static_cast<NEA_UpdateFlags>(0));
             global.process(drawLoading);

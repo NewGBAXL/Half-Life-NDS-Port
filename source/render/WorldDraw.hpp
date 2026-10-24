@@ -167,13 +167,10 @@ namespace hlrt
         }
         /// Set the hardware's fog for the pass about to be drawn.
         void applyFog();
-        int polygonBudget() const { return kPolygonBudget - held_ + sparePolygons_[pass_]; }
-        int vertexBudget() const { return kVertexBudget - held_ * 3 + spareVertices_[pass_]; }
+        int polygonBudget() const { return kPolygonBudget - held_ + sparePolygons_; }
+        int vertexBudget() const { return kVertexBudget - held_ * 3 + spareVertices_; }
         /// For the overlay: what is being held back (negative: added).
-        int heldBack() const { return held_ - sparePolygons_[pass_]; }
-        /// Which half of a two-pass picture is being drawn (0 in one pass):
-        /// each has room of its own left over from its last pass.
-        void setPass(int pass) { pass_ = pass & 1; }
+        int heldBack() const { return held_ - sparePolygons_; }
 
         /// Where the brush entities are: one hldata::BrushState per Brush
         /// record, owned and moved by the game (Game::brushStates). Null
@@ -255,11 +252,10 @@ namespace hlrt
         int held_ = 0; ///< polygons kept back from the budget by govern()
         int spareQuarters_ = 4; ///< how much of what could be added is (0..4)
         int quickPasses_ = 0;
-        int pass_ = 0;               ///< setPass
-        int sparePolygons_[2] = {};  ///< added to it, for each half
-        int spareVertices_[2] = {};
-        int unusedPolygons_[2] = {}; ///< what each half's last pass did not use
-        int unusedVertices_[2] = {};
+        int sparePolygons_ = 0; ///< added to it
+        int spareVertices_ = 0;
+        int unusedPolygons_ = 0; ///< what the last pass did not use
+        int unusedVertices_ = 0;
         WorldStats stats_;
     };
 

@@ -211,15 +211,10 @@ namespace
                         r.streamedTextures, r.streamTotalKb, r.streamWorstViewKb, r.streamRegionKb, r.streamResidentKb);
         // What can be seen, as the portals have it: the worst a view asks
         // for (and the PVS's figure it replaced), how far it reaches, and
-        // whether that makes the map two-pass on a DSi.
-        std::printf("  %d portals; seen worst %d polygons / %d vertices (PVS %d / %d); far %d; %s on a DSi "
-                    "(by the PVS: %s)\n",
-                    r.portals, r.worstPolygons, r.worstVertices, r.pvsWorstPolygons,
-                    r.pvsWorstVertices, r.farUnits,
-                    hldata::levelIsHeavy(r.worstPolygons, r.worstVertices) ? "two-pass" : "one pass",
-                    r.pvsWorstVertices > 2 * hldata::kPassVertices || r.pvsWorstPolygons > 2 * hldata::kPassPolygons
-                        ? "two-pass"
-                        : "one pass");
+        // whether that makes the map heavy (its fog always on).
+        std::printf("  %d portals; seen worst %d polygons / %d vertices (PVS %d / %d); far %d; %s\n", r.portals,
+                    r.worstPolygons, r.worstVertices, r.pvsWorstPolygons, r.pvsWorstVertices, r.farUnits,
+                    hldata::levelIsHeavy(r.worstPolygons, r.worstVertices) ? "heavy (fog always)" : "light");
         if (verboseHotspots)
         {
             for (const auto &spot : r.hotspots)

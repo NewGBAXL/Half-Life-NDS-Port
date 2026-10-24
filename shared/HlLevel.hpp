@@ -92,11 +92,11 @@ namespace hldata
     /// hardware's polygons and vertices limit.
     inline constexpr int kPassPolygons = 1700;
     inline constexpr int kPassVertices = 5200;
-    /// Whether a map whose worst view is big enough where it needs fog use.
     /// A map whose worst view (the header's worst, as it is seen: the
     /// converter's flood through the portals from every leaf, every way --
-    /// Portals.cpp's seenWorst) is more than a pass has room for: on a DSi it
-    /// is drawn in two passes, and fogged.
+    /// Portals.cpp's seenWorst) is more than a pass has room for: it has the
+    /// fog on always (WorldDraw::govern), so that what is left out of its
+    /// worst views at the far end is never an edge.
     inline constexpr bool levelIsHeavy(unsigned worstPolygons, unsigned worstVertices)
     {
         return worstVertices > kPassVertices || worstPolygons > kPassPolygons;

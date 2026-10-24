@@ -56,40 +56,16 @@ namespace
     /// map has had a few frames to put itself in order. (Seen: the first
     /// map's first frames with a pale band across their top, which a
     /// curtain of two frames let through.)
-    int curtainFrames()
+    constexpr int curtainFrames()
     {
-        return global.twoPass ? 14 : 12;
-    }
-
-    /// How a map is drawn: in two passes on a DSi for the heaviest maps
-    /// (shared/HlLevel.hpp, levelIsHeavy), in one everywhere else -- the
-    /// title and the menus too.
-    Global::Video videoFor(const hldata::LevelHeader &header)
-    {
-        return isDSiMode() && hldata::levelIsHeavy(header.worstPolygons, header.worstVertices)
-                   ? Global::Video::TwoPassDma
-                   : Global::Video::SinglePass;
-    }
-
-    /// The 3D engine brought up again, drawing as `want` says -- with
-    /// nothing of a map loaded (whatever the engine held is gone with it):
-    /// the display's own textures and the touch screen are set up again.
-    void switchVideo(Global::Video want)
-    {
-        if (want == global.video)
-            return;
-        hlrt::hudDraw.forget();
-        global.InitVideo(want);
-        hlrt::hudDraw.load();
-        hlrt::bottomScreen.reset();
-        hlrt::bottomScreen.create();
+        return 12;
     }
 
     /// A line in perf.txt about the map being played: what the hardware made
     /// of it (GpuStats).
     void logPerformance()
     {
-        hlrt::gpuStats.writeLog(currentMap.c_str(), global.twoPass ? "2P" : "1P");
+        hlrt::gpuStats.writeLog(currentMap.c_str(), "1P");
         // With the DSi's DSP in use, how it got on over that map.
         if (hlrt::sound.extended())
         {
@@ -211,11 +187,7 @@ namespace
         // this one loads, if there is one (FrameFreeze). Otherwise nothing of
         // the old picture is seen from here on: the hardware would go on
         // drawing it out of video memory, which is about to be written over.
-        // (Not across a change of how the map is drawn: the engine is brought
-        // up again, and nothing of the old picture is left.)
-        const Global::Video want = videoFor(header);
-        const bool kept = hlrt::level.loaded() && want == global.video && !hlrt::screenFade.curtained() &&
-                          hlrt::frameFreeze.freeze();
+        const bool kept = hlrt::level.loaded() && !hlrt::screenFade.curtained() && hlrt::frameFreeze.freeze();
         if (!kept)
             hlrt::screenFade.curtainDown();
 
@@ -238,13 +210,6 @@ namespace
         hlrt::textureCache.destroy();
         hlrt::spriteCache.destroy();
         hlrt::modelCache.destroy();
-        // Drawn another way than the last: the engine, again.
-        if (want != global.video)
-        {
-            switchVideo(want);
-            hlrt::bottomScreen.showMessage("LOADING", name.c_str());
-        }
-
         // With no picture kept: the game's loading picture, on the screen
         // and left there while the map is read (video memory is empty just
         // now: there is room). That is the first load, and little else.
@@ -866,20 +831,6 @@ int main(int argc, char *argv[])
         paused = false;
         hlrt::sound.setPaused(false);
         hlrt::screenFade.curtainDown();
-        // (The title is drawn in one pass: from a map drawn in two, the map
-        // goes first, and the engine is brought up again.)
-        if (global.twoPass)
-        {
-            hlrt::sound.unload();
-            hlrt::game.destroy();
-            hlrt::worldDraw.destroy();
-            hlrt::textureStream.end();
-            hlrt::textureCache.destroy();
-            hlrt::spriteCache.destroy();
-            hlrt::modelCache.destroy();
-            hlrt::level.unload();
-            switchVideo(Global::Video::SinglePass);
-        }
         if (!titleScreen())
             newGame();
         lastVblank = lastPass = Global::vblanks();
@@ -889,24 +840,12 @@ int main(int argc, char *argv[])
     {
         // (The wait is when the actors' thinking is done: game/Think.cpp.)
         NEA_WaitForVBL(NEA_UPDATE_TASKS);
-        // In two-pass, a picture is two of the hardware's frames: the left
-        // half, then the right. What changes the picture -- the game's step,
-        // what is written to video memory, the clock things move by -- comes
-        // between pictures only, so both halves are of one moment. (The step
-        // comes after the right half, not before the left: between the blank
-        // and the left pass is where the engine copies the half captured last
-        // out of bank D, and it must not be kept waiting.)
-        const bool twoPass = global.twoPass;
-        const bool pictureStarts = !twoPass || NEA_TwoPassGetPass() == 0;
-        if (pictureStarts)
-        {
-            Global::latchDrawClock();
-            // What is to be written to video memory is queued (VramWriter
-            // writes it in the vertical blanks), and what is written is drawn.
-            hlrt::textureStream.upload();
-            hlrt::modelCache.apply();
-            stepSave();
-        }
+        Global::latchDrawClock();
+        // What is to be written to video memory is queued (VramWriter writes
+        // it in the vertical blanks), and what is written is drawn.
+        hlrt::textureStream.upload();
+        hlrt::modelCache.apply();
+        stepSave();
         {
             const hlrt::DebugLog::Perf::Scope frame(hlrt::DebugLog::Section::Frame);
 
@@ -1138,25 +1077,12 @@ int main(int argc, char *argv[])
                 }
             };
 
-            if (!twoPass)
-            {
-                step();
-                hlrt::worldDraw.setPass(0);
-                NEA_Process(drawScene);
-            }
-            else
-            {
-                const int pass = NEA_TwoPassGetPass();
-                hlrt::worldDraw.setPass(pass);
-                hlrt::camera.buildPlanes(pass == 0 ? hlrt::ViewHalf::Left : hlrt::ViewHalf::Right);
-                NEA_ProcessTwoPass(drawScene);
-            }
+            step();
+            NEA_Process(drawScene);
             hlrt::sound.frame();
             // What is in view now says what to read for the next frames;
-            // a few kilobytes a frame, more where the card is quicker. (Once
-            // a picture.)
-            if (pictureStarts)
-                hlrt::textureStream.update(isDSiMode() ? 8192 : 4096);
+            // a few kilobytes a frame, more where the card is quicker.
+            hlrt::textureStream.update(isDSiMode() ? 8192 : 4096);
             // What the hardware made of the pass before this one, and the
             // budget corrected by it.
             {
@@ -1178,10 +1104,6 @@ int main(int argc, char *argv[])
                 hlrt::worldDraw.govern(seen.overflow, seen.underflow, seen.lines,
                                        took > 1 && took < 60);
             }
-            // In two-pass, the game's step once the picture's right half is
-            // drawn (above: why not before its left).
-            if (twoPass && NEA_TwoPassGetPass() == 0)
-                step();
         }
         hlrt::DebugLog::Perf::endFrame();
         hlrt::DebugLog::Perf::logEvery(currentMap.c_str(), 512);

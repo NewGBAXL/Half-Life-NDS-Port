@@ -969,19 +969,16 @@ namespace hlrt
         int vertices = stats_.vertices - stats_.hwVertices;
         polygons = polygons < 0 ? 0 : polygons;
         vertices = vertices < 0 ? 0 : vertices;
-        // (Of the half just drawn: each half's room is its own.)
-        int &unusedP = unusedPolygons_[pass_], &unusedV = unusedVertices_[pass_];
-        int &spareP = sparePolygons_[pass_], &spareV = spareVertices_[pass_];
-        const int p = polygons < unusedP ? polygons : unusedP;
-        const int v = vertices < unusedV ? vertices : unusedV;
-        unusedP = polygons;
-        unusedV = vertices;
-        spareP = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
-        spareV = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
-        spareP = spareP * spareQuarters_ / 4;
-        spareV = spareV * spareQuarters_ / 4;
+        const int p = polygons < unusedPolygons_ ? polygons : unusedPolygons_;
+        const int v = vertices < unusedVertices_ ? vertices : unusedVertices_;
+        unusedPolygons_ = polygons;
+        unusedVertices_ = vertices;
+        sparePolygons_ = p * 3 / 4 > kMostSparePolygons ? kMostSparePolygons : p * 3 / 4;
+        spareVertices_ = v * 3 / 4 > kMostSpareVertices ? kMostSpareVertices : v * 3 / 4;
+        sparePolygons_ = sparePolygons_ * spareQuarters_ / 4;
+        spareVertices_ = spareVertices_ * spareQuarters_ / 4;
         // None of it while the hardware is complaining.
         if (held_ > 0)
-            spareP = spareV = 0;
+            sparePolygons_ = spareVertices_ = 0;
     }
 } // namespace hlrt

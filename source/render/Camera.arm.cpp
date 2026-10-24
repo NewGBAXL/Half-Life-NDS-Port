@@ -28,12 +28,6 @@ namespace hlrt
         constexpr std::int32_t kZoomCosH = 4006;
         constexpr std::int32_t kZoomSinV = 676;
         constexpr std::int32_t kZoomCosV = 4040;
-        // A half screen ends at its middle column, straight ahead: the plane
-        // through the eye whose normal is `right` -- two degrees past the
-        // middle, for the reason the outer planes are loose.
-        constexpr std::int32_t kSinMid = 143;  // sin 2
-        constexpr std::int32_t kCosMid = 4094; // cos 2
-
         // Pitch stops at 89 degrees.
         constexpr std::int16_t kMaxPitch = 16202;
 
@@ -139,7 +133,7 @@ namespace hlrt
         hudPixel = static_cast<int>(3058.0 * std::tan(high * 3.14159265358979 / 360.0) / 96.0 + 0.5);
     }
 
-    void Camera::buildPlanes(ViewHalf half)
+    void Camera::buildPlanes()
     {
         // Side planes: forward tilted towards the middle by the half-angle.
         const std::int32_t sinH = zoomed ? kZoomSinH : kSinH, cosH = zoomed ? kZoomCosH : kCosH;
@@ -155,12 +149,6 @@ namespace hlrt
             planes[2].normal[i] = fv + uv; // bottom
             planes[3].normal[i] = fv - uv;
             planes[4].normal[i] = -forward[i]; // far
-            const std::int32_t fm = mulQ12(forward[i], kSinMid);
-            const std::int32_t rm = mulQ12(right[i], kCosMid);
-            if (half == ViewHalf::Left)
-                planes[1].normal[i] = fm - rm; // its right edge at the middle
-            else if (half == ViewHalf::Right)
-                planes[0].normal[i] = fm + rm;
         }
         for (int p = 0; p < 4; ++p)
             planes[p].dist = dotPos(planes[p].normal, pos);

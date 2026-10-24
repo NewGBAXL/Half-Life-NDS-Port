@@ -28,15 +28,7 @@ namespace hlrt
     class HudDraw
     {
     public:
-        /// What it costs a frame, at most: taken off the world's budget.
-        /// Nothing, as sprites; in two-pass, where video bank F is the
-        /// engine's (Global::Video), it is drawn as quads, a pass's worth of
-        /// them at most.
-        static constexpr int kPolygons3D = 48;
-        static constexpr int kVertices3D = 192;
-        int polygons() const;
-        int vertices() const;
-        /// ... and what the lamp's light may cost besides, while it is
+        /// What the lamp's light may cost a frame, while it is
         /// alight: the surfaces in its beam are drawn twice.
         static constexpr int kLampPolygons = 120;
         static constexpr int kLampVertices = 480;
@@ -77,10 +69,8 @@ namespace hlrt
 
     private:
         void compose(); ///< draw()'s work, into the sprites' copy
-        void drawQuads(); ///< ... in two-pass: as 3D quads, each pass
         // ... with the 640 set, where the game has each piece (HlHudLayout.hpp).
         void compose640();
-        void drawQuads640();
 
     public:
         /// The marks' texture (an NEA_Material: HlUi.hpp, kDecalAtlasFile),
@@ -114,14 +104,10 @@ namespace hlrt
     private:
         bool atlas_ = false; ///< the display's pictures are read (HudDraw.arm.cpp)
         bool atlas640_ = false; ///< ... and they are the 640 set's (kHud640File)
-        void *material_ = nullptr; ///< ... and, in two-pass, a texture (drawQuads)
         void *lampMaterial_ = nullptr;
         bool train_ = false; ///< the pictures of a driven train's speed are read (kHudTrainFile)
-        void *trainMaterial_ = nullptr; ///< ... and, in two-pass, a texture
-        void *trainPalette_ = nullptr;
         void *decalMaterial_ = nullptr;
         void *decalPalette_ = nullptr;
-        void *palette_ = nullptr;
         void *loadingMaterial_ = nullptr;
         void *loadingPalette_ = nullptr;
         // The title screen's (showMenu): its background, its animated title

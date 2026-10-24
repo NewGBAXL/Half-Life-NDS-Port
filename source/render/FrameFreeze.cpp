@@ -2,7 +2,6 @@
 
 #include "render/FrameFreeze.hpp"
 
-#include "Global.hpp"
 
 namespace hlrt
 {
@@ -28,14 +27,6 @@ namespace hlrt
         if (frozen_)
             return true;
         frozen_ = true;
-        // In two-pass, what is shown is a finished picture in main memory
-        // already, and stays so while no new one is drawn (Global::Video).
-        if (global.twoPass)
-        {
-            twoPass_ = true;
-            return true;
-        }
-        twoPass_ = false;
 
         // The screen as it is, into bank D, which is kept free for this.
         vramSetBankD(VRAM_D_LCD);
@@ -64,8 +55,6 @@ namespace hlrt
         if (!frozen_)
             return;
         frozen_ = false;
-        if (twoPass_)
-            return;
         REG_DISPCNT = savedControl_;
         REG_BG0CNT = savedBg0_;
         vramSetBankD(VRAM_D_LCD);
