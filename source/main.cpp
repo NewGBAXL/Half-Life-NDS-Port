@@ -325,9 +325,10 @@ namespace
 
     /// The game as it is, into `slot` (a kSlot*). Said on the screen either
     /// way: that it was saved, or that the card would not take it. The
-    /// game's own save (AUTOSAVE, not `quiet`) is only begun here, and goes
-    /// to the card a little every frame (stepSave) with a small sign in the
-    /// corner of the top screen: the game goes on meanwhile.
+    /// game's own save (not `quiet`) is only begun here, and goes to the card
+    /// a little every frame (stepSave) with a small sign in the corner of the
+    /// top screen: the game goes on meanwhile. It is never said in the middle
+    /// of the screen, even when it has to be written at once.
     bool saveNow(int slot, bool quiet = false)
     {
         if (!hlrt::level.loaded() || hlrt::player.noclip || hlrt::player.state.health <= 0)
@@ -356,9 +357,23 @@ namespace
         }
         const bool saved = hlrt::SaveGame::write(hlrt::game.snapshot(currentMap), slot, heading);
         if (!saved)
+        {
             say("COULD NOT SAVE", "the card would not take it");
+        }
+        else if (slot == hldata::kSlotAuto)
+        {
+            // The game's own save is never said aloud: only ever the small
+            // sign in the corner, however it was written.
+            if (!quiet)
+            {
+                hlrt::topText.notice("saved");
+                hlrt::topText.endNotice(1000);
+            }
+        }
         else if (!quiet)
-            say(slot == hldata::kSlotAuto ? "AUTOSAVED" : "SAVED");
+        {
+            say("SAVED");
+        }
         return saved;
     }
     /// Once a frame: a step of the save being written, if one is.
