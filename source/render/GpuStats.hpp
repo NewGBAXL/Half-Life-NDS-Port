@@ -51,10 +51,26 @@ namespace hlrt
         /// drawn, and effects (blood, a flash) in view not taken.
         void losses(int enemies, int effects, int seenEnemies = 0, int hidden = 0)
         {
+            map_.enemiesCutTotal += static_cast<std::uint32_t>(enemies);
             map_.modelsHidden += static_cast<std::uint32_t>(hidden);
             map_.enemiesCut += enemies != 0;
             map_.enemiesSeenCut += seenEnemies != 0;
             map_.effectsRefused += static_cast<std::uint32_t>(effects);
+        }
+        /// What the pass sent of the world and left out of it, and the heap
+        /// still free: totals and worsts for the measurements (perf.txt).
+        void world(int polygons, int surfacesCut, int brushesDropped, int brushesOverflow, std::uint32_t heapFree)
+        {
+            map_.polygonsSum += static_cast<std::uint32_t>(polygons);
+            map_.surfacesCutSum += static_cast<std::uint32_t>(surfacesCut);
+            map_.brushesDroppedSum += static_cast<std::uint32_t>(brushesDropped);
+            map_.brushesOverflowSum += static_cast<std::uint32_t>(brushesOverflow);
+            if (surfacesCut > map_.surfacesCutMost)
+                map_.surfacesCutMost = surfacesCut;
+            if (brushesDropped > map_.brushesDroppedMost)
+                map_.brushesDroppedMost = brushesDropped;
+            if (heapFree < map_.heapLeast)
+                map_.heapLeast = heapFree;
         }
         const Frame &last() const { return last_; }
 
@@ -85,6 +101,15 @@ namespace hlrt
             std::uint32_t enemiesSeenCut = 0; ///< ... one not behind a wall
             std::uint32_t modelsHidden = 0;   ///< models in view behind a wall, not drawn (all passes)
             std::uint32_t effectsRefused = 0; ///< effects in view not taken, in all
+            std::uint32_t enemiesCutTotal = 0; ///< enemies in view not drawn, in all passes
+            // (world(): sums over the passes, the worst of one pass.)
+            std::uint32_t polygonsSum = 0;
+            std::uint32_t surfacesCutSum = 0;
+            std::uint32_t brushesDroppedSum = 0;
+            std::uint32_t brushesOverflowSum = 0;
+            int surfacesCutMost = 0;
+            int brushesDroppedMost = 0;
+            std::uint32_t heapLeast = 0xFFFFFFFFu;
         };
         Frame last_;
         Totals map_;

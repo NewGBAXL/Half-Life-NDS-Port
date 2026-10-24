@@ -60,6 +60,9 @@ namespace hlrt
         std::int32_t forward[3];
         std::int32_t right[3];
         std::int32_t up[3];
+        /// How far the map can be seen at all (LevelHeader::farUnits; 0: not
+        /// known): the view is drawn no farther (HlFog.hpp's drawDistanceFor).
+        int mapFarUnits = 0;
         m4x3 view;
         CullPlane planes[kPlaneCount];
 

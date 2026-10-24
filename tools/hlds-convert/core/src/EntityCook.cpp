@@ -2104,6 +2104,21 @@ namespace hlds
                     }
                 }
             }
+            else if (cls == "trigger_transition" && model != nullptr && !entity.value("targetname").empty())
+            {
+                // Where the player has to be for the way out by the landmark
+                // of its name to work (LogicKind::Transition).
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Transition);
+                record.extra[0] = hashOf(entity.value("targetname"));
+                for (int a = 0; a < 3; ++a)
+                {
+                    record.mins[a] = static_cast<std::int16_t>(
+                        std::clamp(std::floor(model->mins[a] + origin[a]), -32768.0, 32767.0));
+                    record.maxs[a] = static_cast<std::int16_t>(
+                        std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
+                }
+            }
             else if (cls == "trigger_autosave" && model != nullptr)
             {
                 make = true;

@@ -224,7 +224,7 @@ namespace hldata
 
     inline LevelError LevelView::validate() const
     {
-        if (modelCount == 0 || leafCount == 0)
+        if (modelCount == 0 || leafCount == 0 || actorCount > static_cast<std::uint32_t>(kMaxMapActors))
             return LevelError::BadIndex;
         if (header->visLeafCount >= leafCount)
             return LevelError::BadIndex;

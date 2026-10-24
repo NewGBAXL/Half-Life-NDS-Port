@@ -534,6 +534,28 @@ namespace hldata
             }
             return true;
         }
+
+        /// Whether the player is in one of the volumes of the landmark
+        /// `landmark` (its nameHash) -- or the map has none of them, and so
+        /// the player is everywhere they could need to be.
+        inline bool inTransition(const LogicWorld &w, const PlayerState &player, std::uint32_t landmark)
+        {
+            bool any = false;
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                const LogicRecord &record = w.records[i];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::Transition) || record.extra[0] != landmark)
+                    continue;
+                const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
+                                    fxFromInt(record.mins[2])};
+                const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]),
+                                    fxFromInt(record.maxs[2])};
+                if (playerTouchesBox(player, mins, maxs, 0))
+                    return true;
+                any = true;
+            }
+            return !any;
+        }
     } // namespace detail
 
     // ------------------------------------------------------------------ firing
@@ -3382,6 +3404,10 @@ namespace hldata
             break;
 
         case LogicKind::ChangeLevel:
+            // Not while the player is outside its landmark's volumes, if it
+            // has any (LogicKind::Transition).
+            if (!detail::inTransition(w, player, record.extra[1]))
+                break;
             // Its own targets first, as the game does; then the map changes
             // -- at the end of this frame, by the caller.
             logicUseTargets(w, player, index, kUseToggle, depth);

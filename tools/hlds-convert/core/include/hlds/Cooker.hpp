@@ -19,6 +19,7 @@
 #include "hlds/SoundCook.hpp"
 #include "hlds/BspFile.hpp"
 #include "hlds/LevelWriter.hpp"
+#include "hlds/Portals.hpp"
 #include "hlds/LightBake.hpp"
 #include "hlds/TextureBudget.hpp"
 #include "hlds/TitlesFile.hpp"
@@ -33,6 +34,11 @@ namespace hlds
         /// nothing visible (MeshOptimize.hpp). Off leaves every vertex of the
         /// map in place and only shares them between neighbouring faces.
         bool guardedMerges = true;
+        /// No surface of the world spans two leaves: a face is merged and
+        /// grouped only with faces of the same leaf (the first that lists
+        /// it), so that a surface is drawn only where its own leaf is seen
+        /// (the portal flood: HlPortals.hpp). Off: across leaves, as before.
+        bool groupByLeaf = true;
             /// The map's sky, when its six pictures are there to be cooked: the
         /// name they go by ("2desert"). Empty: the map is cooked without one.
         std::string skyName;
@@ -84,6 +90,16 @@ namespace hlds
         std::map<std::string, int> unsupported;
         int droppedClipNodes = 0;
         int droppedPlanes = 0;
+        int portals = 0;     ///< the holes between leaves (Portals.cpp)
+        /// World surfaces made of faces of more than one leaf: none, unless
+        /// CookOptions::groupByLeaf is off.
+        int surfacesSpanningLeaves = 0;
+        /// The worst a leaf's PVS asks for, in all directions: the header's
+        /// worst before it was taken as it is seen (Portals.cpp's seenWorst).
+        int pvsWorstPolygons = 0;
+        int pvsWorstVertices = 0;
+        int seenGivenUp = 0;               ///< floods of seenWorst that gave up
+        std::vector<SeenWorst::Hotspot> hotspots; ///< the worst leaves as seen
     };
 
     /// `plan` is the texture plan (TextureBudget.hpp): the cooked size of each

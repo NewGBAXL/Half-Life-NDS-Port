@@ -152,6 +152,7 @@ namespace hlrt
                                                    12;
                         stats_.cutDistance = depth - surface.radius;
                     }
+                    ++stats_.surfacesCut;
                     if (++misses >= kMissesMost || polygonBudget - polygons < kRoomLeast ||
                         vertexBudget - vertices < kRoomLeast * 3)
                     {
@@ -357,6 +358,9 @@ namespace hlrt
         if (!level.loaded() || chosen_ == nullptr)
             return;
         stats_.budgetHit = false;
+        stats_.surfacesCut = 0;
+        stats_.brushesDropped = 0;
+        stats_.brushesOverflow = 0;
         const int leaf = findLeaf(level.view, camera.pos);
         stats_.leaf = leaf;
         if (leaf != visLeaf_)

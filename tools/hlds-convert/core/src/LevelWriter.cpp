@@ -105,6 +105,7 @@ namespace hlds
         header.visLeafCount = level.visLeafCount;
         header.worstPolygons = level.worstPolygons;
         header.worstVertices = level.worstVertices;
+        header.farUnits = level.farUnits;
         header.worstTexels = level.worstTexels;
         header.skyTexture = level.skyTexture;
         header.viewModel = level.viewModel;

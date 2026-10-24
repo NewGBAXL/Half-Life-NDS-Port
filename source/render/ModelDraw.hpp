@@ -46,6 +46,10 @@ namespace hlrt
         static constexpr int kMaxVertices = 3400;
         /// ... and over it, for what the player has thrown or put down.
         static constexpr int kThrownPolygons = 128;
+        /// One for every actor a map may have, its own and those who come
+        /// along (hldata::kMaxMapActors: the converter refuses a map with
+        /// more): what each was drawn at, and whether it is behind a wall.
+        static constexpr int kActorSlots = hldata::kMaxMapActors + hldata::kMaxVisitors;
         /// A model whose finest level is of more polygons than this has the
         /// game's own mesh for it (a DSi's file): for the nearest model in
         /// a frame with room, and nobody else.
@@ -96,7 +100,7 @@ namespace hlrt
         /// What each actor was last drawn at, one more than the level (0:
         /// not lately), by its number: a model near the distance where two
         /// levels meet keeps the one it has.
-        std::uint8_t lastLevel_[256] = {};
+        std::uint8_t lastLevel_[kActorSlots] = {};
         int found_ = 0;
         int limit_ = 8;
         /// The pieces of what has come apart that plan() chose (into
@@ -123,8 +127,8 @@ namespace hlrt
         int seenCut_ = 0;
         /// Per actor (by its index, as lastLevel_): how many looks in a row
         /// found it behind a wall (2: hidden), and the frame of the last.
-        std::uint8_t hiddenRun_[256] = {};
-        std::uint16_t hiddenLook_[256] = {};
+        std::uint8_t hiddenRun_[kActorSlots] = {};
+        std::uint16_t hiddenLook_[kActorSlots] = {};
         std::uint16_t planFrame_ = 0;
         int hidden_ = 0;
         bool strained_ = false;

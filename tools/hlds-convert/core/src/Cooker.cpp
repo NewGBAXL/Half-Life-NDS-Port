@@ -2,6 +2,7 @@
 #include "hlds/SoundCook.hpp"
 #include "hlds/PathNodes.hpp"
 #include "hlds/Cooker.hpp"
+#include "hlds/Portals.hpp"
 #include "hlds/Materials.hpp"
 
 #include "hlds/TextureFamily.hpp"
@@ -287,6 +288,22 @@ namespace hlds
             }
         }
 
+        // The first leaf that lists each face: what a world face is grouped
+        // by (CookOptions::groupByLeaf).
+        std::vector<int> faceLeaf(bsp.faces.size(), 0);
+        {
+            for (std::size_t leaf = bsp.leaves.size(); leaf-- > 1;)
+            {
+                const BspLeaf &l = bsp.leaves[leaf];
+                for (int k = 0; k < l.markSurfaceCount; ++k)
+                {
+                    const std::uint32_t face = bsp.markSurfaces[l.firstMarkSurface + k];
+                    if (face < faceLeaf.size())
+                        faceLeaf[face] = static_cast<int>(leaf);
+                }
+            }
+        }
+
         for (std::size_t m = 0; m < bsp.models.size(); ++m)
         {
             const BspModel &src = bsp.models[m];
@@ -301,7 +318,7 @@ namespace hlds
             const bool fullBright = brush != nullptr && brush->fullBright();
 
             std::vector<MeshFace> meshFaces;
-            std::map<std::tuple<int, int, int, int>, int> keys; // (plane, side, mapping, texture) -> key
+            std::map<std::tuple<int, int, int, int, int>, int> keys; // (plane, side, mapping, texture, leaf) -> key
             std::vector<int> keyPlane, keySide, keyTexture;
             std::vector<char> keyAlpha;
             for (int f = src.firstFace; f < src.firstFace + src.faceCount; ++f)
@@ -327,7 +344,8 @@ namespace hlds
                 mesh.sources = {f};
                 const auto keyId = std::make_tuple(static_cast<int>(face.plane),
                                                    face.side != 0 ? 1 : 0,
-                                                   mappingOf[face.texInfo], bspTexture);
+                                                   mappingOf[face.texInfo], bspTexture,
+                                                   m == 0 && options.groupByLeaf ? faceLeaf[f] : 0);
                 auto found = keys.find(keyId);
                 if (found == keys.end())
                 {
@@ -373,6 +391,24 @@ namespace hlds
             }
 
             std::vector<std::vector<int>> groups = groupFaces(meshFaces);
+            // (What spans two leaves, for the report: none, grouped by leaf.)
+            for (const std::vector<int> &group : groups)
+            {
+                if (m != 0)
+                    break;
+                int first = -1;
+                bool spans = false;
+                for (const int i : group)
+                {
+                    for (const int f : meshFaces[i].sources)
+                    {
+                        if (first < 0)
+                            first = faceLeaf[f];
+                        spans = spans || faceLeaf[f] != first;
+                    }
+                }
+                report.surfacesSpanningLeaves += spans ? 1 : 0;
+            }
             std::stable_sort(groups.begin(), groups.end(),
                              [&](const std::vector<int> &a, const std::vector<int> &b)
             {
@@ -708,6 +744,14 @@ namespace hlds
             error = "the map has more leaf-to-surface marks than the cooked format holds";
             return false;
         }
+
+        // --- The holes between the leaves (Portals.cpp): what the worst
+        // view and the far distance are worked out by, as they are seen
+        // (seenWorst, below). Not in the level.
+        CookedPortals portals;
+        if (!cookPortals(buildPortals(bsp), level.leaves.size(), portals, error))
+            return false;
+        report.portals = static_cast<int>(portals.portals.size());
         level.vis = bsp.visibility;
 
         // --- Clip hulls 1 (standing) and 3 (crouched); and of the world,
@@ -837,6 +881,12 @@ namespace hlds
                     level.viewModel = static_cast<std::uint16_t>(m + 1);
             }
             level.actors = std::move(logic.actors);
+            if (level.actors.size() > static_cast<std::size_t>(kMaxMapActors))
+            {
+                error = "the map has " + std::to_string(level.actors.size()) + " actors, more than the " +
+                        std::to_string(kMaxMapActors) + " the runtime keeps track of";
+                return false;
+            }
             // Each sound under the name it has at the usual rate; whoever
             // cooks the files may change that (a map short of room has some
             // at half the rate, and the name says so).
@@ -1138,8 +1188,16 @@ namespace hlds
                         level.textures[t + f].share = level.textures[t].share;
                 }
             }
-            level.worstPolygons = static_cast<std::uint16_t>(std::min(worstPolygons, 0xFFFF));
-            level.worstVertices = static_cast<std::uint16_t>(std::min(worstVertices, 0xFFFF));
+            // (The PVS's worst, for the report: what the header had before
+            // the worst was taken as it is seen.)
+            report.pvsWorstPolygons = worstPolygons;
+            report.pvsWorstVertices = worstVertices;
+            const SeenWorst seen = seenWorst(bsp, level, portals);
+            level.worstPolygons = static_cast<std::uint16_t>(std::min(seen.polygons, 0xFFFF));
+            level.worstVertices = static_cast<std::uint16_t>(std::min(seen.vertices, 0xFFFF));
+            level.farUnits = static_cast<std::uint32_t>(seen.farUnits);
+            report.seenGivenUp = seen.givenUp;
+            report.hotspots = seen.hotspots;
         }
         return true;
     }

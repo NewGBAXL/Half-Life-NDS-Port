@@ -80,6 +80,43 @@ namespace hldata
             return index;
         }
 
+        /// keySpan's answers for one pose: every track of a clip shares its
+        /// frame and last frame, so a track's span depends only on its key
+        /// count and step -- and the converter keys at a handful of steps
+        /// (ModelCook.cpp: 16, 8, 6, 4, 3, 2, 1). Each different one is
+        /// worked out once, not twice a bone: the divides are calls on the
+        /// DS.
+        struct KeySpans
+        {
+            std::uint32_t frame, lastFrame;
+            int known = 0;
+            std::uint16_t count[8], step[8];
+            std::uint32_t index[8];
+            std::int32_t along[8];
+
+            std::uint32_t get(std::uint32_t keys, std::uint32_t every, std::int32_t &out)
+            {
+                for (int k = 0; k < known; ++k)
+                {
+                    if (count[k] == keys && step[k] == every)
+                    {
+                        out = along[k];
+                        return index[k];
+                    }
+                }
+                const std::uint32_t at = keySpan(keys, every, frame, lastFrame, out);
+                if (known < 8)
+                {
+                    count[known] = static_cast<std::uint16_t>(keys);
+                    step[known] = static_cast<std::uint16_t>(every);
+                    index[known] = at;
+                    along[known] = out;
+                    ++known;
+                }
+                return at;
+            }
+        };
+
         /// A stored rotation, whole: the w that was left out put back.
         inline void fullQuat(const ModelKey &key, std::int32_t *q)
         {
@@ -91,8 +128,8 @@ namespace hldata
         }
 
         /// One bone's rotation and place at `frame` (Q8 frames) of a track.
-        HL_HOT void sampleTrack(const ModelTrack &track, const ModelKey *keys, std::uint32_t frame,
-                                std::uint32_t lastFrame, std::int32_t *quat, fx *pos)
+        HL_HOT void sampleTrack(const ModelTrack &track, const ModelKey *keys, KeySpans &spans,
+                                std::int32_t *quat, fx *pos)
         {
             const ModelKey *rot = keys + track.firstRot;
             if (track.rotCount == 1)
@@ -102,7 +139,7 @@ namespace hldata
             else
             {
                 std::int32_t s;
-                const std::uint32_t index = keySpan(track.rotCount, track.rotStep, frame, lastFrame, s);
+                const std::uint32_t index = spans.get(track.rotCount, track.rotStep, s);
                 std::int32_t a[4], b[4];
                 fullQuat(rot[index], a);
                 fullQuat(rot[index + 1], b);
@@ -140,7 +177,7 @@ namespace hldata
                 return;
             }
             std::int32_t s;
-            const std::uint32_t index = keySpan(track.posCount, track.posStep, frame, lastFrame, s);
+            const std::uint32_t index = spans.get(track.posCount, track.posStep, s);
             for (int i = 0; i < 3; ++i)
             {
                 const std::int32_t p =
@@ -224,11 +261,14 @@ namespace hldata
             frame = lastFrame << 8;
         const ModelTrack *tracks = model.tracks + c.firstTrack;
         const int bones = model.header->boneCount;
+        detail::KeySpans spans;
+        spans.frame = frame;
+        spans.lastFrame = lastFrame;
         for (int b = 0; b < bones; ++b)
         {
             std::int32_t quat[4];
             fx pos[3];
-            detail::sampleTrack(tracks[b], model.keys, frame, lastFrame, quat, pos);
+            detail::sampleTrack(tracks[b], model.keys, spans, quat, pos);
             std::int32_t local[9];
             detail::quatToMatrix(quat, local);
             for (int n = 0; n < controllers; ++n)

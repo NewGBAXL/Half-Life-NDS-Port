@@ -8,6 +8,7 @@
 #include "Global.hpp"
 #include "HlSprite.hpp"
 #include "HlUi.hpp"
+#include "HlPolygonIds.hpp"
 #include "data/TextureCache.hpp"
 #include "data/TextureStream.hpp"
 #include "render/HudDraw.hpp"
@@ -627,7 +628,7 @@ namespace hlrt
         // attribute NEA has no name for): a mark lies in its wall's plane,
         // and is drawn where the wall is and nowhere else.
         constexpr int kDepthEqual = 1 << 14;
-        constexpr int kDecalId = 56;
+        constexpr int kDecalId = kIdMarks;
         // No more of them than this much of the screen between them (in
         // pixels, as they are seen: a stain on the floor far ahead covers a
         // sliver of what it would face on): see-through things one on

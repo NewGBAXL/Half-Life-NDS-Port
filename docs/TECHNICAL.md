@@ -36,10 +36,27 @@ Milestone 11, "levels of detail".
   the plain opaque ones are cooked at the game's own size (up to 128 on a side,
   where they were halved) and read in from the card as they come into view;
   see "Streaming textures" below.
-- The DS renders the world with PVS, frustum and back-face culling against a
-  polygon and vertex budget, in one pass, at 60 fps. What a view asks for beyond
-  the budget is left out from the far end, and a map the converter judged HEAVY
-  (its worst view is over about twice a pass's budget) has the fog on always,
+- The DS renders the world with PVS, frustum and back-face culling
+  against a polygon and vertex budget, in one pass, at 60 fps. The converter
+  works the holes between the BSP's leaves out again from its tree (a .bsp no
+  longer has them: `Portals.cpp`) and floods through them from every leaf,
+  looking every way (`shared/HlPortals.hpp`: never less than what is seen --
+  tested against lines of sight on the game's maps): what a map's worst view
+  is as it is seen, how far it can be seen, and its worst places (`--hotspots`).
+  The flood is not done on the console: a pass of it cost about 3 ms on a DSi
+  and left out little of what a pass short of room would have cut. A surface
+  is never made of faces of two leaves, so that it is drawn only where its
+  own leaf is seen (7 to 13% more surfaces). Brush entities that are solid --
+  doors, lifts, trains -- are drawn nearest first with all they cost set aside, and once one does not fit
+  nothing farther is: a near door is never left out for a far one
+  (`shared/HlBrushPlan.hpp`); a list too short for all in view leaves out the
+  farthest, and what is left out is counted (the overlay's `cut s b`, perf.txt).
+  Each map is drawn no farther than it can be seen from anywhere in it (the
+  converter's flood from every leaf: 1536 to 8192 units), the fog whole by
+  then. What a view asks for beyond the budget is left out from the far end,
+  and a map the converter judged HEAVY (its worst view as it is seen -- from
+  the middle of every leaf, eight ways round and three up and down, through
+  the portals -- is over a pass's budget) has the fog on always,
   at the player's distance, unless the fog is set to off or to "always" already.
   In the others it comes in only where a view is cut (see "Fog" below). Back faces
   are rejected on the CPU, surface by surface; the hardware's own test is off,
@@ -85,6 +102,10 @@ Milestone 11, "levels of detail".
   the station in c0a0e by itself, platforms that lower the tram included.
   A lift goes on along the next map's own path, even where the two maps'
   corners do not line up (c1a3a's and c1a3b's; `liftCornerAhead`).
+  A way out whose landmark has trigger_transition volumes goes only while
+  the player is in one of them (`LogicKind::Transition`): c2a5c's door that
+  shuts behind the arriving player fires the way back, and walking on is
+  what keeps them in the map.
 - A track train the map lets the player drive (all but those it marks
   NOCONTROL, and those whose track has taken them over) is driven as in the
   game: USE, standing on it -- anywhere in it, or, where the map has a

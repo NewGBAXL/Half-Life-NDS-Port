@@ -14,6 +14,7 @@
 #include "HlLamp.hpp"
 #include "HlPlayerMove.hpp"
 #include "HlUi.hpp"
+#include "HlPolygonIds.hpp"
 #include "data/TextureCache.hpp"
 #include "render/ScreenFade.hpp"
 #include "game/Game.hpp"
@@ -712,7 +713,7 @@ namespace hlrt
             };
             if (flash_ > 0)
             {
-                NEA_PolyFormat(1 + flash_ * 13 / 256, 61, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                NEA_PolyFormat(1 + flash_ * 13 / 256, kIdHudFlash, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                                static_cast<NEA_OtherFormatEnum>(0));
                 GFX_COLOR = RGB15(31, 0, 0);
                 plain(0, 0, 256, 192);
@@ -723,7 +724,7 @@ namespace hlrt
             {
                 if (pain_[n] <= 0)
                     continue;
-                NEA_PolyFormat(1 + pain_[n] * 24 / 256, 60 - n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+                NEA_PolyFormat(1 + pain_[n] * 24 / 256, kIdHudPainFirst + n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                                static_cast<NEA_OtherFormatEnum>(0));
                 plain(kMarks[n][0], kMarks[n][1], kMarks[n][2], kMarks[n][3]);
             }
@@ -733,7 +734,7 @@ namespace hlrt
             return;
         NEA_MaterialUse(static_cast<NEA_Material *>(material_));
         // (No fog, no lights; number 63 of the polygons that blend.)
-        NEA_PolyFormat(31, 63, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+        NEA_PolyFormat(31, kIdHudSuit, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
         beginFlat();
         auto picture = [](int x, int y, UiRect from) { quad(x, y, from.w, from.h, from); };
         auto number = [&](int right, int y, int value)
@@ -1023,7 +1024,7 @@ namespace hlrt
         {
             GFX_TEX_FORMAT = 0;
             beginFlat();
-            NEA_PolyFormat(1 + flash_ * 13 / 256, 61, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+            NEA_PolyFormat(1 + flash_ * 13 / 256, kIdHudFlash, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                            static_cast<NEA_OtherFormatEnum>(0));
             GFX_COLOR = RGB15(31, 0, 0);
             GFX_BEGIN = GL_QUADS;
@@ -1046,14 +1047,14 @@ namespace hlrt
             if (pain_[n] < kPainShows)
                 continue;
             const int strength = pain_[n] > 256 ? 256 : (pain_[n] < 128 ? 128 : pain_[n]);
-            NEA_PolyFormat(strength * 31 / 256, 59 - n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+            NEA_PolyFormat(strength * 31 / 256, kIdHudPainFirst + n, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                            static_cast<NEA_OtherFormatEnum>(0));
             GFX_COLOR = painIn;
             picture(hudDs(kHud640PainAt[n].x), hudDs(kHud640PainAt[n].y), kHud640Pain[n]);
         }
         if (hurts.any() && hurtPulse * 31 / 256 > 0)
         {
-            NEA_PolyFormat(hurtPulse * 31 / 256, 55, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
+            NEA_PolyFormat(hurtPulse * 31 / 256, kIdHudHurt, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                            static_cast<NEA_OtherFormatEnum>(0));
             GFX_COLOR = kYellowish;
             for (int k = 0; k < HudHurts::kKinds; ++k)
@@ -1069,7 +1070,7 @@ namespace hlrt
             return;
         }
         // (No fog, no lights; number 63 of the polygons that blend.)
-        NEA_PolyFormat(31, 63, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
+        NEA_PolyFormat(31, kIdHudSuit, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE, static_cast<NEA_OtherFormatEnum>(0));
         const int row = hudDs(kHud640NumberY);
         auto digit = [&](int x, UiRect from) { picture(x, row, from); };
         auto bar = [&](int x640) { quad(hudDs(x640), row, 1, kHud640DigitHeight, kHud640Solid); };

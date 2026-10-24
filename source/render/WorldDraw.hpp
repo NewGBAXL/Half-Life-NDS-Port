@@ -65,6 +65,14 @@ namespace hlrt
         int droppedVertices = 0;
         int models = 0;         ///< actors drawn
         int modelsCut = 0;      ///< in view, but the pass had no room
+        /// Surfaces in view that the walk had no room for (each time one did
+        /// not fit; what was still to come when it gave up is not counted).
+        int surfacesCut = 0;
+        /// Brush entities in view not drawn: no room in the pass for them, or
+        /// (`brushesOverflow`, counted in both) more of them than the lists
+        /// hold.
+        int brushesDropped = 0;
+        int brushesOverflow = 0;
     };
 
     class WorldDraw

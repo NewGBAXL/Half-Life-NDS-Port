@@ -1602,6 +1602,56 @@ namespace
                                      gc.view.nameHashes, gc.view.nameCount, gc.player, lost),
               "without the landmark the player is left for the map's own start");
     }
+    void testTransitionVolume()
+    {
+        // A way back fired by name only (c2a5c's: the door that shuts behind
+        // the player as they arrive fires it), whose landmark has a volume
+        // by the west wall. Outside it, firing it does nothing; inside, the
+        // map changes. A way whose landmark has no volume goes from anywhere.
+        BoxRoom room;
+        BrushBox back;
+        back.className = "trigger_changelevel";
+        back.mins[0] = 96, back.mins[1] = -32, back.mins[2] = 0;
+        back.maxs[0] = 120, back.maxs[1] = 32, back.maxs[2] = 96;
+        back.keys = "\"map\" \"mapb\"\n\"landmark\" \"join\"\n\"targetname\" \"back\"\n\"spawnflags\" \"2\"\n";
+        room.brushes.push_back(back);
+        BrushBox volume;
+        volume.className = "trigger_transition";
+        volume.mins[0] = -120, volume.mins[1] = -64, volume.mins[2] = 0;
+        volume.maxs[0] = -40, volume.maxs[1] = 64, volume.maxs[2] = 96;
+        volume.keys = "\"targetname\" \"join\"\n";
+        room.brushes.push_back(volume);
+        BrushBox other = back;
+        other.mins[1] = 64, other.maxs[1] = 96;
+        other.keys = "\"map\" \"mapc\"\n\"landmark\" \"elsewhere\"\n\"targetname\" \"free\"\n\"spawnflags\" \"2\"\n";
+        room.brushes.push_back(other);
+        room.extraEntities = "{\n\"classname\" \"info_landmark\"\n\"targetname\" \"join\"\n\"origin\" \"0 0 0\"\n}\n"
+                             "{\n\"classname\" \"info_landmark\"\n\"targetname\" \"elsewhere\"\n\"origin\" \"0 0 0\"\n}\n";
+        Game g;
+        build(g, room);
+        check(g.ok, "the room with a transition volume cooks");
+        if (!g.ok)
+            return;
+        const int inside = g.recordOfKind(LogicKind::Transition);
+        int way = -1, wayFree = -1;
+        for (int i = 0; i < g.logic.recordCount; ++i)
+            if (g.view.logic[i].kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel))
+                (g.view.logic[i].extra[1] == nameHash("join") ? way : wayFree) = i;
+        check(inside >= 0 && g.view.logic[inside].extra[0] == nameHash("join") && way >= 0 && wayFree >= 0,
+              "a trigger_transition is cooked, named as its landmark");
+        if (inside < 0 || way < 0 || wayFree < 0)
+            return;
+        g.player.origin[0] = fxFromInt(40), g.player.origin[1] = 0, g.player.origin[2] = fxFromInt(36);
+        logicUse(g.logic, g.player, way, -1, kUseToggle);
+        check(g.logic.pendingChange < 0, "fired with the player outside its landmark's volume: no change");
+        g.player.origin[0] = fxFromInt(-80);
+        logicUse(g.logic, g.player, way, -1, kUseToggle);
+        check(g.logic.pendingChange == way, "... and with the player inside it, the map changes");
+        g.logic.pendingChange = -1;
+        g.player.origin[0] = fxFromInt(40);
+        logicUse(g.logic, g.player, wayFree, -1, kUseToggle);
+        check(g.logic.pendingChange == wayFree, "a way whose landmark has no volume goes from anywhere");
+    }
 } // namespace
 
 int main()
@@ -1620,6 +1670,7 @@ int main()
     testBreakingAndPushing();
     testWater();
     testLevelChange();
+    testTransitionVolume();
     if (g_failures == 0)
         std::printf("test_logic: ok\n");
     return g_failures == 0 ? 0 : 1;

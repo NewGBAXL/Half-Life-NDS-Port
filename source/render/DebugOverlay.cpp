@@ -85,6 +85,14 @@ namespace hlrt
                               effectDraw.refused());
                 break;
             }
+            // (... or the world's: surfaces and brush entities in view with
+            // no room for them.)
+            if (worldDraw.stats().surfacesCut + worldDraw.stats().brushesDropped != 0)
+            {
+                std::snprintf(line, sizeof(line), "cut s%d b%d%s", worldDraw.stats().surfacesCut,
+                              worldDraw.stats().brushesDropped, worldDraw.stats().brushesOverflow != 0 ? " OVER" : "");
+                break;
+            }
             std::snprintf(line, sizeof(line), "pos %5d %5d %5d %s",
                           hldata::fxToInt(camera.pos[0]), hldata::fxToInt(camera.pos[1]),
                           hldata::fxToInt(camera.pos[2]),

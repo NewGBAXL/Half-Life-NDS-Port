@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 37;
+    inline constexpr std::uint16_t kLevelVersion = 38;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -60,8 +60,9 @@ namespace hldata
     /// before would refuse; 33: the round 3 monsters, kinds a build before
     /// has not got; 34: round 4's, the same; 35: round 5's, and the
     /// tanks, mortar fields and wheels; 36: Xen's gravity volumes; 37: the
-    /// shotgun shell's ring among the common sounds.)
-    inline constexpr std::uint16_t kLevelMinReader = 37;
+    /// shotgun shell's ring among the common sounds; 38: no surface across two
+    /// leaves, the map's far distance in the header, transition volumes.)
+    inline constexpr std::uint16_t kLevelMinReader = 38;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -80,14 +81,25 @@ namespace hldata
     /// for: a save of such a map is of other records, and is refused) and
     /// round 5's monsters (after round 4's).
     inline constexpr std::uint16_t kLevelSaveSince = 26;
+    /// LevelHeader::farUnits: never nearer than this, never farther than that.
+    /// The most actors a map may have of its own (the converter refuses one
+    /// with more, the reader does not read it): with the visitors, what the
+    /// runtime's per-actor caches hold (ModelDraw::kActorSlots).
+    inline constexpr int kMaxMapActors = 508;
+    inline constexpr int kLevelFarLeast = 1536;
+    inline constexpr int kLevelFarMost = 8192;
     /// What the 3D engine is given to draw, kept under the
     /// hardware's polygons and vertices limit.
     inline constexpr int kPassPolygons = 1700;
     inline constexpr int kPassVertices = 5200;
     /// Whether a map whose worst view is big enough where it needs fog use.
+    /// A map whose worst view (the header's worst, as it is seen: the
+    /// converter's flood through the portals from every leaf, every way --
+    /// Portals.cpp's seenWorst) is more than a pass has room for: on a DSi it
+    /// is drawn in two passes, and fogged.
     inline constexpr bool levelIsHeavy(unsigned worstPolygons, unsigned worstVertices)
     {
-        return worstVertices > 2u * kPassVertices || worstPolygons > 2u * kPassPolygons;
+        return worstVertices > kPassVertices || worstPolygons > kPassPolygons;
     }
     /// Whether this build can read a level file that says `version` and `minReader` of itself.
     inline constexpr bool levelVersionOk(std::uint16_t version, std::uint16_t minReader)
@@ -177,7 +189,11 @@ namespace hldata
         /// The most texels of texture the PVS of any one leaf lists, at the
         /// sizes they are cooked at; what the streaming of textures is sized from.
         std::uint32_t worstTexels;
-        std::uint32_t reserved[5];
+        /// How far anything of the map can be seen from anywhere in it (the
+        /// converter's portal flood, Portals.cpp): the view is never drawn
+        /// farther. Whole units, kLevelFarLeast..kLevelFarMost; 0 = not known.
+        std::uint32_t farUnits;
+        std::uint32_t reserved[4];
     };
 
     struct Plane
@@ -215,6 +231,7 @@ namespace hldata
     };
     /// Sky can be seen from this leaf: the sky box is drawn only then.
     inline constexpr std::uint8_t kLeafSeesSky = 1;
+
 
     inline constexpr std::int8_t kContentsEmpty = -1;
     inline constexpr std::int8_t kContentsSolid = -2;
@@ -642,6 +659,13 @@ namespace hldata
         /// who touches it, for as long as nothing sets it again (Xen's
         /// trigger_gravity): extra[0] in percent of sv_gravity.
         TriggerGravity,
+        /// Where the player must stand for a ChangeLevel to go
+        /// (trigger_transition): a volume, mins..maxs; extra[0] the hash of
+        /// its name, which is that of the landmark. A way out whose landmark
+        /// has volumes does nothing while the player is in none of them --
+        /// the door that shuts behind them as they arrive fires the way
+        /// back, and it is the player walking on that keeps them there.
+        Transition,
         Count
     };
     // A tank's spawnflags (LogicKind::Tank, maxs[0]): the game's.

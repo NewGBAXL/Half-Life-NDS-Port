@@ -614,6 +614,7 @@ namespace hlds
         cookOptions.lightScale = options_.lightScale;
         cookOptions.lightPower = options_.lightPower;
         cookOptions.guardedMerges = options_.guardedMerges;
+        cookOptions.groupByLeaf = options_.groupByLeaf;
         cookOptions.skyName = skyName;
         for (const auto &model : models)
             cookOptions.models.push_back(model.name);
@@ -1161,6 +1162,12 @@ namespace hlds
         result.streamKb = static_cast<int>(level.gxStream.size() * 4 / 1024);
         result.worstPolygons = level.worstPolygons;
         result.worstVertices = level.worstVertices;
+        result.pvsWorstPolygons = report.pvsWorstPolygons;
+        result.pvsWorstVertices = report.pvsWorstVertices;
+        result.farUnits = static_cast<int>(level.farUnits);
+        result.portals = report.portals;
+        result.surfacesSpanningLeaves = report.surfacesSpanningLeaves;
+        result.hotspots = report.hotspots;
         return result;
     }
 

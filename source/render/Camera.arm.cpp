@@ -166,7 +166,8 @@ namespace hlrt
             planes[p].dist = dotPos(planes[p].normal, pos);
         // (How far the world is drawn is the player's to say: no farther
         // than kFarUnits.)
-        planes[4].dist = dotPos(planes[4].normal, pos) - (hldata::drawDistanceUnits(settings.graphics.drawDistance) << 12);
+        planes[4].dist = dotPos(planes[4].normal, pos) -
+                         (hldata::drawDistanceFor(settings.graphics.drawDistance, mapFarUnits) << 12);
     }
 
     void Camera::apply() const

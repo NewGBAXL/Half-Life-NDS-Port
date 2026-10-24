@@ -1167,6 +1167,8 @@ int main(int argc, char *argv[])
                 hlrt::gpuStats.view(stats.budgetHit, hlrt::worldDraw.pressure() != 0);
                 hlrt::gpuStats.losses(hlrt::modelDraw.cutOf(0), hlrt::effectDraw.refused(), hlrt::modelDraw.seenEnemiesCut(),
                                       hlrt::modelDraw.hidden());
+                hlrt::gpuStats.world(stats.polygons, stats.surfacesCut, stats.brushesDropped, stats.brushesOverflow,
+                                     static_cast<std::uint32_t>(global.heapHeadroom()));
                 lastPass = now;
                 // A fade the map has asked for: the top screen's brightness.
                 hlrt::screenFade.setFade(hlrt::game.logic.fadeLevel);

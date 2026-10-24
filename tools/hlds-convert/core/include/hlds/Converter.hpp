@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "hlds/Portals.hpp"
 #include "hlds/TitlesFile.hpp"
 #include "HlManifest.hpp"
 #include "hlds/LightBake.hpp"
@@ -42,6 +43,7 @@ namespace hlds
         double lightScale = LightBake::kDefaultScale;
         double lightPower = LightBake::kDefaultPower;
         bool guardedMerges = true; ///< CookOptions::guardedMerges
+        bool groupByLeaf = true;   ///< CookOptions::groupByLeaf
         std::string startMap; ///< empty: keep the manifest's, or the default
     };
 
@@ -59,6 +61,12 @@ namespace hlds
         int streamKb = 0;
         int worstPolygons = 0;
         int worstVertices = 0;
+        int pvsWorstPolygons = 0; ///< CookReport::pvsWorstPolygons
+        int pvsWorstVertices = 0;
+        int farUnits = 0;
+        int portals = 0;
+        int surfacesSpanningLeaves = 0;
+        std::vector<SeenWorst::Hotspot> hotspots;
         int texturesUsed = 0;
         int texturesEncoded = 0;
         int texelKb = 0;

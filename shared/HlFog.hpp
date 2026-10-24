@@ -71,14 +71,21 @@ namespace hldata
     {
         return setting == 2 ? 1536 : (setting == 1 ? 3072 : 8192);
     }
+    /// ... and on a map that can be seen no farther than `mapFar` (the
+    /// level's LevelHeader::farUnits; 0: not known), no farther than that.
+    inline constexpr int drawDistanceFor(int setting, int mapFar)
+    {
+        const int far = drawDistanceUnits(setting);
+        return mapFar > 0 && mapFar < far ? mapFar : far;
+    }
 
     /// Where a fog that is always there is at its most (units): from 768
     /// to 6144 by `distance` (0..10), and never past what is drawn.
-    inline constexpr int fogAlwaysEnd(int distance, int drawDistance)
+    inline constexpr int fogAlwaysEnd(int distance, int drawDistance, int mapFar = 0)
     {
         distance = distance < 0 ? 0 : (distance > kGraphicsMost ? kGraphicsMost : distance);
         const int end = 768 + (distance * (6144 - 768)) / kGraphicsMost;
-        const int far = drawDistanceUnits(drawDistance);
+        const int far = drawDistanceFor(drawDistance, mapFar);
         return end > far ? far : end;
     }
 

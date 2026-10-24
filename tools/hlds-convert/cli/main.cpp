@@ -61,6 +61,11 @@ namespace
                      "                         streaming they are shrunk until the whole map fits\n"
                      "      --jobs <n>         maps cooked at once\n"
                      "                         (default: threads available, up to 6)\n"
+                     "      --hotspots         list each map's ten worst leaves as seen\n"
+                     "                         (where, which way, what they cost)\n"
+                     "      --group-across-leaves  let a surface span two leaves (as before\n"
+                     "                         the portals): fewer surfaces, drawn whole\n"
+                     "                         wherever any of their leaves is seen\n"
                      "      --plain-tiles      do not vary the game's '-' textures face by\n"
                      "                         face: fewer textures and polygons, and\n"
                      "                         floors that repeat\n"
@@ -180,6 +185,9 @@ namespace
                         r.archiveMembers, r.archiveRawKb);
     }
 
+    /// --hotspots: each map's worst leaves as seen, where and which way.
+    bool verboseHotspots = false;
+
     void printResult(const MapResult &r)
     {
         for (const std::string &warning : r.warnings)
@@ -201,6 +209,23 @@ namespace
         if (r.streamedTextures != 0)
             std::printf("  %d streamed: %d KB texels total; single view up to %d KB (%d KB free), %d KB resident\n",
                         r.streamedTextures, r.streamTotalKb, r.streamWorstViewKb, r.streamRegionKb, r.streamResidentKb);
+        // What can be seen, as the portals have it: the worst a view asks
+        // for (and the PVS's figure it replaced), how far it reaches, and
+        // whether that makes the map two-pass on a DSi.
+        std::printf("  %d portals; seen worst %d polygons / %d vertices (PVS %d / %d); far %d; %s on a DSi "
+                    "(by the PVS: %s)\n",
+                    r.portals, r.worstPolygons, r.worstVertices, r.pvsWorstPolygons,
+                    r.pvsWorstVertices, r.farUnits,
+                    hldata::levelIsHeavy(r.worstPolygons, r.worstVertices) ? "two-pass" : "one pass",
+                    r.pvsWorstVertices > 2 * hldata::kPassVertices || r.pvsWorstPolygons > 2 * hldata::kPassPolygons
+                        ? "two-pass"
+                        : "one pass");
+        if (verboseHotspots)
+        {
+            for (const auto &spot : r.hotspots)
+                std::printf("    hotspot leaf %d at %d %d %d yaw %d pitch %d: %d polygons / %d vertices\n", spot.leaf,
+                            spot.at[0], spot.at[1], spot.at[2], spot.yaw, spot.pitch, spot.polygons, spot.vertices);
+        }
         printArchive(r);
         if (r.stoodIn != 0)
             std::printf("  a multiplayer map: %d of its pickups are of weapons not in the port yet, and are "
@@ -263,6 +288,10 @@ namespace
                 options.jobs = std::atoi(args[++i].c_str());
             else if (args[i] == "--plain-tiles")
                 hlds::setRandomTiling(false);
+            else if (args[i] == "--group-across-leaves")
+                options.groupByLeaf = false;
+            else if (args[i] == "--hotspots")
+                verboseHotspots = true;
             else if (args[i] == "--start" && i + 1 < args.size())
                 options.startMap = args[++i];
             else if (args[i] == "--stage" && i + 1 < args.size())

@@ -1,4 +1,6 @@
 #include "render/WorldDraw.hpp"
+#include "HlBrushPlan.hpp"
+#include "HlPolygonIds.hpp"
 
 #include <cstdlib>
 #include <malloc.h>
@@ -52,6 +54,7 @@ namespace hlrt
             destroy();
             return false;
         }
+        camera.mapFarUnits = static_cast<int>(view.header->farUnits);
         // (Not having it is not an error: the surfaces are then written one
         // word at a time, as on a DS. On cache lines of its own: it is
         // flushed in pieces.)
@@ -316,27 +319,22 @@ namespace hlrt
 
     namespace
     {
-        // This pass's brushes, as planBrushes chose them: the solid ones in
-        // the map's order, and the see-through ones far to near (a room with
-        // more of them in view at once than this drops the nearest ones);
-        // each with what it costs (polygons, vertices).
+        // This pass's brushes, as planBrushes chose them (HlBrushPlan.hpp):
+        // the solid ones near to far, the see-through ones far to near; a
+        // room with more of either in view than a list holds leaves out the
+        // farthest. Each with what it costs (polygons, vertices).
         constexpr int kMaxSolid = 128;
-        std::uint16_t solidIndex[kMaxSolid];
-        std::int16_t solidCost[kMaxSolid][2];
-        int solidCount = 0;
         constexpr int kMaxLater = 64;
-        std::uint16_t laterIndex[kMaxLater];
-        std::int32_t laterDistance[kMaxLater];
-        std::int16_t laterCost[kMaxLater][2];
-        int laterCount = 0;
+        BrushList<kMaxSolid, true> solid;  ///< nearest first: drawn so, until one does not fit
+        BrushList<kMaxLater, false> later; ///< farthest first: drawn so, among the effects
     } // namespace
 
     void WorldDraw::planBrushes()
     {
         const LevelView &view = level.view;
         const std::uint16_t frame = visFrame_;
-        solidCount = 0;
-        laterCount = 0;
+        solid.clear();
+        later.clear();
         int polygons = 0, vertices = 0;
 
         for (std::uint32_t i = 0; i < view.brushCount; ++i)
@@ -399,9 +397,16 @@ namespace hlrt
             }
             if (boxOutside(camera.planes, mins, maxs))
                 continue;
+            // (An env_render may have made it unseen, or see-through.)
+            const std::uint8_t look = brushState_ != nullptr ? brushState_[i].look : 0;
+            if (look == kBrushUnseen)
+                continue;
+            const bool opaque = brush.renderClass == static_cast<std::uint8_t>(RenderClass::Opaque) && look == 0;
             // Under pressure, the small and far are left out, as with the
-            // world's surfaces (WorldDraw.hpp).
-            if (const int detail = detailRatio())
+            // world's surfaces (WorldDraw.hpp) -- of what is see-through only:
+            // what is solid (a door, a lift) goes by its distance and the
+            // room there is, and nothing else.
+            if (const int detail = opaque ? 0 : detailRatio())
             {
                 std::int32_t size = 0;
                 for (int a = 0; a < 3; ++a)
@@ -416,55 +421,35 @@ namespace hlrt
                 }
             }
 
-            // (An env_render may have made it unseen, or see-through.)
-            const std::uint8_t look = brushState_ != nullptr ? brushState_[i].look : 0;
-            if (look == kBrushUnseen)
-                continue;
             int costPolygons = 0, costVertices = 0;
             brushCost(i, costPolygons, costVertices);
             if (costPolygons == 0)
                 continue; // (nothing of it faces the eye)
-            if (brush.renderClass == static_cast<std::uint8_t>(RenderClass::Opaque) && look == 0)
-            {
-                if (solidCount == kMaxSolid)
-                    continue;
-                solidIndex[solidCount] = static_cast<std::uint16_t>(i);
-                solidCost[solidCount][0] = static_cast<std::int16_t>(costPolygons);
-                solidCost[solidCount][1] = static_cast<std::int16_t>(costVertices);
-                ++solidCount;
-                polygons += costPolygons;
-                vertices += costVertices;
-                continue;
-            }
-            if (laterCount == kMaxLater)
-                continue;
-            polygons += costPolygons;
-            vertices += costVertices;
-            // Insert by distance, farthest first. Halved coordinates keep the
-            // squares inside 32 bits across the whole map.
+            // Halved coordinates keep the squares inside 32 bits across the
+            // whole map.
             const std::int32_t distance = (centre[0] >> 1) * (centre[0] >> 1) +
                                           (centre[1] >> 1) * (centre[1] >> 1) +
                                           (centre[2] >> 1) * (centre[2] >> 1);
-            int at = laterCount++;
-            while (at > 0 && laterDistance[at - 1] < distance)
+            polygons += costPolygons;
+            vertices += costVertices;
+            // In its list, by distance. When the list is full, the farthest
+            // is what is left out (and counted).
+            const auto out = opaque ? solid.add(static_cast<std::uint16_t>(i), distance, costPolygons, costVertices)
+                                    : later.add(static_cast<std::uint16_t>(i), distance, costPolygons, costVertices);
+            if (out.index != 0xFFFF)
             {
-                laterIndex[at] = laterIndex[at - 1];
-                laterDistance[at] = laterDistance[at - 1];
-                laterCost[at][0] = laterCost[at - 1][0];
-                laterCost[at][1] = laterCost[at - 1][1];
-                --at;
+                polygons -= out.polygons;
+                vertices -= out.vertices;
+                ++stats_.brushesOverflow;
+                ++stats_.brushesDropped;
             }
-            laterIndex[at] = static_cast<std::uint16_t>(i);
-            laterDistance[at] = distance;
-            laterCost[at][0] = static_cast<std::int16_t>(costPolygons);
-            laterCost[at][1] = static_cast<std::int16_t>(costVertices);
         }
 
-        // Set aside for them, out of what the world would have: at most a
-        // quarter of the pass (a room of nothing but brushes is still a
-        // room).
-        brushPolygons_ = polygons < polygonBudget() / 4 ? polygons : polygonBudget() / 4;
-        brushVertices_ = vertices < vertexBudget() / 4 ? vertices : vertexBudget() / 4;
+        // Set aside for them, out of what the world would have: all they
+        // cost, up to the whole pass. The world has what they leave; what is
+        // solid in view is never what goes.
+        brushPolygons_ = polygons < polygonBudget() ? polygons : polygonBudget();
+        brushVertices_ = vertices < vertexBudget() ? vertices : vertexBudget();
     }
 
     void WorldDraw::drawBrushes()
@@ -477,24 +462,32 @@ namespace hlrt
             if (stats_.polygons + cost[0] <= polygonBudget() && stats_.vertices + cost[1] <= vertexBudget())
                 return true;
             stats_.budgetHit = true;
+            ++stats_.brushesDropped;
             return false;
         };
-        for (int n = 0; n < solidCount; ++n)
+        // The solid ones nearest first, until one does not fit: nothing
+        // farther is drawn after it (HlBrushPlan.hpp).
+        const int solidDrawn = brushesThatFit(solid, polygonBudget() - stats_.polygons, vertexBudget() - stats_.vertices);
+        for (int n = 0; n < solid.count; ++n)
         {
-            if (!fits(solidCost[n]))
+            if (n >= solidDrawn)
+            {
+                stats_.budgetHit = true;
+                ++stats_.brushesDropped;
                 continue;
-            drawBrush(solidIndex[n], 0);
+            }
+            drawBrush(solid.index[n], 0);
             if (lampBrushCount_ < kMaxLampBrushes)
-                lampBrushes_[lampBrushCount_++] = solidIndex[n];
+                lampBrushes_[lampBrushCount_++] = solid.index[n];
             ++drawn;
         }
-        const int later = laterCount;
+        const int laterCount = later.count;
 
         // The see-through ones and the effects (EffectDraw) together, far
         // to near: both lists are in that order already. Each thing gets a
-        // polygon ID of its own (1..55, round and round: marks on walls,
-        // the red of being hurt, the lamp's light and the head-up display
-        // have those after): the hardware will
+        // polygon ID of its own (HlPolygonIds.hpp: round and round; marks on
+        // walls, fading models, the lamp's light and the head-up display have
+        // theirs apart): the hardware will
         // not blend two polygons of the same ID over each other, which is
         // what keeps the back of a glass box from showing through its front
         // as a darker patch -- and lets a glow show through a pane.
@@ -505,14 +498,14 @@ namespace hlrt
         lampPass();
         const int effects = effectDraw.begin();
         int k = 0, e = 0, id = 0;
-        while (k < later || e < effects)
+        while (k < laterCount || e < effects)
         {
-            id = id % 55 + 1;
-            if (e >= effects || (k < later && laterDistance[k] >= effectDraw.distance(e)))
+            id = id % kIdSeeThroughCount + kIdSeeThroughFirst;
+            if (e >= effects || (k < laterCount && later.distance[k] >= effectDraw.distance(e)))
             {
-                if (fits(laterCost[k]))
+                if (fits(later.cost[k]))
                 {
-                    drawBrush(laterIndex[k], id);
+                    drawBrush(later.index[k], id);
                     ++drawn;
                 }
                 ++k;
@@ -541,7 +534,7 @@ namespace hlrt
         // polygons it lights -- the same vertices through the same
         // matrices -- and nowhere else.
         constexpr int kDepthEqual = 1 << 14;
-        constexpr int kLampId = 62;
+        constexpr int kLampId = kIdLamp;
         int polygons = 0, vertices = 0;
 
         NEA_MaterialUse(light);
@@ -905,10 +898,15 @@ namespace hlrt
                                levelIsHeavy(level.view.header->worstPolygons, level.view.header->worstVertices);
             const bool always = say.fog == kFogAlways || (say.fog == kFogWhenNeeded && heavy);
             int want = kNoFog;
+            const int mapFar = level.loaded() ? static_cast<int>(level.view.header->farUnits) : 0;
             if (say.fog != kFogOff && say.fogStrength > 0)
             {
                 if (always)
-                    want = fogAlwaysEnd(say.fogDistance, say.drawDistance);
+                    want = fogAlwaysEnd(say.fogDistance, say.drawDistance, mapFar);
+                // (A map that is seen no farther than it is drawn: whole by
+                // then, so that where it ends is never seen.)
+                if (mapFar > 0 && mapFar < drawDistanceUnits(say.drawDistance) && mapFar < want)
+                    want = mapFar;
                 if (stats_.budgetHit)
                 {
                     const int cut = fogCutEnd(stats_.cutDistance, say.fogDistance);

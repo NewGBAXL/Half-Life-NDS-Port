@@ -91,14 +91,24 @@ namespace hlrt
             return false;
         std::fprintf(file,
                      "%s %s %s passes %lu slow %lu longest %d poly %d vert %d lines %d "
-                     "underflow %d overflow %d cut %lu pressed %lu enemies-cut %lu enemies-seen-cut %lu effects-refused %lu models-hidden %lu\n",
+                     "underflow %d overflow %d cut %lu pressed %lu enemies-cut %lu enemies-seen-cut %lu effects-refused %lu models-hidden %lu "
+                     "poly-mean %lu surfaces-cut-mean %lu.%02lu surfaces-cut-most %d brushes-dropped-mean %lu.%02lu "
+                     "brushes-dropped-most %d brushes-overflow %lu enemies-dropped %lu heap-least %luK\n",
                      map, global.isDSi ? "DSi" : "DS", mode,
                      static_cast<unsigned long>(map_.frames), static_cast<unsigned long>(map_.slow),
                      map_.vblanks, map_.polygons, map_.vertices, map_.lowLines, map_.underflows,
                      map_.overflows, static_cast<unsigned long>(map_.cut),
                      static_cast<unsigned long>(map_.pressed), static_cast<unsigned long>(map_.enemiesCut),
                      static_cast<unsigned long>(map_.enemiesSeenCut),
-                     static_cast<unsigned long>(map_.effectsRefused), static_cast<unsigned long>(map_.modelsHidden));
+                     static_cast<unsigned long>(map_.effectsRefused), static_cast<unsigned long>(map_.modelsHidden),
+                     static_cast<unsigned long>(map_.polygonsSum / map_.frames),
+                     static_cast<unsigned long>(map_.surfacesCutSum / map_.frames),
+                     static_cast<unsigned long>((map_.surfacesCutSum % map_.frames) * 100 / map_.frames),
+                     map_.surfacesCutMost, static_cast<unsigned long>(map_.brushesDroppedSum / map_.frames),
+                     static_cast<unsigned long>((map_.brushesDroppedSum % map_.frames) * 100 / map_.frames),
+                     map_.brushesDroppedMost, static_cast<unsigned long>(map_.brushesOverflowSum),
+                     static_cast<unsigned long>(map_.enemiesCutTotal),
+                     static_cast<unsigned long>(map_.heapLeast == 0xFFFFFFFFu ? 0 : map_.heapLeast / 1024));
         return std::fclose(file) == 0;
     }
 } // namespace hlrt

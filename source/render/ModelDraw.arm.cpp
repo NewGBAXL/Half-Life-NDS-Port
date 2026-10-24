@@ -10,6 +10,7 @@
 #include "Global.hpp"
 #include "HlFog.hpp"
 #include "HlLamp.hpp"
+#include "HlPolygonIds.hpp"
 #include "Settings.hpp"
 #include "data/ModelCache.hpp"
 #include "game/Game.hpp"
@@ -40,16 +41,26 @@ namespace hlrt
         /// buffer does the hiding.
         constexpr NEA_CullingEnum kCull = NEA_CULL_NONE;
 
+        /// An actor's place in the per-actor caches (ModelDraw::kActorSlots:
+        /// one each; a level with more actors is not read).
+        inline int slotOf(int actor)
+        {
+            return actor >= 0 && actor < ModelDraw::kActorSlots ? actor : ModelDraw::kActorSlots - 1;
+        }
+
         /// A model fading away (a body, a piece of one): see-through, `alpha`
         /// of 31, under a polygon ID of its own -- the hardware does not blend
         /// a see-through pixel over one of the same ID, so its own faces one
-        /// behind another do not darken each other -- with its back faces left
+        /// behind another do not darken each other, and the next fading model
+        /// takes the next of the IDs set aside (HlPolygonIds.hpp), so that two
+        /// that overlap show through each other -- with its back faces left
         /// out (a little of a thin triangle may go missing: it is going), and
         /// its depth kept, so that what is behind it stays behind it. 31: as
         /// every model is drawn.
-        constexpr int kFadeId = 60;
+        int nextFadeId = 0;
         void modelAlpha(int alpha)
         {
+            const int kFadeId = kIdFadeFirst + (alpha >= 31 ? 0 : nextFadeId++ % kIdFadeCount);
             if (alpha >= 31)
             {
                 NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(NEA_LIGHT_0 | NEA_LIGHT_1), kCull,
@@ -408,7 +419,7 @@ namespace hlrt
                     }
                     return false;
                 };
-                if (drawHidden(hiddenRun_[i & 255], hiddenLook_[i & 255], planFrame_, linesLeft, clear))
+                if (drawHidden(hiddenRun_[slotOf(i)], hiddenLook_[slotOf(i)], planFrame_, linesLeft, clear))
                 {
                     ++hidden_;
                     continue;
@@ -416,7 +427,7 @@ namespace hlrt
             }
             else
             {
-                hiddenRun_[i & 255] = 0;
+                hiddenRun_[slotOf(i)] = 0;
             }
             const int kind = drawClass(actor);
             int at = looked < kLooked ? looked : kLooked - 1;
@@ -494,7 +505,7 @@ namespace hlrt
             // (A model that was at a coarser level a moment ago stays at
             // it until it is a tenth nearer than where it would take it up:
             // otherwise one standing at the line flickers between two.)
-            const int last = lastLevel_[seen[n] & 255] - 1;
+            const int last = lastLevel_[slotOf(seen[n])] - 1;
             if (last > level && last < levels && model.header->levelError[last] * weight * 9 <= reach[n] * 3 * 10)
                 level = last;
             DrawCandidate &one = candidates[n];
@@ -507,7 +518,7 @@ namespace hlrt
             one.close = reach[n] <= static_cast<std::int32_t>(model.header->radius) * kDrawClose;
             // (Once not seen, not yet twice: the first to give way if room
             // is short.)
-            one.hidden = !one.close && hiddenRun_[seen[n] & 255] != 0;
+            one.hidden = !one.close && hiddenRun_[slotOf(seen[n])] != 0;
             for (int l = 0; l < levels; ++l)
             {
                 int p = 0, v = 0;
@@ -545,7 +556,7 @@ namespace hlrt
         {
             if (!chosen.drawn[n] || kept >= kMaxDrawn)
             {
-                lastLevel_[seen[n] & 255] = 0;
+                lastLevel_[slotOf(seen[n])] = 0;
                 continue;
             }
             // A step at a time: one drawn a frame ago goes no more than a
@@ -554,7 +565,7 @@ namespace hlrt
             // finest mesh to the coarsest. (What that costs over the plan
             // is counted below.)
             int level = chosen.level[n];
-            const int last = lastLevel_[seen[n] & 255] - 1;
+            const int last = lastLevel_[slotOf(seen[n])] - 1;
             if (last >= 0 && level > last + 1)
                 level = last + 1;
             else if (last >= 0 && level < last - 1)
@@ -564,7 +575,7 @@ namespace hlrt
                 polygons += candidates[n].polygons[level] - candidates[n].polygons[chosen.level[n]];
                 vertices += candidates[n].vertices[level] - candidates[n].vertices[chosen.level[n]];
             }
-            lastLevel_[seen[n] & 255] = static_cast<std::uint8_t>(level + 1);
+            lastLevel_[slotOf(seen[n])] = static_cast<std::uint8_t>(level + 1);
             level_[kept] = static_cast<std::uint8_t>(level);
             order[kept++] = seen[n];
         }
