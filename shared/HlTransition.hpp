@@ -384,6 +384,7 @@ namespace hldata
                 train.brush != kNoBrush)
             {
                 w.states[i].phase |= detail::kTrainDriven;
+                detail::trainShow(w, i);
                 return;
             }
         }

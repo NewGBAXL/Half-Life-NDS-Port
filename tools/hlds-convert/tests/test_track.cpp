@@ -598,15 +598,15 @@ namespace
               "a train with no controls of its own, that may be driven");
         check(!trainUse(g.logic, g.player), "USE off the train is not the train's");
         check(standOn(g, rec), "the player stands on the car");
-        check(trainUse(g.logic, g.player) && trainDriven(g.logic) == train && trainSpeedStep(g.logic) == 1,
+        check(trainUse(g.logic, g.player) && trainDriven(g.logic) == train && trainSpeedStep(g.logic) == 0,
               "USE on it takes its controls, at a standstill");
         trainControl(g.logic, g.player, 1, false, false);
         trainControl(g.logic, g.player, 1, false, false);
-        check(g.states[train].speed == fxFromInt(50) && trainSpeedStep(g.logic) == 3,
+        check(g.states[train].speed == fxFromInt(50) && trainSpeedStep(g.logic) == 2,
               "two presses of forward: half its speed");
         for (int i = 0; i < 4; ++i)
             trainControl(g.logic, g.player, 1, false, false);
-        check(g.states[train].speed == fxFromInt(100) && trainSpeedStep(g.logic) == 4, "... and no more than all of it");
+        check(g.states[train].speed == fxFromInt(100) && trainSpeedStep(g.logic) == 3, "... and no more than all of it");
         const std::uint16_t facing = car.angles[kYaw];
         // On past b: the door opens.
         for (int i = 0; i < 30 * 3 && toUnits(car.pos[0]) < -20; ++i)
@@ -622,10 +622,10 @@ namespace
         // Back: through stopped, to backwards.
         for (int i = 0; i < 4; ++i)
             trainControl(g.logic, g.player, -1, false, false);
-        check(g.states[train].speed == 0 && trainSpeedStep(g.logic) == 1, "four presses of back: stopped");
+        check(g.states[train].speed == 0 && trainSpeedStep(g.logic) == 0, "four presses of back: stopped");
         for (int i = 0; i < 6; ++i)
             trainControl(g.logic, g.player, -1, false, false);
-        check(g.states[train].speed == -fxFromInt(100) && trainSpeedStep(g.logic) == 0, "... and on to backwards");
+        check(g.states[train].speed == -fxFromInt(100) && trainSpeedStep(g.logic) == 4, "... and on to backwards");
         for (int i = 0; i < 30 * 3 && toUnits(car.pos[0]) > -200; ++i)
         {
             g.frame();
@@ -715,7 +715,7 @@ namespace
         check(trainUse(g.logic, g.player), "... and takes its controls");
         for (int i = 0; i < 3; ++i)
             trainControl(g.logic, g.player, 1, false, false);
-        check(trainSpeedStep(g.logic) == 4, "three presses: fast");
+        check(trainSpeedStep(g.logic) == 3, "three presses: fast");
         const fx from[3] = {g.brushStates[rec.brush].pos[0], g.brushStates[rec.brush].pos[1],
                             g.brushStates[rec.brush].pos[2]};
         for (int i = 0; i < 30 * 3; ++i)
@@ -728,6 +728,8 @@ namespace
         std::printf("test_track: c2a2's train went %.0f units in 3 s at the player's controls\n",
                     toUnits(fxLength(moved)));
         check(fxLength(moved) > fxFromInt(200), "it goes along its track");
+        check(g.states[train].speed == 0 && trainSpeedStep(g.logic) == 3,
+              "stopped at the end of its track, the display still shows the speed asked for (the game's)");
         check(trainDriven(g.logic) == train, "... with the player at its controls");
 
         // Into c2a2a, as though its way in were reached now.

@@ -186,14 +186,16 @@ namespace hldata
     }
 
     // ... and how a train the player drives is going (the game's
-    // sprites/640_train.spr): back, stopped, forward slow to fast, 24
-    // square, in a texture of their own that both sets use.
-    inline constexpr const char *kHudTrainFile = "ui/train.128x32.htx";
-    inline constexpr int kHudTrainWidth = 128;
+    // sprites/640_train.spr, in its frames' order: stopped, forward slow to
+    // fast, back), each 0.4 of its 72 as the 640 set's are, in a texture of
+    // their own that both sets use.
+    inline constexpr const char *kHudTrainFile = "ui/train.256x32.htx";
+    inline constexpr int kHudTrainWidth = 256;
     inline constexpr int kHudTrainHeight = 32;
+    inline constexpr int kHudTrainSide = 29;
     inline constexpr UiRect hudTrain(int n)
     {
-        return UiRect{static_cast<std::uint8_t>(24 * n), 0, 24, 24};
+        return UiRect{static_cast<std::uint8_t>(kHudTrainSide * n), 0, kHudTrainSide, kHudTrainSide};
     }
 
     // ------------------------------------------------------------- marks

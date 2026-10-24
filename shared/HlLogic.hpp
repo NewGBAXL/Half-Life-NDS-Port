@@ -2054,6 +2054,31 @@ namespace hldata
 
         /// A track train's LogicState::phase: the player has its controls.
         inline constexpr std::int32_t kTrainDriven = 1;
+        /// ... and, from bit 4, what the display shows of how it goes (the
+        /// player's m_iTrain): set as they take the controls and at each
+        /// press, not as the train goes -- one at a dead end still shows the
+        /// speed it was asked for.
+        inline constexpr int kTrainShownShift = 4;
+        inline constexpr std::int32_t kTrainShownMask = 7 << kTrainShownShift;
+
+        /// TrainSpeed (player.cpp): which of the display's pictures `speed`
+        /// of `whole` is -- the game's frames of sprites/640_train.spr: 0
+        /// stopped, 1 to 3 slow to fast, 4 backwards.
+        inline int trainPicture(fx speed, fx whole)
+        {
+            if (speed < 0)
+                return 4;
+            if (speed == 0)
+                return 0;
+            const std::int64_t hundredths = (static_cast<std::int64_t>(speed) * 100) / (whole > 0 ? whole : 1);
+            return hundredths < 33 ? 1 : (hundredths < 66 ? 2 : 3);
+        }
+        inline void trainShow(LogicWorld &w, int index)
+        {
+            LogicState &state = w.states[index];
+            state.phase = (state.phase & ~kTrainShownMask) |
+                          (trainPicture(state.speed, w.records[index].speed) << kTrainShownShift);
+        }
 
         /// It has come to a stop: its brakes (its engine is the sound loop's
         /// to stop: Sound.arm.cpp keeps it going for as long as it moves).
@@ -4332,6 +4357,7 @@ namespace hldata
                 record.brush != static_cast<std::uint16_t>(player.groundMover) || !detail::trainOnControls(w, player, i))
                 continue;
             w.states[i].phase |= detail::kTrainDriven;
+            detail::trainShow(w, i);
             if (w.heard != nullptr && w.sounds != nullptr && w.sounds[i].unlocked != kNoSound)
                 w.heard->add(w.sounds[i].unlocked, nullptr, 102, 0);
             return true;
@@ -4366,25 +4392,18 @@ namespace hldata
             quarter = 0;
         const fx was = state.speed;
         state.speed = static_cast<fx>((static_cast<std::int64_t>(record.speed) * quarter) / 4);
+        detail::trainShow(w, index);
         if (was != 0 && state.speed == 0)
             detail::trainBrakes(w, index);
     }
 
-    /// What the display shows of the train the player drives (TrainSpeed):
-    /// 0 backwards, 1 stopped, 2 to 4 slow to fast; -1 if they drive none.
+    /// What the display shows of the train the player drives: the frame of
+    /// the game's picture (detail::trainPicture), as of their last press;
+    /// -1 if they drive none.
     inline int trainSpeedStep(const LogicWorld &w)
     {
         const int index = trainDriven(w);
-        if (index < 0)
-            return -1;
-        const fx speed = w.states[index].speed;
-        const fx whole = w.records[index].speed > 0 ? w.records[index].speed : 1;
-        if (speed < 0)
-            return 0;
-        if (speed == 0)
-            return 1;
-        const std::int64_t hundredths = (static_cast<std::int64_t>(speed) * 100) / whole;
-        return hundredths < 33 ? 2 : (hundredths < 66 ? 3 : 4);
+        return index < 0 ? -1 : (w.states[index].phase & detail::kTrainShownMask) >> detail::kTrainShownShift;
     }
 } // namespace hldata
 

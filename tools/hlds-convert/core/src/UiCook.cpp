@@ -293,9 +293,9 @@ namespace hlds
         atlas.width = hldata::kHudTrainWidth;
         atlas.height = hldata::kHudTrainHeight;
         atlas.rgba.assign(static_cast<std::size_t>(atlas.width) * atlas.height * 4, 0);
-        // (Its frames are back, stopped, and forward slow to fast: 96 square,
-        // a quarter of that here -- the 320 set's 48 at half, which is 640's
-        // 0.4, near enough.)
+        // (Its frames are stopped, forward slow to fast, and back -- the
+        // display shows frame m_iTrain - 1 -- 96 square, each the 640 set's
+        // 72 (hud.txt) at 0.4 here.)
         for (int n = 0; n < 5; ++n)
         {
             const RgbaImage frame = additiveFrame(train, n);
