@@ -520,8 +520,9 @@ namespace hlrt
     {
         globals = Globals();
         for (std::size_t i = 0; i < save.globalHash.size(); ++i)
-            globals.set(save.globalHash[i], save.globalState[i] > kGlobalDead ? kGlobalOff
-                                                                              : save.globalState[i]);
+            globals.set(save.globalHash[i], save.globalState[i] > kGlobalDead && save.globalHash[i] != kGlobalPlayerGravity
+                                                ? kGlobalOff
+                                                : save.globalState[i]);
         visited_ = save.maps;
     }
 

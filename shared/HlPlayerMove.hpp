@@ -191,6 +191,12 @@ namespace hldata
                                          ((dmg & (1u << 8)) ? kHurtShock : 0));
     }
 
+    /// What carries the player besides their own going (PlayerState::push).
+    struct BaseVelocity
+    {
+        fx v[3] = {0, 0, 0};
+    };
+
     struct PlayerState
     {
         fx origin[3] = {0, 0, 0};
@@ -223,6 +229,15 @@ namespace hldata
         bool hurtKnown = false;
         /// ... and the kinds of it the display shows (kHurt*).
         Unsaved<std::uint8_t> hurtKinds;
+        /// How hard the world pulls them, in percent of sv_gravity (Xen's
+        /// trigger_gravity); 0: all of it. Not saved here: it is kept with
+        /// the game's switches (kGlobalPlayerGravity), which logicTick puts
+        /// back.
+        Unsaved<std::uint8_t> gravityPercent;
+        /// What the push fields they are in push them by this frame (Q12
+        /// units a second): their base velocity, set by logicTick. Upwards it
+        /// is an acceleration; along the ground, a carry (pm_shared's).
+        Unsaved<BaseVelocity> push;
         /// The brush entity the last move ran into sideways, as a mover
         /// index; -1 if none. What a box that can be pushed is pushed by.
         std::int16_t touchedMover = -1;
@@ -423,8 +438,28 @@ namespace hldata
             /// which makes the position exact for constant acceleration.
             void halfGravity()
             {
-                s.velocity[2] -= scaleTime(gravityOf(s), dt) / 2;
+                const int percent = s.gravityPercent.value;
+                const fx pull = percent != 0 ? static_cast<fx>((static_cast<std::int64_t>(gravityOf(s)) * percent) / 100)
+                                             : gravityOf(s);
+                s.velocity[2] -= scaleTime(pull, dt) / 2;
                 checkVelocity();
+            }
+
+            /// A push field's push up: what it adds to the speed upwards this
+            /// move (PM_AddCorrectGravity's base velocity).
+            void pushUp()
+            {
+                s.velocity[2] += scaleTime(s.push.value.v[2], dt);
+                checkVelocity();
+            }
+            /// ... and its carry along the ground: in for the move, out again
+            /// after it.
+            /// (In the water nothing of it has gone into a push up: all
+            /// three of it carry.)
+            void carry(int sign, bool all = false)
+            {
+                for (int i = 0; i < (all ? 3 : 2); ++i)
+                    s.velocity[i] += sign * s.push.value.v[i];
             }
 
             void categorizePosition()
@@ -523,6 +558,7 @@ namespace hldata
                 if (wishSpeed > kMaxSpeed)
                     wishSpeed = kMaxSpeed;
                 wishSpeed = (wishSpeed * 8) / 10;
+                carry(1, true);
 
                 // The water's drag, on all three axes.
                 const fx speed = fxLength(s.velocity);
@@ -780,6 +816,7 @@ namespace hldata
                 s.velocity[2] = 0;
                 accelerate(wishDir, wishSpeed, wishSpeed, kAccelerate);
                 s.velocity[2] = 0;
+                carry(1);
 
                 if (fxLength(s.velocity) < kFxOne)
                 {
@@ -866,6 +903,7 @@ namespace hldata
                 // makes air control weak and strafing matter.
                 accelerate(wishDir, wishSpeed, wishSpeed > kAirSpeedCap ? kAirSpeedCap : wishSpeed,
                            kAirAccelerate);
+                carry(1);
                 flyMove();
             }
 
@@ -1263,11 +1301,13 @@ namespace hldata
             state.onGround = false;
             state.groundMover = -1;
             m.waterMove(cmd);
+            m.carry(-1, true);
             m.categorizePosition();
             return;
         }
 
         m.halfGravity();
+        m.pushUp();
         m.jump(cmd);
         if (state.onGround)
         {
@@ -1282,6 +1322,7 @@ namespace hldata
             m.airMove(cmd);
 
         m.categorizePosition();
+        m.carry(-1);
         m.checkVelocity();
         m.halfGravity();
         if (state.onGround)

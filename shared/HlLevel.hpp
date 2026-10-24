@@ -52,15 +52,15 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 35;
+    inline constexpr std::uint16_t kLevelVersion = 36;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
     /// say, after the soldiers' table in Section::Speech, which a build
     /// before would refuse; 33: the round 3 monsters, kinds a build before
     /// has not got; 34: round 4's, the same; 35: round 5's, and the
-    /// tanks, mortar fields and wheels.)
-    inline constexpr std::uint16_t kLevelMinReader = 35;
+    /// tanks, mortar fields and wheels; 36: Xen's gravity volumes.)
+    inline constexpr std::uint16_t kLevelMinReader = 36;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -445,7 +445,9 @@ namespace hldata
         /// on and off; kLogicStartOpen is "starts off".
         TriggerHurt,
         /// A volume that pushes whoever is in it along `move` (Q12 units a
-        /// second).
+        /// second): the player's base velocity while they are in it, which
+        /// upwards is an acceleration (pm_shared's). kLogicFireOnce: it adds
+        /// `move` to their velocity once, and is gone.
         TriggerPush,
         /// A volume that puts whoever enters it at `move`, facing extra[0]
         /// (turns * 65536).
@@ -635,6 +637,10 @@ namespace hldata
         /// from `move`, into the actor place extra[0] (kept for him, not
         /// there until then).
         Repel,
+        /// A volume (mins/maxs) that sets how hard the world pulls the player
+        /// who touches it, for as long as nothing sets it again (Xen's
+        /// trigger_gravity): extra[0] in percent of sv_gravity.
+        TriggerGravity,
         Count
     };
     // A tank's spawnflags (LogicKind::Tank, maxs[0]): the game's.

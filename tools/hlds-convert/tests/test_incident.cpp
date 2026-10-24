@@ -591,8 +591,13 @@ namespace
         for (int a = 0; a < 3; ++a)
             g.player.origin[a] = fxFromInt((current.mins[a] + current.maxs[a]) / 2);
         const fx before[3] = {g.player.origin[0], g.player.origin[1], g.player.origin[2]};
+        // (The current is what they are carried by in their own move, as
+        // the game's base velocity: the logic says it, the move does it.)
         for (int n = 0; n < 15; ++n)
+        {
             logicTick(g.logic, g.player, 33);
+            playerMove(g.player, MoveCommand(), g.move, kPlayerTick);
+        }
         const fx moved[3] = {g.player.origin[0] - before[0], g.player.origin[1] - before[1], 0};
         const std::int64_t along = static_cast<std::int64_t>(moved[0]) * current.move[0] +
                                    static_cast<std::int64_t>(moved[1]) * current.move[1];

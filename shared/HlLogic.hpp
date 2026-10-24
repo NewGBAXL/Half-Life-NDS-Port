@@ -101,6 +101,10 @@ namespace hldata
     inline constexpr std::uint8_t kGlobalOn = 1;
     inline constexpr std::uint8_t kGlobalDead = 2;
     inline constexpr int kMaxGlobals = 32;
+    /// Not a map's switch: how hard the world pulls the player, in percent
+    /// (PlayerState::gravityPercent), kept among the switches so that it goes
+    /// into the next map and into a save as they do.
+    inline constexpr std::uint32_t kGlobalPlayerGravity = nameHash("!player_gravity");
 
     struct Globals
     {
@@ -3832,6 +3836,16 @@ namespace hldata
     inline void logicTick(LogicWorld &w, PlayerState &player, int ms)
     {
         w.lockSaidMs = w.lockSaidMs > ms ? w.lockSaidMs - ms : 0;
+        // What the push fields push them by is said again each frame; and
+        // how hard they are pulled is what the switches say (a map come into,
+        // a save loaded).
+        player.push.value = BaseVelocity();
+        if (w.globals != nullptr)
+        {
+            const int gravity = w.globals->get(kGlobalPlayerGravity);
+            if (gravity >= 0)
+                player.gravityPercent.value = static_cast<std::uint8_t>(gravity == 100 ? 0 : gravity);
+        }
         if ((w.marksDueMs -= ms) <= 0)
         {
             w.marksDueMs = 500;
@@ -3981,7 +3995,7 @@ namespace hldata
                     logicUse(w, player, i, -1, kUseOn);
             }
             else if (kind == LogicKind::TriggerHurt || kind == LogicKind::TriggerPush ||
-                     kind == LogicKind::TriggerTeleport)
+                     kind == LogicKind::TriggerTeleport || kind == LogicKind::TriggerGravity)
             {
                 const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
                                     fxFromInt(record.mins[2])};
@@ -4007,26 +4021,38 @@ namespace hldata
                     if (state.phase < 0)
                         state.phase = 0;
                 }
-                else if (kind == LogicKind::TriggerPush && inside && !state.running)
+                else if (kind == LogicKind::TriggerPush && inside && !state.running && !state.dead)
                 {
-                    // Carried along, as far as the world lets them be.
-                    const fx by[3] = {
-                        static_cast<fx>((static_cast<std::int64_t>(record.move[0]) * ms) / 1000),
-                        static_cast<fx>((static_cast<std::int64_t>(record.move[1]) * ms) / 1000),
-                        static_cast<fx>((static_cast<std::int64_t>(record.move[2]) * ms) / 1000)};
-                    const fx to[3] = {player.origin[0] + by[0], player.origin[1] + by[1],
-                                      player.origin[2] + by[2]};
-                    const Trace tr = traceAll(*w.world, player.ducked, player.origin, to);
-                    if (!tr.startSolid && !tr.allSolid)
+                    // CTriggerPush::Touch. Once: its speed added to theirs, and
+                    // it is gone. Otherwise their base velocity for as long
+                    // as they are in it (the player's move makes of it a push
+                    // up and a carry along: HlPlayerMove.hpp), what more than
+                    // one push them by added together.
+                    if (record.flags & kLogicFireOnce)
                     {
                         for (int a = 0; a < 3; ++a)
-                            player.origin[a] = tr.endPos[a];
+                            player.velocity[a] += record.move[a];
+                        if (player.velocity[2] > 0)
+                        {
+                            player.onGround = false;
+                            player.groundMover = -1;
+                        }
+                        state.dead = true;
                     }
-                    if (by[2] > 0)
+                    else
                     {
-                        player.onGround = false;
-                        player.groundMover = -1;
+                        for (int a = 0; a < 3; ++a)
+                            player.push.value.v[a] += record.move[a];
                     }
+                }
+                else if (kind == LogicKind::TriggerGravity && inside)
+                {
+                    // CTriggerGravity::GravityTouch: from now on, until
+                    // another says otherwise.
+                    const auto percent = static_cast<std::uint8_t>(record.extra[0] == 0 ? 100 : record.extra[0]);
+                    player.gravityPercent.value = static_cast<std::uint8_t>(percent == 100 ? 0 : percent);
+                    if (w.globals != nullptr)
+                        w.globals->set(kGlobalPlayerGravity, percent);
                 }
                 else if (kind == LogicKind::TriggerTeleport && inside)
                 {
@@ -4160,7 +4186,8 @@ namespace hldata
                     state.timer = record.delayMs > 0 ? static_cast<std::int32_t>(record.delayMs) : 100;
             }
             else if (kind != LogicKind::TriggerHurt && kind != LogicKind::TriggerPush &&
-                     kind != LogicKind::TriggerTeleport && kind != LogicKind::AutoSave &&
+                     kind != LogicKind::TriggerTeleport && kind != LogicKind::TriggerGravity &&
+                     kind != LogicKind::AutoSave &&
                      kind != LogicKind::ChangeLevel && kind != LogicKind::Music)
                 detail::touchedBy(w, ghost, i);
         }

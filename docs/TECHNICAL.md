@@ -102,6 +102,16 @@ Milestone 11, "levels of detail".
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
+- Xen pulls less: a `trigger_gravity` sets how hard the world pulls the
+  player who touches it (0.6 of it through most of Xen, 0.3 in the
+  Nihilanth's lair), from then on, until another sets it again. It is kept
+  with the game's switches (`kGlobalPlayerGravity`), so it goes into the
+  next map and into a save. A `trigger_push` is what the game makes of it,
+  the player's base velocity: upwards an acceleration, along the ground a
+  carry, in the water both (`PlayerState::push`, `shared/HlPlayerMove.hpp`).
+  A jump onto one of Xen's pads throws the player high, and they come down
+  on it as fast as they went up: unhurt.
+
 - A box that is pushed collides as the size it is. The map's collision
   knows only shapes a person wide, so a wider box is that shape at each of
   its corners (and between), and goes as far as the first of them to meet

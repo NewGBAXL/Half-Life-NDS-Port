@@ -1895,8 +1895,8 @@ namespace hlds
                 if (spawnflags & 256)
                     record.flags |= kLogicInstant;
             }
-            else if ((cls == "trigger_hurt" || cls == "trigger_push" ||
-                      cls == "trigger_teleport") &&
+            else if ((cls == "trigger_hurt" || cls == "trigger_push" || cls == "trigger_teleport" ||
+                      cls == "trigger_gravity") &&
                      model != nullptr &&
                      !(spawnflags & (cls == "trigger_hurt" ? 8 : (cls == "trigger_teleport" ? 2 : 0))))
             {
@@ -1923,12 +1923,23 @@ namespace hlds
                     if (spawnflags & 2)
                         record.flags |= kLogicStartOpen; // starts off
                 }
+                else if (cls == "trigger_gravity")
+                {
+                    // (The game's 0 is "as the world pulls".)
+                    make = true;
+                    record.kind = static_cast<std::uint8_t>(LogicKind::TriggerGravity);
+                    const double gravity = numberKey(entity, "gravity");
+                    record.extra[0] = static_cast<std::uint32_t>(
+                        gravity > 0 ? std::clamp(std::lround(gravity * 100), 1L, 255L) : 100L);
+                }
                 else if (cls == "trigger_push")
                 {
                     make = true;
                     record.kind = static_cast<std::uint8_t>(LogicKind::TriggerPush);
                     if (spawnflags & 2)
                         record.flags |= kLogicStartOpen; // starts off: something switches it on
+                    if (spawnflags & 1)
+                        record.flags |= kLogicFireOnce; // once, and gone
                     double direction[3];
                     moverDirection(entity, direction);
                     double speed = numberKey(entity, "speed");
