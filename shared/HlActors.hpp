@@ -31,6 +31,26 @@ namespace hldata
     inline constexpr std::uint8_t kAiDying = 5;
     inline constexpr std::uint8_t kAiDead = 6;
 
+    /// A body that fades away once it has fallen (the game's FadeMonster:
+    /// SUB_StartFadeOut, 255 to nothing at 70 a second), and is then gone:
+    /// its time to go is kept in its ActorState::cooldownMs -- which nothing
+    /// asks of the dead -- as kCorpseFading less what is left.
+    inline constexpr std::int32_t kCorpseFadeMs = 3600;
+    inline constexpr std::int32_t kCorpseFading = -1000000;
+    /// How much of its fading a body has left (ms), or -1 if it is not fading.
+    template <class Actor>
+    inline int corpseFadeLeft(const Actor &actor)
+    {
+        const std::int32_t left = kCorpseFading - actor.cooldownMs;
+        return actor.ai == kAiDead && left >= 0 && left <= kCorpseFadeMs ? static_cast<int>(left) : -1;
+    }
+    template <class Actor>
+    inline void corpseFadeStart(Actor &actor)
+    {
+        if (corpseFadeLeft(actor) < 0)
+            actor.cooldownMs = kCorpseFading - kCorpseFadeMs;
+    }
+
     /// Actors that may arrive from the map before, on top of the map's own.
     inline constexpr int kMaxVisitors = 4;
 
@@ -249,7 +269,7 @@ namespace hldata
         bool active = false;
         std::uint8_t picture = 0;
         std::uint8_t half = 4;  ///< units from its middle to its edge
-        std::uint8_t turn = 0;  ///< quarter turns, so that no two look alike
+        std::uint8_t turn = 0;  ///< quarter turns, so that no two look alike (low two bits); kDecalTheMaps
         std::int16_t brush = -1;
         std::uint16_t colour = 0;
         fx at[3] = {0, 0, 0};
@@ -258,6 +278,9 @@ namespace hldata
         /// long as its pane.
         std::int32_t leftMs = 0;
     };
+    /// Decal::turn: a mark the map put there (an infodecal), never given up
+    /// to one a fight leaves.
+    inline constexpr std::uint8_t kDecalTheMaps = 0x80;
     /// Marks of one kind are one family: a new one where one of its
     /// family already is takes that one's place (decalAdd).
     constexpr int decalFamily(std::uint8_t picture)
@@ -475,7 +498,7 @@ namespace hldata
         Gib gibs[kMaxGibs];
         Decal decals[kMaxDecals];
         int decalLimit = 24;
-        int decalNext = 0; ///< where the next mark goes: round and round
+        int decalNext = 0; ///< (no longer used: marks give way by worth, decalAdd; kept for saves)
         Piece pieces[kMaxPieces];
         int pieceLimit = 24;
         /// How long the small things and the marks last, of what they are
@@ -745,7 +768,7 @@ namespace hldata
             actor.skin = static_cast<std::uint8_t>(record.item >> kActorSkinShift);
         actor.kind = record.kind;
         actor.flags = record.flags;
-        actor.light = record.light;
+        actor.light = static_cast<std::uint8_t>(record.light & ~kActorLightFadeCorpse);
         // (An item's kind; a soldier's weapons; and for a soldier or a monster
         // that thinks, when it sets off what it sets off.)
         actor.item = record.kind == static_cast<std::uint8_t>(ActorKind::Item) ||
@@ -962,12 +985,29 @@ namespace hldata
     /// Leave a mark: `picture` (a kDecal*), `half` units from its middle to
     /// its edge, in `colour`, on the wall at `at` that faces `normal`
     /// (Q12). The oldest gives way.
+    /// What a mark is worth keeping, when one has to give way for another
+    /// (decalAdd): a bullet's hole or a blow's dent least, then blood and
+    /// spit, then a blast's scorch; and what the map put there, or a pane's
+    /// crack, most -- a passing shot never takes their place.
+    constexpr int decalWorth(const Decal &decal)
+    {
+        const int family = decalFamily(decal.picture);
+        if ((decal.turn & kDecalTheMaps) || family == 9)
+            return 3;
+        return family == 0 || family == 4 || family >= 21 ? 0 : (family == 10 ? 2 : 1);
+    }
+
     inline Decal &decalAdd(ActorWorld &a, std::uint8_t picture, const fx *at, const fx *normal, int half,
                            std::uint16_t colour, int brush = -1, bool exact = false)
     {
         const int limit = a.decalLimit < 1 ? 1 : (a.decalLimit > kMaxDecals ? kMaxDecals : a.decalLimit);
         const std::int32_t life = decalLife(picture) / 100 * a.markLifePercent;
         half = half < 1 ? 1 : (half > 64 ? 64 : half);
+        const int family = decalFamily(picture);
+        // (Holes, dents and a wall's damage: blows on one spot. Anything
+        // else -- blood, soot, spit -- is a mark where it landed, and only
+        // one that lies on top of another of its kind is that one.)
+        const bool blows = family == 0 || family == 4 || family >= 21;
         // One of its family there already -- on the same thing, facing the
         // same way, its middle within this one's reach (anywhere on the
         // pane, for a crack) -- is this one: moved to the new place and
@@ -976,7 +1016,7 @@ namespace hldata
         for (int i = 0; i < limit; ++i)
         {
             Decal &old = a.decals[i];
-            if (!old.active || old.brush != brush || decalFamily(old.picture) != decalFamily(picture))
+            if (!old.active || old.brush != brush || decalFamily(old.picture) != family)
                 continue;
             // (A mark the map put there is itself and no other: it is this
             // one only if it is this picture in this very place. Two of
@@ -989,16 +1029,18 @@ namespace hldata
                 old.leftMs = decalLife(picture) / 100 * a.markLifePercent;
                 return old;
             }
+            if (old.turn & kDecalTheMaps)
+                continue; // (... nor is anything else ever it)
             const std::int64_t facing = static_cast<std::int64_t>(old.normal[0]) * normal[0] +
                                         static_cast<std::int64_t>(old.normal[1]) * normal[1] +
                                         static_cast<std::int64_t>(old.normal[2]) * normal[2];
             if (facing < (static_cast<std::int64_t>(kFxOne) * kFxOne * 9) / 10)
                 continue;
             const fx d[3] = {old.at[0] - at[0], old.at[1] - at[1], old.at[2] - at[2]};
-            const int reach = old.half > half ? old.half : half;
-            if (decalFamily(picture) != 9 && fxLength(d) > fxFromInt(reach))
+            const int reach = blows ? (old.half > half ? old.half : half) : (old.half < half ? old.half : half) / 2;
+            if (family != 9 && fxLength(d) > fxFromInt(reach))
                 continue;
-            old.half = static_cast<std::uint8_t>(reach);
+            old.half = static_cast<std::uint8_t>(old.half > half ? old.half : half);
             old.leftMs = life;
             for (int k = 0; k < 3; ++k)
             {
@@ -1007,14 +1049,40 @@ namespace hldata
             }
             return old;
         }
-        Decal &decal = a.decals[a.decalNext % limit];
-        a.decalNext = (a.decalNext + 1) % limit;
+        // A place for it: a free one; else the one least worth keeping
+        // (what has least time left, of those), if it is worth no more than
+        // this one -- else the least of this one's own worth after all, so
+        // that a mark is never refused.
+        Decal probe;
+        probe.picture = picture;
+        probe.turn = exact ? kDecalTheMaps : 0;
+        const int worth = decalWorth(probe);
+        Decal *slot = nullptr;
+        for (int i = 0; i < limit && slot == nullptr; ++i)
+        {
+            if (!a.decals[i].active)
+                slot = &a.decals[i];
+        }
+        for (int pass = 0; pass < 2 && slot == nullptr; ++pass)
+        {
+            for (int i = 0; i < limit; ++i)
+            {
+                Decal &one = a.decals[i];
+                const int its = decalWorth(one);
+                if (pass == 0 && its > worth)
+                    continue;
+                if (slot == nullptr || its < decalWorth(*slot) ||
+                    (its == decalWorth(*slot) && one.leftMs < slot->leftMs))
+                    slot = &one;
+            }
+        }
+        Decal &decal = *slot;
         decal.active = true;
         decal.leftMs = life;
         decal.picture = picture;
         decal.half = static_cast<std::uint8_t>(half);
         a.seed = a.seed * 1664525u + 1013904223u;
-        decal.turn = static_cast<std::uint8_t>((a.seed >> 12) & 3);
+        decal.turn = static_cast<std::uint8_t>(((a.seed >> 12) & 3) | (exact ? kDecalTheMaps : 0));
         decal.brush = static_cast<std::int16_t>(brush);
         decal.colour = colour;
         for (int i = 0; i < 3; ++i)

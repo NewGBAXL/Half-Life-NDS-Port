@@ -602,15 +602,29 @@ Milestone 11, "levels of detail".
     side are never made one -- and the walls' own cracks and dents among
     them. They are the game's own decals (your `decals.wad`, cooked to
     one 256x64 texture), each drawn as one quad in its wall's plane with
-    the hardware's "same depth" test, which is what that test is for. A
-    ring of them (32 on a DS, 64 on a DSi); one on a door or a pane goes
-    with it. They are kept cheap: a new mark where one of its kind already
-    is takes that one's place (ten blows on one spot are one mark, a pane
-    has one crack, glass that never breaks takes none from a blow); each
-    fades out after twenty or forty seconds (twice that on a DSi); only
-    as many as there are are counted against the frame, and no more are
-    drawn than cover about a quarter of the screen between them. Dust flies off a wall that is hit, and now and then the
+    the hardware's "same depth" test, which is what that test is for. 32
+    of them on a DS, 64 on a DSi; one on a door or a pane goes with it.
+    They are kept cheap: a hole or a dent where one already is takes that
+    one's place (ten blows on one spot are one mark, a pane has one
+    crack, glass that never breaks takes none from a blow), and blood or
+    soot only on top of its own kind. When there is no room, what gives
+    way is what is least worth keeping -- a hole before blood, blood
+    before a scorch, and the map's own marks never -- not merely the
+    oldest, so a burst of fire does not wipe the blood off the walls. Each
+    fades over its last three seconds, after twenty or forty seconds (twice
+    that on a DSi); only as many as there are are counted against the
+    frame, and no more are drawn than cover about three fifths of the
+    screen between them on a DSi (a third on a DS) -- counted as they are
+    seen, a stain on the floor ahead as the sliver it is -- those that the
+    room runs out for, and those far off, thinning out rather than going
+    all at once. Dust flies off a wall that is hit, and now and then the
     round whines away.
+  - **Fading** -- as in the game (SUB_StartFadeOut), the pieces of a body
+    fade over their last two seconds, and so do the bodies the game fades:
+    a monster a maker made, and one the map marks to (SF_MONSTER_FADECORPSE),
+    over 3.6 seconds once it has fallen; then its place is free. A fading
+    model is drawn see-through under a polygon ID of its own, its back
+    faces left out.
   - **Breaking** -- what breaks throws pieces *of itself*: small tumbling
     patches of the broken brush's own texture (glass see-through), as
     many and as heavy as its material says, which fall, lie and go. No

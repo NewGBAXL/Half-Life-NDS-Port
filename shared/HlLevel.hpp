@@ -1289,6 +1289,9 @@ namespace hldata
     };
     inline constexpr int kActorSkinShift = 8;
     inline constexpr int kActorSquadShift = 16;
+    /// ActorRecord::light, its top bit: the map's SF_MONSTER_FADECORPSE --
+    /// dead, it fades away (the game's FadeMonster). The rest is the light.
+    inline constexpr std::uint8_t kActorLightFadeCorpse = 0x80;
 
     enum class EntityClass : std::uint16_t
     {

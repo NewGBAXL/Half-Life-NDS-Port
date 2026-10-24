@@ -253,7 +253,43 @@ namespace
             const fx spread[3] = {down[0] + fxFromInt(200 + 60 * n), down[1] + fxFromInt(40 * n), down[2]};
             markShot(a, g.move, eye, spread, false);
         }
-        check(marks() == 6, "when there is no room for another mark, the oldest gives way");
+        check(marks() == 6, "when there is no room for another mark, one gives way");
+        // What gives way is what is least worth keeping: a burst of holes
+        // takes the room of other holes, never of the blood or the scorch
+        // (a DS's 32 places).
+        {
+            for (Decal &decal : a.decals)
+                decal.active = false;
+            a.decalLimit = 32;
+            const fx up[3] = {0, 0, kFxOne};
+            const fx poolAt[3] = {fxFromInt(100), fxFromInt(100), 0}, otherPool[3] = {fxFromInt(140), fxFromInt(100), 0},
+                     scorchAt[3] = {fxFromInt(-100), fxFromInt(-100), 0}, mapAt[3] = {fxFromInt(0), fxFromInt(300), 0};
+            decalAdd(a, kDecalBlood, poolAt, up, 24, kMarkBlood);
+            decalAdd(a, kDecalBlood + 1, otherPool, up, 24, kMarkBlood);
+            decalAdd(a, kDecalScorch, scorchAt, up, 40, kMarkSoot);
+            decalAdd(a, kDecalPool, mapAt, up, 16, kMarkBlood, -1, true);
+            check(marks() == 4, "two pools forty units apart are two stains, not one moved");
+            for (int n = 0; n < 40; ++n)
+            {
+                const fx hole[3] = {fxFromInt(400 + 30 * n), fxFromInt(-400), 0};
+                decalAdd(a, kDecalShot, hole, up, 8, kMarkShot);
+            }
+            int pools = 0, scorches = 0, maps = 0;
+            for (const Decal &decal : a.decals)
+            {
+                pools += decal.active && decalFamily(decal.picture) == 5 && !(decal.turn & kDecalTheMaps);
+                scorches += decal.active && decal.picture == kDecalScorch;
+                maps += decal.active && (decal.turn & kDecalTheMaps) != 0;
+            }
+            check(marks() == 32 && pools == 2 && scorches == 1 && maps == 1,
+                  "forty holes on a DS's thirty-two places: the blood, the scorch and the map's own stain stay");
+            // ... and a stain landing on top of one is that one.
+            const fx onTop[3] = {fxFromInt(104), fxFromInt(100), 0};
+            const int had = marks();
+            decalAdd(a, kDecalBlood + 2, onTop, up, 24, kMarkBlood);
+            check(marks() == had, "blood on top of blood is the one stain");
+            a.decalLimit = 6;
+        }
         // They go: holes after a third of a minute, blood and soot after
         // two thirds -- twice that where they are kept longer.
         for (Decal &decal : a.decals)

@@ -1051,6 +1051,61 @@ namespace
         check(made.active && made.health == kGruntHealth && (made.item & 15) == (kGruntMp5 | kGruntGrenades) &&
                   made.ammo == kGruntClip,
               "used, it makes one: an MP5 and grenades, as the game gives");
+        // Killed, the one a maker made fades away once he has fallen (the
+        // game's ShouldFadeOnDeath), and his place is free after.
+        monsterHurt(g.logic, slot, made.health + 10, true);
+        int fadedAt = -1, goneAt = -1;
+        for (int ms = 0; ms < 12000 && goneAt < 0; ms += 33)
+        {
+            tickStill(g);
+            if (fadedAt < 0 && corpseFadeLeft(made) >= 0)
+                fadedAt = ms;
+            if (!made.active)
+                goneAt = ms;
+        }
+        std::printf("test_soldiers: c2a1a: the maker's soldier fades from %d ms after he is killed, gone at %d\n",
+                    fadedAt, goneAt);
+        check(fadedAt > 0 && goneAt > fadedAt + kCorpseFadeMs - 200 && goneAt < fadedAt + kCorpseFadeMs + 200,
+              "... and the one a maker made fades away once he has fallen, in the game's time");
+    }
+
+    /// The bodies a map marks to fade (SF_MONSTER_FADECORPSE) do; others lie.
+    void testFadeCorpse(const char *dir)
+    {
+        auto game = load(dir, "c4a1a");
+        if (!game)
+            return;
+        Game &g = *game;
+        g.player.origin[2] += fxFromInt(30000);
+        int fades = -1, stays = -1;
+        for (std::uint32_t i = 0; i < g.view.actorCount; ++i)
+        {
+            const ActorRecord &record = g.view.actors[i];
+            if (!actorThinks(record.kind) || (record.flags & kActorDormant) || !g.actors.states[i].active)
+                continue;
+            if ((record.light & kActorLightFadeCorpse) && fades < 0)
+                fades = static_cast<int>(i);
+            else if (!(record.light & kActorLightFadeCorpse) && stays < 0)
+                stays = static_cast<int>(i);
+        }
+        check(fades >= 0, "c4a1a has monsters its map marks to fade when dead");
+        if (fades < 0)
+            return;
+        check((g.actors.states[fades].light & kActorLightFadeCorpse) == 0, "... which are not lit any the brighter for it");
+        // (A second for them to be about, then killed: by more than they
+        // have, not so much more as to tear them apart.)
+        for (int ms = 0; ms < 1000; ms += 33)
+            tickStill(g);
+        for (int n = 0; n < 6 && g.actors.states[fades].ai < kAiDying; ++n)
+            monsterHurt(g.logic, fades, 20, true);
+        for (int n = 0; n < 6 && stays >= 0 && g.actors.states[stays].ai < kAiDying; ++n)
+            monsterHurt(g.logic, stays, 20, true);
+        for (int ms = 0; ms < 15000; ms += 33)
+            tickStill(g);
+        check(!g.actors.states[fades].active, "killed, it fades away and is gone");
+        if (stays >= 0)
+            check(g.actors.states[stays].active && g.actors.states[stays].ai == kAiDead,
+                  "... and one the map does not mark lies where it fell");
     }
 } // namespace
 
@@ -1069,6 +1124,7 @@ int main()
         testLauncher(dir);
         testCasingNeeds(dir);
         testShotgun(dir);
+        testFadeCorpse(dir);
         testMade(dir);
     }
     else

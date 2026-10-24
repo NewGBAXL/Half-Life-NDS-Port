@@ -38,7 +38,7 @@ namespace hlrt
         /// Returns how many it drew.
         int drawDecals();
         /// The most marks drawn in a pass (half of it on a DS).
-        static constexpr int kDecalPolygons = 32;
+        static constexpr int kDecalPolygons = 48;
         /// The small things that are solid (specks, casings, the pieces of
         /// what is not glass), in as few runs as there are textures among
         /// them. With the marks. Returns how many triangles it drew.

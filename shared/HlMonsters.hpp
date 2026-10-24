@@ -975,6 +975,15 @@ namespace hldata
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
             ActorWorld &a = *w.actors;
+            // Its children who have fallen fade away (ShouldFadeOnDeath: one
+            // that came from a spawner does), and their places are free once
+            // they are gone.
+            for (int n = 0; n < static_cast<int>(record.extra[1]); ++n)
+            {
+                const int child = static_cast<int>(record.extra[0]) + n;
+                if (child < a.count && a.states[child].active && a.states[child].ai == kAiDead)
+                    corpseFadeStart(a.states[child]);
+            }
             if (state.dead)
                 return;
             bool make = false;
@@ -997,11 +1006,17 @@ namespace hldata
             for (int n = 0; n < count && first + n < a.recordCount; ++n)
             {
                 const ActorState &there = a.states[first + n];
-                if (!there.active || there.ai == kAiDead)
+                if (there.active && there.ai != kAiDead)
+                    continue;
+                if (!there.active)
                 {
                     slot = first + n;
                     break;
                 }
+                // (A body still fading: its place, if no other is free --
+                // the game makes the next while the last is going.)
+                if (slot < 0 && there.ai == kAiDead)
+                    slot = first + n;
             }
             if (slot < 0)
             {
@@ -3028,6 +3043,24 @@ namespace hldata
         }
         for (int k = 0; k < 3; ++k)
             a.foe[k] = player.origin[k];
+        // The bodies that fade: on towards nothing, and gone at the end.
+        for (int i = 0; i < a.count; ++i)
+        {
+            ActorState &body = a.states[i];
+            const int left = body.active ? corpseFadeLeft(body) : -1;
+            if (left < 0)
+                continue;
+            if (left <= ms)
+            {
+                body.active = false;
+                body.flags &= static_cast<std::uint8_t>(~kActorSolid);
+                actorPlaceBox(a, i);
+            }
+            else
+            {
+                body.cooldownMs += ms;
+            }
+        }
         aiWorldTick(w, player, ms);
         if (a.noiseMs > 0)
             a.noiseMs -= ms;

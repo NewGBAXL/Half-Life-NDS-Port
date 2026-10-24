@@ -2977,6 +2977,9 @@ namespace hlds
             actor.light = 24;
             if (static_cast<int>(numberKey(entity, "spawnflags")) & 16)
                 actor.flags |= kActorPrisoner;
+            // (SF_MONSTER_FADECORPSE: its body fades once it has fallen.)
+            if (entity.className().rfind("monster_", 0) == 0 && (static_cast<int>(numberKey(entity, "spawnflags")) & 512))
+                actor.light |= kActorLightFadeCorpse;
             const std::string actorClass = lowered(entity.className());
             if (info.kind == ActorKind::Grunt)
             {

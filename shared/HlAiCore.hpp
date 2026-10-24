@@ -2579,6 +2579,11 @@ namespace hldata
         c.m.deadflag = 2; // DEAD_DEAD
         c.me.ai = kAiDead;
         aiSound(c.a, kSoundCarcass, c.me.pos, 384, 30000);
+        // (One the map marks to fade does: ShouldFadeOnDeath. A maker's
+        // children are its to fade: makerTick.)
+        if (c.a.records != nullptr && c.index < c.a.recordCount &&
+            (c.a.records[c.index].light & kActorLightFadeCorpse))
+            corpseFadeStart(c.me);
     }
 
     /// Killed

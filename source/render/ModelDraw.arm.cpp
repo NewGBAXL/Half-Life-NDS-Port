@@ -40,6 +40,27 @@ namespace hlrt
         /// buffer does the hiding.
         constexpr NEA_CullingEnum kCull = NEA_CULL_NONE;
 
+        /// A model fading away (a body, a piece of one): see-through, `alpha`
+        /// of 31, under a polygon ID of its own -- the hardware does not blend
+        /// a see-through pixel over one of the same ID, so its own faces one
+        /// behind another do not darken each other -- with its back faces left
+        /// out (a little of a thin triangle may go missing: it is going), and
+        /// its depth kept, so that what is behind it stays behind it. 31: as
+        /// every model is drawn.
+        constexpr int kFadeId = 60;
+        void modelAlpha(int alpha)
+        {
+            if (alpha >= 31)
+            {
+                NEA_PolyFormat(31, 0, static_cast<NEA_LightEnum>(NEA_LIGHT_0 | NEA_LIGHT_1), kCull,
+                               worldDraw.polygonMode());
+                return;
+            }
+            NEA_PolyFormat(alpha < 1 ? 1 : alpha, kFadeId, static_cast<NEA_LightEnum>(NEA_LIGHT_0 | NEA_LIGHT_1),
+                           NEA_CULL_FRONT,
+                           static_cast<NEA_OtherFormatEnum>(static_cast<int>(worldDraw.polygonMode()) | NEA_TRANS_DEPTH_UPDATE));
+        }
+
         /// How many steps to pose an actor; lower is better.
         /// 256: full frame, 128: half frame, 64: quarter frame.
         constexpr std::uint32_t kPoseStep = 64;
@@ -771,7 +792,13 @@ namespace hlrt
             // and of yaw to make up for it).
             const fx over[9] = {cosine, sine, 0, sine, -cosine, 0, 0, 0, -kFxOne};
             const bool ceiling = isTurret(actor.kind) && (actor.flags & kActorCeiling) != 0;
+            // (A body the game fades: as much of it as is left.)
+            const int fading = corpseFadeLeft(actor);
+            if (fading >= 0)
+                modelAlpha(1 + (fading * 30) / kCorpseFadeMs);
             drawActor(actor, model, actor.model, ceiling ? over : turn, order[n], level_[n]);
+            if (fading >= 0)
+                modelAlpha(31);
             ++drawn;
         }
         // The pieces: each a model of its own for the moment, turned as it
@@ -795,8 +822,14 @@ namespace hlrt
             fxSinCos(gib.yaw, sy, cy);
             fxSinCos(gib.pitch, sp, cp);
             const fx turn[9] = {fxMul(cy, cp), -sy, fxMul(cy, sp), fxMul(sy, cp), cy, fxMul(sy, sp), -sp, 0, cp};
+            // (Its last two seconds it fades: SUB_StartFadeOut.)
+            const bool fading = gib.leftMs < 2000;
+            if (fading)
+                modelAlpha(1 + (gib.leftMs * 30) / 2000);
             drawActor(piece, actors.models[gib.model], gib.model, turn, -3 - static_cast<int>(gib.model),
                       actors.models[gib.model].levelCount() - 1);
+            if (fading)
+                modelAlpha(31);
         }
         // The casings: each the game's model of it, turned about as it
         // tumbles in the air, and lying flat once it has come to rest.

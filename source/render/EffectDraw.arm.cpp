@@ -629,13 +629,22 @@ namespace hlrt
         constexpr int kDepthEqual = 1 << 14;
         constexpr int kDecalId = 56;
         // No more of them than this much of the screen between them (in
-        // pixels, about a quarter of it): see-through things one on
+        // pixels, as they are seen: a stain on the floor far ahead covers a
+        // sliver of what it would face on): see-through things one on
         // another are what the hardware runs out of time on.
-        // (Half of both when an enemy has had to be made room for this
-        // frame: the stains give way before it does.)
-        const int tight = modelDraw.strained() ? 1 : 0;
-        const int kMostArea = (isDSiMode() ? 22000 : 14000) >> tight;
-        const int most = (isDSiMode() ? kDecalPolygons : kDecalPolygons / 2) >> tight;
+        // (A quarter less of both when an enemy has had to be made room for
+        // this frame: the stains give way before it does.)
+        const bool tight = modelDraw.strained();
+        int kMostArea = isDSiMode() ? 30000 : 18000;
+        int most = isDSiMode() ? kDecalPolygons : kDecalPolygons / 2;
+        if (tight)
+        {
+            kMostArea -= kMostArea / 4;
+            most -= most / 4;
+        }
+        // (The last fifth of the room is drawn thinning out, so that a mark
+        // the room runs out for goes over a few frames, not at once.)
+        const int softArea = kMostArea - kMostArea / 5;
         const BrushState *brushes = game.brushStates();
         int drawn = 0, area = 0;
         bool bound = false;
@@ -687,6 +696,11 @@ namespace hlrt
             const std::int32_t far = decal.half * 60 + 200;
             if (facing <= 0 || d[0] > far || d[0] < -far || d[1] > far || d[1] < -far || d[2] > far || d[2] < -far)
                 continue;
+            // (How far, as the limit just above measures it: in the last
+            // quarter of the way to it, it thins out.)
+            std::int32_t away = d[0] < 0 ? -d[0] : d[0];
+            away = (d[1] < 0 ? -d[1] : d[1]) > away ? (d[1] < 0 ? -d[1] : d[1]) : away;
+            away = (d[2] < 0 ? -d[2] : d[2]) > away ? (d[2] < 0 ? -d[2] : d[2]) : away;
             const std::int16_t centre[3] = {static_cast<std::int16_t>(fxToInt(at[0] + decal.normal[0] * 2)),
                                             static_cast<std::int16_t>(fxToInt(at[1] + decal.normal[1] * 2)),
                                             static_cast<std::int16_t>(fxToInt(at[2] + decal.normal[2] * 2))};
@@ -698,15 +712,31 @@ namespace hlrt
                 camera.apply();
                 NEA_MaterialUse(atlas);
             }
-            // (About how much of the screen it is: its width in pixels,
-            // squared -- 128 pixels to a unit at a unit's distance.)
+            // (About how much of the screen it is: its width in pixels --
+            // 128 pixels to a unit at a unit's distance -- by its height, which
+            // is that as much less as it is seen edge-on; neither more than
+            // the screen.)
             {
                 const std::int32_t depth = -(d[0] * camera.forward[0] + d[1] * camera.forward[1] + d[2] * camera.forward[2]) >> 12;
                 const int across = (decal.half * 2 * 128) / (depth < 8 ? 8 : depth);
-                area += (across > 256 ? 256 : across) * (across > 192 ? 192 : across);
+                const fx toEye[3] = {fxFromInt(d[0]), fxFromInt(d[1]), fxFromInt(d[2])};
+                const std::int32_t length = fxToInt(fxLength(toEye));
+                // (`facing` is Q12 units: over the length, the cosine in 4096ths.)
+                const int cosine = length > 0 ? static_cast<int>(facing / length) : 4096;
+                const int wide = across > 256 ? 256 : across;
+                int high = static_cast<int>((static_cast<std::int64_t>(across) * cosine) >> 12);
+                high = high > 192 ? 192 : (high < 1 ? 1 : high);
+                area += wide * high;
             }
-            // (Its last second it fades.)
-            const int alpha = decal.leftMs >= 1000 ? 31 : 1 + (decal.leftMs * 30) / 1000;
+            // Its last three seconds it fades; and as it nears where it is no
+            // longer drawn, by distance or for want of room.
+            int alpha = decal.leftMs >= 3000 ? 31 : 1 + (decal.leftMs * 30) / 3000;
+            const std::int32_t thinFrom = far - far / 4;
+            if (away > thinFrom)
+                alpha = alpha * (far - away) / (far - thinFrom);
+            if (area > softArea)
+                alpha = alpha * (kMostArea - area) / (kMostArea - softArea);
+            alpha = alpha < 1 ? 1 : (alpha > 31 ? 31 : alpha);
             NEA_PolyFormat(alpha, kDecalId, static_cast<NEA_LightEnum>(0), NEA_CULL_NONE,
                            static_cast<NEA_OtherFormatEnum>(static_cast<int>(worldDraw.polygonMode()) | kDepthEqual));
             // Two directions across the wall.
