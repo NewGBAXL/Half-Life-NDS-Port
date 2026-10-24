@@ -85,6 +85,20 @@ Milestone 11, "levels of detail".
   the station in c0a0e by itself, platforms that lower the tram included.
   A lift goes on along the next map's own path, even where the two maps'
   corners do not line up (c1a3a's and c1a3b's; `liftCornerAhead`).
+- A track train the map lets the player drive (all but those it marks
+  NOCONTROL, and those whose track has taken them over) is driven as in the
+  game: USE, standing on it -- anywhere in it, or, where the map has a
+  `func_traincontrols` (c2a2g's and c2a3's crash train), in that box, cooked
+  into the train's record in its own space -- takes the controls, and a
+  press of forward or back steps its speed a quarter at a time, through
+  stopped to backwards (never backwards for one marked FORWARDONLY). Backing
+  up, it runs back along its track, facing as it faced, and a node it backs
+  past fires again. USE, a jump, a step aside or getting off lets go; the
+  train goes on as it was going. The display shows the game's picture of how
+  it goes (back, stopped, three speeds), and the controls are kept across a
+  level change and in a save (`trainUse`, `trainControl`,
+  `shared/HlLogic.hpp`). Track trains have the game's engine sound, higher
+  the faster they go, and brakes.
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
@@ -827,8 +841,8 @@ the game's code left in the program.
 ## Not yet
 
 Friends who follow and talk; the rest of the game's weapons;
-`func_traincontrols` (a train is not driven); `env_bubbles`; the suit's voice, the chatter of scientists
-and guards, the sounds of trains and lifts. Soldiers fight the player only
+`env_bubbles`; the suit's voice, the chatter of scientists
+and guards; a track train's starting sound. Soldiers fight the player only
 (not the aliens), do not drop their guns, and are
 not eaten by barnacles; the player cannot yet lay a tripmine. What breaks
 still comes apart into plain scraps (it is monsters, and what the maps throw

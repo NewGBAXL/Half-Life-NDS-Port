@@ -73,7 +73,7 @@ namespace hlds
                 "func_tank", "func_tanklaser", "func_tankrocket", "func_tankmortar", "func_tankcontrols",
                 "func_mortar_field", "momentary_rot_button", "momentary_door", "monster_tentacle",
                 "monster_apache", "monster_bigmomma", "info_bigmomma", "monster_nihilanth",
-                "monster_flyer_flock", "monster_grunt_repel"};
+                "monster_flyer_flock", "monster_grunt_repel", "func_traincontrols"};
             for (const char *name : kClasses)
             {
                 if (cls == name)
@@ -1809,6 +1809,8 @@ namespace hlds
                     static_cast<std::uint32_t>(fxFromDouble(numberKey(entity, "startspeed")));
                 if (spawnflags & 2)
                     record.flags |= kLogicSelfDriven;
+                if (spawnflags & 4)
+                    record.flags |= kLogicForwardOnly;
                 trainCorner = trackNode(entity.value("target"));
             }
             else if ((cls == "func_trackautochange" || cls == "func_trackchange") &&
@@ -2747,6 +2749,24 @@ namespace hlds
                 if (stop >= 1 && stop <= 8)
                     sound.stop = soundIndex(kStops[stop], false);
             }
+            else if (cls == "func_tracktrain")
+            {
+                // Its engine for as long as it goes, its brakes as it stops
+                // (plats.cpp's Precache and StopSound); and what the player
+                // hears taking its controls, said as "what it says when it
+                // works for them".
+                static const char *const kEngines[] = {"",
+                                                       "plats/ttrain1.wav", "plats/ttrain2.wav", "plats/ttrain3.wav",
+                                                       "plats/ttrain4.wav", "plats/ttrain6.wav", "plats/ttrain7.wav"};
+                const int engine = static_cast<int>(numberKey(entity, "sounds"));
+                if (engine >= 1 && engine <= 6)
+                {
+                    sound.move = soundIndex(kEngines[engine], true);
+                    sound.stop = soundIndex("plats/ttrain_brake1.wav", false);
+                }
+                if (!(spawnflags & 2))
+                    sound.unlocked = soundIndex("plats/train_use1.wav", false);
+            }
             else if (cls == "func_breakable" || cls == "func_pushable")
             {
                 static const char *const kBreaks[] = {
@@ -3175,6 +3195,38 @@ namespace hlds
             item.light = 24;
             item.item = static_cast<std::uint32_t>(ItemKind::Glock);
             out.actors.push_back(item);
+        }
+
+        // Where a train is driven from (CFuncTrainControls::Find and the
+        // train's SetControls): the box of the func_traincontrols that names
+        // it, as it is at the start, which is the train's own space as built.
+        for (std::size_t c = 0; c < entities.size(); ++c)
+        {
+            const Entity &controls = entities[c];
+            if (controls.className() != "func_traincontrols" || controls.value("target").empty())
+                continue;
+            const std::string text(controls.value("model"));
+            const int index = text.size() >= 2 && text[0] == '*' ? std::atoi(text.c_str() + 1) : 0;
+            if (index <= 0 || index >= static_cast<int>(bsp.models.size()))
+                continue;
+            const BspModel &model = bsp.models[index];
+            double at[3] = {0, 0, 0};
+            controls.vec3("origin", at);
+            for (std::size_t t = 0; t < entities.size(); ++t)
+            {
+                const int r = out.recordOfEntity[t];
+                if (r < 0 || entities[t].value("targetname") != controls.value("target") ||
+                    out.records[r].kind != static_cast<std::uint8_t>(LogicKind::TrackTrain))
+                    continue;
+                for (int a = 0; a < 3; ++a)
+                {
+                    out.records[r].mins[a] = static_cast<std::int16_t>(
+                        std::clamp(std::floor(model.mins[a] + at[a]), -32768.0, 32767.0));
+                    out.records[r].maxs[a] = static_cast<std::int16_t>(
+                        std::clamp(std::ceil(model.maxs[a] + at[a]), -32768.0, 32767.0));
+                }
+                break;
+            }
         }
 
         // Lists. A multi_manager's outputs are known; a multisource's inputs

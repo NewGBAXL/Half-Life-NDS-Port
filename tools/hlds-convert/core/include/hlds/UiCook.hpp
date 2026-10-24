@@ -55,6 +55,10 @@ namespace hlds
     RgbaImage hudAtlas640(const SprFile &hud7, const SprFile &hud8, const SprFile &hud9, const SprFile &pain,
                           const SprFile &crosshairs);
 
+    /// The pictures of how a train the player drives is going (HlUi.hpp:
+    /// kHudTrainFile), from sprites/640_train.spr.
+    RgbaImage hudTrainPictures(const SprFile &train);
+
     /// The weapons' pictures for the touch screen's slots (HlUi.hpp:
     /// IconsHeader and what follows), from the game's 320-wide set
     /// (sprites/320hud1.spr): what each picture fills of its box, fitted

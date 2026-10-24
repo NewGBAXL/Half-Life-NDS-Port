@@ -94,6 +94,13 @@ namespace hldata
     inline constexpr int kHud640CrosshairX = kHud640Width / 2 - kHud640CrosshairSide / 2;
     inline constexpr int kHud640CrosshairY = kHud640Height / 2 - kHud640CrosshairSide / 2;
 
+    // A driven train's speed (train.cpp): a third of the way across and a
+    // quarter of its picture on, its picture and a digit's height above the
+    // bottom.
+    inline constexpr int kHud640TrainSide = 72;
+    inline constexpr int kHud640TrainX = kHud640Width / 3 + kHud640TrainSide / 4;
+    inline constexpr int kHud640TrainY = kHud640Height - kHud640TrainSide - kHud640FontHeight;
+
     /// The digits of `value` (0..999) in a field of three from `x640`: how
     /// many of the three are drawn (the last always, the others when they
     /// are not leading zeros); digit `k` (0 the hundreds) is at

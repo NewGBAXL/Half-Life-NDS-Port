@@ -756,6 +756,18 @@ namespace hlrt
         }
     }
 
+    namespace
+    {
+        /// A track train's engine's pitch, in percent (plats.cpp's
+        /// UpdateSound: 60 standing, 200 at a thousand units a second).
+        int trainPitch(fx speed)
+        {
+            const int units = fxToInt(speed < 0 ? -speed : speed);
+            const int pitch = 60 + units * (200 - 60) / 1000;
+            return pitch > 200 ? 200 : pitch;
+        }
+    } // namespace
+
     void Sound::loopsTick()
     {
         const LevelView &view = level.view;
@@ -769,13 +781,16 @@ namespace hlrt
             const LogicRecord &record = view.logic[i];
             const bool ambient = record.kind == static_cast<std::uint8_t>(LogicKind::Ambient) &&
                                  (record.flags & kLogicToggle);
-            // (Something that turns hums for as long as it does.)
-            const bool turning = record.kind == static_cast<std::uint8_t>(LogicKind::Rotating) &&
+            // (Something that turns hums for as long as it does; a track
+            // train's engine runs for as long as it goes.)
+            const bool train = record.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain);
+            const bool turning = (record.kind == static_cast<std::uint8_t>(LogicKind::Rotating) || train) &&
                                  view.logicSoundCount > i && view.logicSounds[i].move != kNoSound;
             if (!ambient && !turning)
                 continue;
             const std::uint32_t sample = ambient ? record.extra[0] : view.logicSounds[i].move;
-            const bool on = game.logic.states[i].running && !game.logic.states[i].dead;
+            const bool on = (train ? game.logic.states[i].speed != 0 : game.logic.states[i].running) &&
+                            !game.logic.states[i].dead;
             if (!on && played_ != nullptr)
                 played_[i >> 5] &= ~(1u << (i & 31));
             if (!on || sample >= static_cast<std::uint32_t>(count_) || clips_[sample].data == nullptr)
@@ -863,6 +878,16 @@ namespace hlrt
                 voice.pan = static_cast<std::uint8_t>(wantPan[found]);
                 NEA_SfxSetPanning(voice.handle, static_cast<mm_byte>(voice.pan * 2));
             }
+            // (A train's engine is higher the faster it goes.)
+            if (view.logic[want[found]].kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) && !paused_)
+            {
+                const int rate = (1024 * trainPitch(game.logic.states[want[found]].speed)) / 100;
+                if (rate - voice.rate > 16 || voice.rate - rate > 16)
+                {
+                    voice.rate = static_cast<std::uint16_t>(rate);
+                    NEA_SfxSetRate(voice.handle, voice.rate);
+                }
+            }
         }
         for (int n = 0; n < wanted; ++n)
         {
@@ -873,8 +898,10 @@ namespace hlrt
             const int sample = static_cast<int>(ambient ? record.extra[0] : view.logicSounds[want[n]].move);
             const Clip &clip = clips_[sample];
             const bool round = clip.header.repeat == MM_SREPEAT_FORWARD;
+            const bool train = record.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain);
             const int v = start(SoundLayer::Ambience, sample, clip, wantVolume[n], wantPan[n], round, want[n],
-                                ambient && record.pad != 0 ? record.pad : 100);
+                                train ? trainPitch(game.logic.states[want[n]].speed)
+                                      : (ambient && record.pad != 0 ? record.pad : 100));
             if (v >= 0 && !round && played_ != nullptr)
                 played_[want[n] >> 5] |= 1u << (want[n] & 31);
         }

@@ -1893,6 +1893,53 @@ namespace hldata
             return at;
         }
 
+        /// The node whose stretch leads INTO `node` (its path_track's
+        /// "previous"), or kNoCorner.
+        inline std::uint16_t trackPrevious(const LogicWorld &w, std::uint16_t node)
+        {
+            for (int c = 0; c < w.cornerCount; ++c)
+            {
+                if (w.corners[c].next == node && c != node)
+                    return static_cast<std::uint16_t>(c);
+            }
+            return kNoCorner;
+        }
+
+        /// trackAhead backwards: the point `dist` further BACK along the
+        /// track from `p`, which is on the stretch that leaves `node`.
+        /// Returns the node whose stretch it is then on; or kNoCorner if the
+        /// track's start comes first, `p` is left there, and `start` says
+        /// which node that is.
+        inline std::uint16_t trackBehind(const LogicWorld &w, std::uint16_t node, fx *p, fx dist, bool move,
+                                         std::uint16_t &start)
+        {
+            std::uint16_t at = node;
+            start = node;
+            for (int guard = 0; dist > 0 && guard < 256; ++guard)
+            {
+                const fx *to = w.corners[at].pos;
+                const fx dir[3] = {to[0] - p[0], to[1] - p[1], to[2] - p[2]};
+                const fx length = fxLength(dir);
+                if (length > dist)
+                {
+                    for (int a = 0; a < 3; ++a)
+                        p[a] += static_cast<fx>((static_cast<std::int64_t>(dir[a]) * dist) / length);
+                    return at;
+                }
+                dist -= length;
+                for (int a = 0; a < 3; ++a)
+                    p[a] = to[a];
+                const std::uint16_t prev = trackPrevious(w, at);
+                if (!nodeOpen(w, prev, move))
+                {
+                    start = at;
+                    return kNoCorner;
+                }
+                at = prev;
+            }
+            return at;
+        }
+
         /// Whether the player is IN a car: inside the box it was built as,
         /// taken in the car's own space, since it turns.
         inline bool playerAboard(const LogicWorld &w, const PlayerState &player, int index)
@@ -2001,6 +2048,23 @@ namespace hldata
             return true;
         }
 
+        /// A track train's LogicState::phase: the player has its controls.
+        inline constexpr std::int32_t kTrainDriven = 1;
+
+        /// It has come to a stop: its brakes (its engine is the sound loop's
+        /// to stop: Sound.arm.cpp keeps it going for as long as it moves).
+        inline void trainBrakes(LogicWorld &w, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            if (w.heard == nullptr || w.sounds == nullptr || w.sounds[index].stop == kNoSound ||
+                record.brush == kNoBrush)
+                return;
+            const MoverHull &hull = w.movers[record.brush];
+            const fx at[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,
+                              (hull.mins[2] + hull.maxs[2]) / 2};
+            w.heard->add(w.sounds[index].stop, at, 127, kRadiusLarge);
+        }
+
         inline void trackTrainTick(LogicWorld &w, PlayerState &player, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
@@ -2014,9 +2078,13 @@ namespace hldata
             const fx pos[3] = {brush.pos[0], brush.pos[1], brush.pos[2]};
 
             // Where it will be a tenth of a second on, along the track: it
-            // heads for that, covering this tick's share of the tenth.
+            // heads for that, covering this tick's share of the tenth. (Driven
+            // backwards, back along it.)
+            const bool backwards = state.speed < 0;
             fx ahead[3] = {pos[0], pos[1], pos[2] - height};
-            const std::uint16_t next = trackAhead(w, node, ahead, state.speed / 10, true);
+            std::uint16_t start = node;
+            const std::uint16_t next = backwards ? trackBehind(w, node, ahead, -state.speed / 10, true, start)
+                                                 : trackAhead(w, node, ahead, state.speed / 10, true);
             ahead[2] += height;
 
             if (next == kNoCorner)
@@ -2025,7 +2093,8 @@ namespace hldata
                 // and there it stops and says so.
                 const fx left[3] = {ahead[0] - pos[0], ahead[1] - pos[1], ahead[2] - pos[2]};
                 const fx distance = fxLength(left);
-                const fx step = static_cast<fx>((static_cast<std::int64_t>(state.speed) * ms) / 1000);
+                const fx step = static_cast<fx>(
+                    (static_cast<std::int64_t>(backwards ? -state.speed : state.speed) * ms) / 1000);
                 if (distance > step && step > 0)
                 {
                     fx to[3];
@@ -2037,9 +2106,12 @@ namespace hldata
                 }
                 carryBrush(w, player, record.brush, ahead, brush.angles[kYaw]);
                 state.speed = 0;
+                trainBrakes(w, index);
                 std::uint16_t last = node;
-                for (int guard = 0; guard < 256 && nodeOpen(w, w.corners[last].next, true); ++guard)
+                for (int guard = 0; guard < 256 && !backwards && nodeOpen(w, w.corners[last].next, true); ++guard)
                     last = w.corners[last].next;
+                if (backwards)
+                    last = start;
                 state.bits = last;
                 logicFire(w, player, w.corners[last].netName, index, kUseToggle, 0);
                 return;
@@ -2062,18 +2134,23 @@ namespace hldata
 
             if (next != node)
             {
-                // Onto the next stretch: its node has things to say.
+                // Onto the next stretch: its node has things to say -- going
+                // backwards, the node it has just gone back past.
                 state.bits = next;
-                const PathCorner &passed = w.corners[next];
-                const bool spent = w.cornerState != nullptr && (w.cornerState[next] & kNodeSpent);
+                const std::uint16_t said = backwards ? node : next;
+                const PathCorner &passed = w.corners[said];
+                const bool spent = w.cornerState != nullptr && (w.cornerState[said] & kNodeSpent);
                 if (passed.flags & kCornerDisableTrain)
+                {
                     state.running = true; // from here on the track drives it
+                    state.phase &= ~kTrainDriven;
+                }
                 if (((record.flags & kLogicSelfDriven) || state.running) && passed.speed != 0)
                     state.speed = passed.speed;
                 if (passed.fireTarget != 0 && !spent)
                 {
                     if ((passed.flags & kCornerFireOnce) && w.cornerState != nullptr)
-                        w.cornerState[next] |= kNodeSpent;
+                        w.cornerState[said] |= kNodeSpent;
                     logicFire(w, player, passed.fireTarget, index, kUseToggle, 0);
                 }
             }
@@ -3186,6 +3263,7 @@ namespace hldata
             else if (useType != kUseOn)
             {
                 state.speed = 0;
+                detail::trainBrakes(w, index);
             }
             break;
 
@@ -4148,6 +4226,138 @@ namespace hldata
             }
         }
         return best;
+    }
+
+    // ------------------------------------------------------------------ driving the tram
+    //
+    // The player at a track train's controls (player.cpp's PFLAG_ONTRAIN and
+    // plats.cpp's Use with USE_SET): forward and back step its speed a
+    // quarter of its whole at a press, through stopped to backwards. What
+    // has them is the train's own state (LogicState::phase).
+
+    /// The track train the player is driving, or -1.
+    inline int trainDriven(const LogicWorld &w)
+    {
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) &&
+                (w.states[i].phase & detail::kTrainDriven))
+                return i;
+        }
+        return -1;
+    }
+
+    namespace detail
+    {
+        /// CFuncTrackTrain::OnControls: whether the player stands where train
+        /// `index` is driven from -- its func_traincontrols, in its own
+        /// space as it turns; with none, anywhere in it and up to 72 units
+        /// above.
+        inline bool trainOnControls(const LogicWorld &w, const PlayerState &player, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            const LogicState &state = w.states[index];
+            if (record.brush == kNoBrush || (record.flags & kLogicSelfDriven) || state.running || state.dead ||
+                state.move == kCarried)
+                return false;
+            const Brush &built = w.brushes[record.brush];
+            const bool own = record.mins[0] != 0 || record.mins[1] != 0 || record.mins[2] != 0 ||
+                             record.maxs[0] != 0 || record.maxs[1] != 0 || record.maxs[2] != 0;
+            fx local[3];
+            toMoverSpace(w.movers[record.brush], player.origin, local);
+            for (int a = 0; a < 3; ++a)
+            {
+                const fx lo = fxFromInt(own ? record.mins[a] : built.mins[a]) - built.origin[a];
+                const fx hi = fxFromInt(own ? record.maxs[a] : built.maxs[a] + (a == 2 ? 72 : 0)) - built.origin[a];
+                if (local[a] < lo || local[a] > hi)
+                    return false;
+            }
+            return true;
+        }
+    } // namespace detail
+
+    /// Let go of the train, if the player is driving one. It goes on as it
+    /// was going.
+    inline void trainRelease(LogicWorld &w)
+    {
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::TrackTrain))
+                w.states[i].phase &= ~detail::kTrainDriven;
+        }
+    }
+
+    /// USE: standing on a train at its controls, take them; having them,
+    /// let go. False if neither: USE is something else's.
+    inline bool trainUse(LogicWorld &w, const PlayerState &player)
+    {
+        if (trainDriven(w) >= 0)
+        {
+            trainRelease(w);
+            return true;
+        }
+        if (!player.onGround || player.groundMover < 0)
+            return false;
+        for (int i = 0; i < w.recordCount; ++i)
+        {
+            const LogicRecord &record = w.records[i];
+            if (record.kind != static_cast<std::uint8_t>(LogicKind::TrackTrain) ||
+                record.brush != static_cast<std::uint16_t>(player.groundMover) || !detail::trainOnControls(w, player, i))
+                continue;
+            w.states[i].phase |= detail::kTrainDriven;
+            if (w.heard != nullptr && w.sounds != nullptr && w.sounds[i].unlocked != kNoSound)
+                w.heard->add(w.sounds[i].unlocked, nullptr, 102, 0);
+            return true;
+        }
+        return false;
+    }
+
+    /// A frame of the player at the controls. `step` is +1 for a press of
+    /// forward, -1 of back, 0 for neither. They let go by jumping, by
+    /// stepping sideways, by leaving the train, or by dying; and the train
+    /// lets go of them when its track takes it over.
+    inline void trainControl(LogicWorld &w, const PlayerState &player, int step, bool side, bool jump)
+    {
+        const int index = trainDriven(w);
+        if (index < 0)
+            return;
+        const LogicRecord &record = w.records[index];
+        LogicState &state = w.states[index];
+        if (player.health <= 0 || jump || side || !player.onGround ||
+            player.groundMover != static_cast<int>(record.brush) || state.running || state.move == detail::kCarried)
+        {
+            trainRelease(w);
+            return;
+        }
+        if (step == 0 || record.speed <= 0)
+            return;
+        // (The game's sum: what quarter it is at, as a whole number, and a
+        // quarter on or back from there.)
+        int quarter = static_cast<int>((static_cast<std::int64_t>(state.speed) * 4) / record.speed) + step;
+        quarter = quarter > 4 ? 4 : (quarter < -4 ? -4 : quarter);
+        if ((record.flags & kLogicForwardOnly) && quarter < 0)
+            quarter = 0;
+        const fx was = state.speed;
+        state.speed = static_cast<fx>((static_cast<std::int64_t>(record.speed) * quarter) / 4);
+        if (was != 0 && state.speed == 0)
+            detail::trainBrakes(w, index);
+    }
+
+    /// What the display shows of the train the player drives (TrainSpeed):
+    /// 0 backwards, 1 stopped, 2 to 4 slow to fast; -1 if they drive none.
+    inline int trainSpeedStep(const LogicWorld &w)
+    {
+        const int index = trainDriven(w);
+        if (index < 0)
+            return -1;
+        const fx speed = w.states[index].speed;
+        const fx whole = w.records[index].speed > 0 ? w.records[index].speed : 1;
+        if (speed < 0)
+            return 0;
+        if (speed == 0)
+            return 1;
+        const std::int64_t hundredths = (static_cast<std::int64_t>(speed) * 100) / whole;
+        return hundredths < 33 ? 2 : (hundredths < 66 ? 3 : 4);
     }
 } // namespace hldata
 

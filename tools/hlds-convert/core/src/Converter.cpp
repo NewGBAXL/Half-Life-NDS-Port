@@ -1267,6 +1267,14 @@ namespace hlds
                                     hldata::kA3I5Colours, hldata::kTextureA3I5, hldata::kHud640File))
                 result.warnings.push_back("the head-up display's 640 pictures were not made" +
                                           (why.empty() ? std::string() : ": " + why));
+            // ... and of a train at the player's controls (both sets show it).
+            SprFile train;
+            const fs::path trainFile = findNoCase(options_.gameDir, "sprites/640_train.spr");
+            if (trainFile.empty() || !train.load(trainFile, why) ||
+                !texture(hudTrainPictures(train), TextureFormat::A3I5, hldata::kA3I5Colours, hldata::kTextureA3I5,
+                         hldata::kHudTrainFile))
+                result.warnings.push_back("the train's pictures were not made" +
+                                          (why.empty() ? std::string() : ": " + why));
         }
         {
             // The weapons' pictures for the touch screen's slots.

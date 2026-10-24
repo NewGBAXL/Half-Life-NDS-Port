@@ -175,6 +175,10 @@ namespace hlrt
         std::int16_t *aiSlots_ = nullptr;
         std::uint8_t *aiHeld_ = nullptr;
         bool wasDeep_ = false; ///< the player was in water to the waist a frame ago
+        int trainForward_ = 0; ///< forward or back as it was held a frame ago: a press drives a train
+        /// The player left the last map at its train's controls (makeArrival),
+        /// and has this one's (applyArrival).
+        mutable bool trainCarried_ = false;
         std::vector<hldata::SaveMapState> visited_;
         /// What a save keeps of the game beside the map's own state: how
         /// long has been played, the chapter's title as it was last

@@ -424,7 +424,10 @@ namespace hldata
         /// know which way to face. extra[2] is the hash of its global name,
         /// by which the same train is found in the next map; firstAux is the
         /// track node it starts at. kLogicSelfDriven: track nodes set its
-        /// speed.
+        /// speed, and nobody drives it. mins/maxs: where the player stands to
+        /// drive it (its func_traincontrols), in the train's own space as it
+        /// was built; all zero, its own box and 72 units above (the game's).
+        /// kLogicForwardOnly: it is never driven backwards.
         TrackTrain,
         /// A platform that carries a train from the end of one track down to
         /// the start of another. `move` is its travel, extra[0] how far it
@@ -691,6 +694,8 @@ namespace hldata
     /// going in: its travel is an angle, as a door on hinges' is -- which
     /// way round in extra[0], how far in move[0], both as that door has them.
     inline constexpr std::uint16_t kLogicTurns = 16384;
+    /// A track train that is driven forwards only.
+    inline constexpr std::uint16_t kLogicForwardOnly = 32768;
 
     /// One entity that does something, with everything it needs already worked
     /// out by the converter: names are numbers, times are milliseconds, a

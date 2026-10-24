@@ -303,6 +303,7 @@ namespace hlrt
                                               player.state, logic.pendingChange, view.modelRefs);
         arrival.yaw = camera.yaw;
         arrival.pitch = camera.pitch;
+        trainCarried_ = arrival.train != 0 && trainDriven(logic) >= 0;
         return arrival;
     }
 
@@ -315,6 +316,9 @@ namespace hlrt
             return false;
         camera.yaw = arrival.yaw;
         camera.pitch = arrival.pitch;
+        if (trainCarried_)
+            arrivalDriving(logic, arrival);
+        trainCarried_ = false;
         return true;
     }
 
@@ -403,7 +407,9 @@ namespace hlrt
                 save.trainPos[a] = brushStates_[train.brush].pos[a];
             save.trainYaw = brushStates_[train.brush].angles[kYaw];
             save.trainSpeed = states_[i].speed;
-            save.trainSelfDriven = states_[i].running ? 1 : 0;
+            // (Its second bit: the player has its controls.)
+            save.trainSelfDriven = static_cast<std::uint8_t>((states_[i].running ? 1 : 0) |
+                                                             ((states_[i].phase & detail::kTrainDriven) ? 2 : 0));
             break;
         }
         save.maps = visited_;
@@ -574,7 +580,9 @@ namespace hlrt
                 continue;
             logicPlaceBrush(logic, train.brush, save.trainPos, save.trainYaw);
             states_[i].speed = save.trainSpeed;
-            states_[i].running = save.trainSelfDriven != 0;
+            states_[i].running = (save.trainSelfDriven & 1) != 0;
+            if (save.trainSelfDriven & 2)
+                states_[i].phase |= detail::kTrainDriven;
             const std::uint16_t node =
                 detail::trackNearest(logic, save.trainPos, static_cast<fx>(train.extra[1]));
             if (node != kNoCorner)
@@ -641,8 +649,11 @@ namespace hlrt
                 // From the eyes, along the view as it was drawn last frame.
                 const fx eye[3] = {player.state.origin[0], player.state.origin[1],
                                    player.state.origin[2] + player.state.viewHeight};
-                // (At a gun's controls, USE takes them, or lets go.)
-                const int target = tankUse(logic, player.state) ? -2 : logicFindUsable(logic, eye, camera.forward);
+                // (At a train's controls or a gun's, USE takes them, or lets
+                // go: a train's first, as the game's PlayerUse has it.)
+                const int target = trainUse(logic, player.state) || tankUse(logic, player.state)
+                                       ? -2
+                                       : logicFindUsable(logic, eye, camera.forward);
                 if (target == -2)
                 {
                 }
@@ -875,6 +886,23 @@ namespace hlrt
             }
             weapon_.anim = nullptr;
             actors.got = 0;
+        }
+        // At a train's controls: a press of forward or back is its speed, and
+        // the player's feet stay where they are. Stepping aside or jumping
+        // lets go (trainControl).
+        {
+            const int forward = player.noclip ? 0 : input.moveForward;
+            const int step = forward != 0 && forward != trainForward_ ? forward : 0;
+            trainForward_ = forward;
+            if (trainDriven(logic) >= 0)
+            {
+                trainControl(logic, player.state, step, input.moveSide != 0, input.jump);
+                if (trainDriven(logic) >= 0)
+                {
+                    input.moveForward = 0;
+                    player.state.velocity[0] = player.state.velocity[1] = 0;
+                }
+            }
         }
         const fx stoodAt[3] = {player.state.origin[0], player.state.origin[1], player.state.origin[2]};
         player.frame(vblanks);

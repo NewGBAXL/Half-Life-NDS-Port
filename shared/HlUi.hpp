@@ -185,6 +185,17 @@ namespace hldata
         return UiRect{static_cast<std::uint8_t>(10 * kind), 113, 10, 10};
     }
 
+    // ... and how a train the player drives is going (the game's
+    // sprites/640_train.spr): back, stopped, forward slow to fast, 24
+    // square, in a texture of their own that both sets use.
+    inline constexpr const char *kHudTrainFile = "ui/train.128x32.htx";
+    inline constexpr int kHudTrainWidth = 128;
+    inline constexpr int kHudTrainHeight = 32;
+    inline constexpr UiRect hudTrain(int n)
+    {
+        return UiRect{static_cast<std::uint8_t>(24 * n), 0, 24, 24};
+    }
+
     // ------------------------------------------------------------- marks
     //
     // What shots, blows, blood and blasts leave on a wall: the game's own

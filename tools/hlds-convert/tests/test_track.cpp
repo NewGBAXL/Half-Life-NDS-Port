@@ -6,6 +6,13 @@
 // passed, the end of the track and what is fired there, and which way the
 // train faces.
 //
+// A second synthetic track is driven, as the player drives a train (USE at
+// its controls, forward and back a quarter of its speed at a press): through
+// stopped to backwards, back past a node that fires again, to the start of
+// the track; let go of by a step aside, a jump, or USE again. With the game,
+// c2a2's train is driven, and into c2a2a at its controls still; c2a3's crash
+// train is driven from its func_traincontrols only.
+//
 // With HLDS_VALVE_DIR set, the opening tram ride is run from end to end with
 // nobody at the controls -- six maps, five level changes, two platforms that
 // lower the tram from one track to another -- and has to finish with the tram
@@ -520,6 +527,294 @@ namespace
         }
     }
 
+    // ------------------------------------------------------------------ driving it
+
+    /// A long car on a straight track of four nodes, with room to stand in
+    /// it; node b toggles a door each time the car passes it, either way.
+    /// `spawnflags` are the car's.
+    std::unique_ptr<Game> drivingRoom(int spawnflags)
+    {
+        BoxRoom room;
+        room.mins[0] = -500, room.maxs[0] = 500;
+        room.maxs[2] = 256;
+        BrushBox car;
+        car.className = "func_tracktrain";
+        car.mins[0] = -60, car.mins[1] = -40, car.mins[2] = -8;
+        car.maxs[0] = 60, car.maxs[1] = 40, car.maxs[2] = 8;
+        car.keys = "\"targetname\" \"car\"\n\"origin\" \"0 0 0\"\n\"target\" \"a\"\n"
+                   "\"speed\" \"100\"\n\"height\" \"8\"\n\"wheels\" \"60\"\n\"spawnflags\" \"" +
+                   std::to_string(spawnflags) + "\"\n";
+        room.brushes.push_back(car);
+        BrushBox door;
+        door.className = "func_door";
+        door.mins[0] = 400, door.mins[1] = 100, door.mins[2] = 0;
+        door.maxs[0] = 410, door.maxs[1] = 120, door.maxs[2] = 64;
+        door.keys = "\"targetname\" \"passb\"\n\"angle\" \"-1\"\n\"wait\" \"-1\"\n\"spawnflags\" \"32\"\n"
+                    "\"speed\" \"400\"\n";
+        room.brushes.push_back(door);
+        room.extraEntities =
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"a\"\n\"target\" \"b\"\n"
+            "\"origin\" \"-300 0 16\"\n}\n"
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"b\"\n\"target\" \"c\"\n"
+            "\"origin\" \"-100 0 16\"\n\"message\" \"passb\"\n}\n"
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"c\"\n\"target\" \"d\"\n"
+            "\"origin\" \"100 0 16\"\n}\n"
+            "{\n\"classname\" \"path_track\"\n\"targetname\" \"d\"\n"
+            "\"origin\" \"300 0 16\"\n}\n";
+        auto g = std::make_unique<Game>();
+        std::string error;
+        g->ok = g->bsp.parse(buildBoxRoom(room), error);
+        if (g->ok)
+            finish(*g, nullptr);
+        return g;
+    }
+
+    /// The player dropped onto the car's middle and let land.
+    bool standOn(Game &g, const LogicRecord &car)
+    {
+        const MoverHull &hull = g.movers[car.brush];
+        g.player.origin[0] = (hull.mins[0] + hull.maxs[0]) / 2;
+        g.player.origin[1] = (hull.mins[1] + hull.maxs[1]) / 2;
+        g.player.origin[2] = hull.maxs[2] + kStandingFeet + fxFromInt(4);
+        for (int a = 0; a < 3; ++a)
+            g.player.velocity[a] = 0;
+        for (int i = 0; i < 15; ++i)
+            g.frame();
+        return g.player.onGround && g.player.groundMover == static_cast<int>(car.brush);
+    }
+
+    void testDriving()
+    {
+        auto game = drivingRoom(0);
+        check(game->ok, "the driving room cooks");
+        if (!game->ok)
+            return;
+        Game &g = *game;
+        const int train = g.recordOfKind(LogicKind::TrackTrain);
+        const LogicRecord &rec = g.view.logic[train];
+        const BrushState &car = g.brushStates[rec.brush];
+        const int door = g.recordOfKind(LogicKind::Door);
+        check(rec.mins[0] == 0 && rec.maxs[2] == 0 && !(rec.flags & kLogicSelfDriven),
+              "a train with no controls of its own, that may be driven");
+        check(!trainUse(g.logic, g.player), "USE off the train is not the train's");
+        check(standOn(g, rec), "the player stands on the car");
+        check(trainUse(g.logic, g.player) && trainDriven(g.logic) == train && trainSpeedStep(g.logic) == 1,
+              "USE on it takes its controls, at a standstill");
+        trainControl(g.logic, g.player, 1, false, false);
+        trainControl(g.logic, g.player, 1, false, false);
+        check(g.states[train].speed == fxFromInt(50) && trainSpeedStep(g.logic) == 3,
+              "two presses of forward: half its speed");
+        for (int i = 0; i < 4; ++i)
+            trainControl(g.logic, g.player, 1, false, false);
+        check(g.states[train].speed == fxFromInt(100) && trainSpeedStep(g.logic) == 4, "... and no more than all of it");
+        const std::uint16_t facing = car.angles[kYaw];
+        // On past b: the door opens.
+        for (int i = 0; i < 30 * 3 && toUnits(car.pos[0]) < -20; ++i)
+        {
+            g.frame();
+            trainControl(g.logic, g.player, 0, false, false);
+        }
+        check(toUnits(car.pos[0]) >= -20 && trainDriven(g.logic) == train, "it goes, the player at its controls");
+        for (int i = 0; i < 10; ++i)
+            g.frame();
+        const fx doorOpen = g.brushStates[g.view.logic[door].brush].pos[2];
+        check(doorOpen > fxFromInt(8), "passing b fires what b names");
+        // Back: through stopped, to backwards.
+        for (int i = 0; i < 4; ++i)
+            trainControl(g.logic, g.player, -1, false, false);
+        check(g.states[train].speed == 0 && trainSpeedStep(g.logic) == 1, "four presses of back: stopped");
+        for (int i = 0; i < 6; ++i)
+            trainControl(g.logic, g.player, -1, false, false);
+        check(g.states[train].speed == -fxFromInt(100) && trainSpeedStep(g.logic) == 0, "... and on to backwards");
+        for (int i = 0; i < 30 * 3 && toUnits(car.pos[0]) > -200; ++i)
+        {
+            g.frame();
+            trainControl(g.logic, g.player, 0, false, false);
+        }
+        check(toUnits(car.pos[0]) <= -200, "it backs along its track");
+        const int turned = static_cast<std::int16_t>(car.angles[kYaw] - facing);
+        check(turned < 200 && turned > -200, "... facing the way it faced");
+        for (int i = 0; i < 20; ++i)
+            g.frame();
+        check(g.brushStates[g.view.logic[door].brush].pos[2] < doorOpen,
+              "going back past b fires what b names again");
+        for (int i = 0; i < 30 * 3; ++i)
+        {
+            g.frame();
+            trainControl(g.logic, g.player, 0, false, false);
+        }
+        check(std::fabs(toUnits(car.pos[0]) + 300) < 0.5 && g.states[train].speed == 0,
+              "at the start of the track, it stops");
+        check(trainDriven(g.logic) == train, "the player at its controls all the while");
+        trainControl(g.logic, g.player, 0, true, false);
+        check(trainDriven(g.logic) < 0, "a step sideways lets go");
+        check(trainUse(g.logic, g.player) && trainDriven(g.logic) == train, "taken again");
+        trainControl(g.logic, g.player, 0, false, true);
+        check(trainDriven(g.logic) < 0, "a jump lets go");
+        trainUse(g.logic, g.player);
+        check(trainUse(g.logic, g.player) && trainDriven(g.logic) < 0, "and USE again lets go");
+
+        // Forwards only: never below standing still.
+        auto forwardOnly = drivingRoom(4);
+        if (forwardOnly->ok)
+        {
+            Game &f = *forwardOnly;
+            const int t = f.recordOfKind(LogicKind::TrackTrain);
+            check((f.view.logic[t].flags & kLogicForwardOnly) && standOn(f, f.view.logic[t]) &&
+                      trainUse(f.logic, f.player),
+                  "a train driven forwards only is taken");
+            trainControl(f.logic, f.player, 1, false, false);
+            trainControl(f.logic, f.player, -1, false, false);
+            trainControl(f.logic, f.player, -1, false, false);
+            check(f.states[t].speed == 0, "... and back stops it, no further");
+        }
+        // A train nobody drives (spawnflags 2) is never taken.
+        auto nobody = drivingRoom(2);
+        if (nobody->ok)
+        {
+            Game &n = *nobody;
+            const int t = n.recordOfKind(LogicKind::TrackTrain);
+            check(standOn(n, n.view.logic[t]) && !trainUse(n.logic, n.player), "a train nobody drives is not taken");
+        }
+    }
+
+    /// The record of `kind` whose name is `name`, or -1.
+    int recordNamed(const Game &g, const char *name, LogicKind kind)
+    {
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &record = g.view.logic[i];
+            if (record.kind == static_cast<std::uint8_t>(kind) && record.name != 0 &&
+                g.view.nameHashes[record.name] == nameHash(name))
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    /// On A Rail: c2a2's train is driven, along its track and into c2a2a at
+    /// its controls still; c2a3's crash train only from its controls; the
+    /// shark cage never.
+    void testOnARail(const char *dir)
+    {
+        Globals globals;
+        auto game = std::make_unique<Game>();
+        std::string error;
+        if (!game->bsp.load(std::string(dir) + "/maps/c2a2.bsp", error))
+            return;
+        finish(*game, &globals);
+        check(game->ok, "c2a2 cooks");
+        if (!game->ok)
+            return;
+        Game &g = *game;
+        const int train = recordNamed(g, "train", LogicKind::TrackTrain);
+        check(train >= 0, "c2a2's train");
+        if (train < 0)
+            return;
+        const LogicRecord &rec = g.view.logic[train];
+        check(standOn(g, rec), "the player stands in c2a2's train");
+        check(trainUse(g.logic, g.player), "... and takes its controls");
+        for (int i = 0; i < 3; ++i)
+            trainControl(g.logic, g.player, 1, false, false);
+        check(trainSpeedStep(g.logic) == 4, "three presses: fast");
+        const fx from[3] = {g.brushStates[rec.brush].pos[0], g.brushStates[rec.brush].pos[1],
+                            g.brushStates[rec.brush].pos[2]};
+        for (int i = 0; i < 30 * 3; ++i)
+        {
+            g.frame();
+            trainControl(g.logic, g.player, 0, false, false);
+        }
+        const fx *now = g.brushStates[rec.brush].pos;
+        const fx moved[3] = {now[0] - from[0], now[1] - from[1], now[2] - from[2]};
+        std::printf("test_track: c2a2's train went %.0f units in 3 s at the player's controls\n",
+                    toUnits(fxLength(moved)));
+        check(fxLength(moved) > fxFromInt(200), "it goes along its track");
+        check(trainDriven(g.logic) == train, "... with the player at its controls");
+
+        // Into c2a2a, as though its way in were reached now.
+        int change = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount && change < 0; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::ChangeLevel) &&
+                std::string(g.view.strings + r.extra[0]) == "c2a2a")
+                change = static_cast<int>(i);
+        }
+        check(change >= 0, "c2a2's way into c2a2a");
+        if (change >= 0)
+        {
+            const Arrival arrival = makeArrival(g.logic, g.view.landmarks, g.view.landmarkCount, g.player, change);
+            check(arrival.train != 0 && trainDriven(g.logic) >= 0, "the player leaves c2a2 in the train, at its controls");
+            auto next = std::make_unique<Game>();
+            if (next->bsp.load(std::string(dir) + "/maps/c2a2a.bsp", error))
+            {
+                finish(*next, &globals);
+                applyArrival(next->logic, next->view.landmarks, next->view.landmarkCount, next->view.nameHashes,
+                             next->view.nameCount, next->player, arrival);
+                arrivalDriving(next->logic, arrival);
+                const int there = trainDriven(next->logic);
+                check(there >= 0 && next->states[there].speed == g.states[train].speed,
+                      "... and arrives in c2a2a at them still, going as fast");
+            }
+        }
+        const fx before = g.states[train].speed;
+        trainUse(g.logic, g.player);
+        check(trainDriven(g.logic) < 0 && g.states[train].speed == before, "USE lets go, and the train goes on as it was");
+
+        // c2a3: its crash train is driven from its controls only.
+        auto crash = std::make_unique<Game>();
+        if (crash->bsp.load(std::string(dir) + "/maps/c2a3.bsp", error))
+        {
+            finish(*crash, &globals);
+            const int t = recordNamed(*crash, "crashtrain", LogicKind::TrackTrain);
+            check(t >= 0, "c2a3's crash train");
+            if (t >= 0)
+            {
+                const LogicRecord &r = crash->view.logic[t];
+                check(r.maxs[0] > r.mins[0] && r.maxs[2] > r.mins[2], "... with its controls cooked");
+                // Its controls: the box in the train's own space, as it was
+                // built (the train is where it was built at first).
+                const bool on = standOn(*crash, r);
+                if (on && !hldata::detail::trainOnControls(crash->logic, crash->player, t))
+                    check(!trainUse(crash->logic, crash->player), "off its controls, USE does not take it");
+                // (The middle of its controls, from the train's space to the
+                // world's: the train has been put on its track since.)
+                const Brush &built = crash->view.brushes[r.brush];
+                const MoverHull &mover = crash->movers[r.brush];
+                fx local[3];
+                for (int a = 0; a < 3; ++a)
+                    local[a] = fxFromInt(r.mins[a] + r.maxs[a]) / 2 - built.origin[a];
+                for (int a = 0; a < 3; ++a)
+                {
+                    std::int64_t along = mover.turned ? 0 : (static_cast<std::int64_t>(local[a]) << kNormalShift);
+                    for (int b = 0; b < 3 && mover.turned; ++b)
+                        along += static_cast<std::int64_t>(mover.axes[3 * a + b]) * local[b];
+                    crash->player.origin[a] = mover.origin[a] + static_cast<fx>(along >> kNormalShift);
+                }
+                for (int a = 0; a < 3; ++a)
+                    crash->player.velocity[a] = 0;
+                for (int i = 0; i < 15; ++i)
+                    crash->frame();
+                // (Where the train first stands it is level with the floor
+                // beneath: the player comes to it on it, from c2a2g, as
+                // applyArrival puts them -- standing on it.)
+                crash->player.onGround = true;
+                crash->player.groundMover = static_cast<std::int16_t>(r.brush);
+                check(trainUse(crash->logic, crash->player) && trainDriven(crash->logic) == t,
+                      "on its controls, it is taken");
+            }
+        }
+        // c2a3a: the shark cage (spawnflags 3) is nobody's to drive.
+        auto cage = std::make_unique<Game>();
+        if (cage->bsp.load(std::string(dir) + "/maps/c2a3a.bsp", error))
+        {
+            finish(*cage, &globals);
+            const int t = recordNamed(*cage, "sharkcage", LogicKind::TrackTrain);
+            check(t >= 0 && !hldata::detail::trainOnControls(cage->logic, cage->player, t) &&
+                      (cage->view.logic[t].flags & kLogicSelfDriven),
+                  "c2a3a's shark cage is nobody's to drive");
+        }
+    }
+
     void testTheRide()
     {
         const char *dir = std::getenv("HLDS_VALVE_DIR");
@@ -540,6 +835,7 @@ namespace
         }
         check(ride(dir, 2, Passenger::Idle, true), "... and with a save and a load on the way");
         testTheGuard(dir);
+        testOnARail(dir);
         for (const Lift &lift : kLifts)
         {
             testTheLift(dir, lift, false);
@@ -551,6 +847,7 @@ namespace
 int main()
 {
     testSyntheticTrack();
+    testDriving();
     testTheRide();
     if (g_failures == 0)
         std::printf("test_track: ok\n");

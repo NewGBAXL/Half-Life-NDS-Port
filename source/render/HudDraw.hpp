@@ -116,6 +116,9 @@ namespace hlrt
         bool atlas640_ = false; ///< ... and they are the 640 set's (kHud640File)
         void *material_ = nullptr; ///< ... and, in two-pass, a texture (drawQuads)
         void *lampMaterial_ = nullptr;
+        bool train_ = false; ///< the pictures of a driven train's speed are read (kHudTrainFile)
+        void *trainMaterial_ = nullptr; ///< ... and, in two-pass, a texture
+        void *trainPalette_ = nullptr;
         void *decalMaterial_ = nullptr;
         void *decalPalette_ = nullptr;
         void *palette_ = nullptr;

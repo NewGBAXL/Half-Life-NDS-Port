@@ -371,6 +371,24 @@ namespace hldata
     /// Put the player where they should be in the map just loaded, and queue
     /// what the old map asked to have fired here. False if this map has no
     /// such landmark: the caller starts the player at the map's own start.
+    /// The player left at the controls of the train they came in on: they
+    /// have its namesake's here (the game's "on the other side of a level
+    /// transition"), after applyArrival. (Kept beside the Arrival, not in
+    /// it: an Arrival is saved as it is.)
+    inline void arrivalDriving(LogicWorld &w, const Arrival &arrival)
+    {
+        for (int i = 0; i < w.recordCount && arrival.train != 0; ++i)
+        {
+            const LogicRecord &train = w.records[i];
+            if (train.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain) && train.extra[2] == arrival.train &&
+                train.brush != kNoBrush)
+            {
+                w.states[i].phase |= detail::kTrainDriven;
+                return;
+            }
+        }
+    }
+
     inline bool applyArrival(LogicWorld &w, const Landmark *landmarks, std::uint32_t landmarkCount,
                              const std::uint32_t *nameHashes, std::uint32_t nameCount,
                              PlayerState &player, const Arrival &arrival,

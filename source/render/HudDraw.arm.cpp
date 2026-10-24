@@ -152,6 +152,27 @@ namespace hlrt
                 }
             }
         }
+        /// The pictures of a driven train's speed (kHudTrainFile), as the
+        /// display's are: read, A3I5.
+        std::uint8_t trainPictures[kHudTrainWidth * kHudTrainHeight];
+        /// Picture `n` of them onto the sheet at (x, y), in its 32 square.
+        void blitTrain(int x, int y, int n)
+        {
+            const UiRect from = hudTrain(n);
+            for (int dy = 0; dy < 32; ++dy)
+            {
+                for (int dx = 0; dx < 32; ++dx)
+                {
+                    const int level = dx < from.w && dy < from.h
+                                          ? trainPictures[(from.y + dy) * kHudTrainWidth + from.x + dx] >> 5
+                                          : 0;
+                    sheet.pixel(x + dx, y + dy, level);
+                }
+            }
+        }
+        /// Which of them is on its sprite's cell: -1 none yet.
+        int shownTrain = -1;
+
         /// `value` in the display's digits, its last digit ending at `right`.
         /// Returns where it starts.
         int digits(int right, int y, int value, int base)
@@ -385,6 +406,32 @@ namespace hlrt
                 }
             }
         }
+        // The train's pictures, the same way (a card cooked before them has
+        // none, and shows none).
+        if (!train_ && global.hasFat)
+        {
+            static std::uint8_t body[kHudTrainWidth * kHudTrainHeight + 64];
+            hldata::TextureHeader header;
+            if (TextureCache::readFile(global.commonPath(kHudTrainFile).c_str(), kHudTrainWidth, kHudTrainHeight, 1,
+                                       header, body, sizeof(body)) &&
+                header.texelBytes == sizeof(trainPictures))
+            {
+                std::memcpy(trainPictures, body, sizeof(trainPictures));
+                train_ = true;
+                shownTrain = -1;
+            }
+        }
+        if (global.twoPass && trainMaterial_ == nullptr && train_)
+        {
+            NEA_Material *material = nullptr;
+            NEA_Palette *palette = nullptr;
+            if (TextureCache::loadFile(global.commonPath(kHudTrainFile).c_str(), false, kHudTrainWidth,
+                                       kHudTrainHeight, 1, material, palette))
+            {
+                trainMaterial_ = material;
+                trainPalette_ = palette;
+            }
+        }
         // In two-pass, the same as a texture as well (drawn as quads:
         // drawQuads).
         if (global.twoPass && material_ == nullptr && atlas_)
@@ -404,6 +451,7 @@ namespace hlrt
     {
         // (NEA has let go of them itself, with everything else.)
         lampMaterial_ = nullptr;
+        trainMaterial_ = trainPalette_ = nullptr;
         decalMaterial_ = decalPalette_ = nullptr;
         material_ = palette_ = nullptr;
         loadingMaterial_ = loadingPalette_ = nullptr;
@@ -505,6 +553,7 @@ namespace hlrt
             ramp(kBankRed, 1, kRed);
             shownHealth = shownArmor = shownWeapon = shownClip = shownSpare = shownLamp = -1;
             shownExtra = -2;
+            shownTrain = -1;
             sheetMade = true;
         }
 
@@ -626,6 +675,18 @@ namespace hlrt
         // crosshair 0 took it away).
         if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
             sprite(6, 128 - 16, 96 - 16, 0, 2, 0, 32, kBankWhite);
+        // At a train's controls: how it is going, where the game shows it
+        // (train.cpp: a third of the way across, over the numbers).
+        const int train = train_ && suit_ ? trainSpeedStep(game.logic) : -1;
+        if (train >= 0)
+        {
+            if (train != shownTrain)
+            {
+                shownTrain = train;
+                blitTrain(64, 32, train);
+            }
+            sprite(30, 94, 140, 0, 2, 64, 32, kBankHud);
+        }
     }
 
     /// The display as 3D quads, in front of everything, from the display's
@@ -754,6 +815,14 @@ namespace hlrt
             GFX_COLOR = 0x7FFF;
             picture(128 - kHudCrosshair.w / 2, 96 - kHudCrosshair.h / 2, kHudCrosshair);
         }
+        // At a train's controls: how it is going (compose's place).
+        const int train = trainMaterial_ != nullptr ? trainSpeedStep(game.logic) : -1;
+        if (train >= 0)
+        {
+            NEA_MaterialUse(static_cast<NEA_Material *>(trainMaterial_));
+            GFX_COLOR = kOrange;
+            picture(94, 140, hudTrain(train));
+        }
         GFX_COLOR = 0x7FFF;
     }
 
@@ -766,14 +835,16 @@ namespace hlrt
     ///   rows 64..127, x 64..127:   the marks from the right, the left
     ///   rows 64..95, x 128..255:   the other four kinds of hurt's pictures
     ///   rows 96..111, x 128..143:  the crosshair; x 160..191: the lamp
+    ///   rows 96..127, x 192..223:  how a driven train is going
     /// The sprites: 0..3 the bottom row, 4 the lamp, 5 the crosshair, 6..13
-    /// the kinds of hurt, 14..17 the marks, 18..29 the red of being hurt.
+    /// the kinds of hurt, 14..17 the marks, 18..29 the red of being hurt, 30
+    /// the train.
     void HudDraw::compose640()
     {
         static int shownHealth = -1, shownArmor = -1, shownWeapon = -1, shownClip = -1, shownSpare = -1,
                    shownExtra = -2, shownLamp = -1;
         constexpr int kMarkCell[4][2] = {{0, 32}, {64, 64}, {64, 32}, {96, 64}};
-        constexpr int kLampCell[2] = {160, 96}, kCrosshairCell[2] = {128, 96};
+        constexpr int kLampCell[2] = {160, 96}, kCrosshairCell[2] = {128, 96}, kTrainCell[2] = {192, 96};
         auto hurtCell = [](int kind) { return 128 + (kind & 3) * 32; };
         auto hurtRow = [](int kind) { return kind < 4 ? 32 : 64; };
         for (int n = 0; n < kSprites; ++n)
@@ -812,6 +883,7 @@ namespace hlrt
             ramp(kBankRed, 1, kRedish);
             shownHealth = shownArmor = shownWeapon = shownClip = shownSpare = shownLamp = -1;
             shownExtra = -2;
+            shownTrain = -1;
             sheetMade = true;
         }
 
@@ -928,6 +1000,17 @@ namespace hlrt
         if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
             sprite(5, hudDs(kHud640CrosshairX) - 3, hudDs(kHud640CrosshairY) - 3, 0, 1, kCrosshairCell[0],
                    kCrosshairCell[1], kBankWhite);
+        // At a train's controls: how it is going, where the game shows it.
+        const int train = train_ && suit_ ? trainSpeedStep(game.logic) : -1;
+        if (train >= 0)
+        {
+            if (train != shownTrain)
+            {
+                shownTrain = train;
+                blitTrain(kTrainCell[0], kTrainCell[1], train);
+            }
+            sprite(30, hudDs(kHud640TrainX), hudDs(kHud640TrainY), 0, 2, kTrainCell[0], kTrainCell[1], kBankHud);
+        }
     }
 
     /// drawQuads() with the 640 set, where the game puts each piece.
@@ -1054,6 +1137,14 @@ namespace hlrt
         {
             GFX_COLOR = 0x7FFF;
             picture(hudDs(kHud640CrosshairX), hudDs(kHud640CrosshairY), kHud640Crosshair);
+        }
+        // At a train's controls: how it is going.
+        const int train = trainMaterial_ != nullptr && suit_ ? trainSpeedStep(game.logic) : -1;
+        if (train >= 0)
+        {
+            NEA_MaterialUse(static_cast<NEA_Material *>(trainMaterial_));
+            GFX_COLOR = kYellowish;
+            picture(hudDs(kHud640TrainX), hudDs(kHud640TrainY), hudTrain(train));
         }
         GFX_COLOR = 0x7FFF;
     }
