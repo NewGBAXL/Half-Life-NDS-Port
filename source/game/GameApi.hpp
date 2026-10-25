@@ -51,7 +51,7 @@ namespace hlrt
     class TopText;
 
     /// Changed whenever either table or anything they carry changes shape.
-    inline constexpr std::uint32_t kGameApiVersion = 1;
+    inline constexpr std::uint32_t kGameApiVersion = 2;
 
     /// The sizes of what both sides lay out, compared at the handshake: a
     /// library built from other headers, or with other settings, is refused
@@ -145,6 +145,9 @@ namespace hlrt
         bool (*arrivalOf)(const hldata::SaveData &, hldata::Arrival &);
         bool (*layState)(Game &, const hldata::SaveData &);
         hldata::SaveHeading (*heading)(const Game &, const std::string &map);
+        std::uint32_t (*storedBytes)(Game &);
+        bool (*storeMap)(Game &, hldata::detail::StreamOut &);
+        bool (*layStored)(Game &, hldata::detail::StreamIn &, const std::int16_t *sentAway, std::uint8_t landed);
 
         // ... and what the engine's other parts ask.
         /// The think worker (Think.cpp): one question worked out, `yield`

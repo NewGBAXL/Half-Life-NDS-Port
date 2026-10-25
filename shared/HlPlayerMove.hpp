@@ -151,6 +151,10 @@ namespace hldata
         std::int16_t uranium = 0;     ///< the gauss's and the egon's, 0..100
         std::int16_t hornets = 0;     ///< in the hornetgun, 0..8 (it grows them)
         std::uint8_t zoomed = 0;      ///< the crossbow's sight is up
+        // What the game counts and shows nowhere (its item_antidote,
+        // item_security). (In a save from version 9: HlSave.hpp.)
+        std::int16_t antidotes = 0;
+        std::int16_t securityCards = 0;
 
         template <class Ar>
         void serialize(Ar &ar)

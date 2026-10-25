@@ -118,6 +118,27 @@ Milestone 11, "levels of detail".
   carry, in the water both (`PlayerState::push`, `shared/HlPlayerMove.hpp`).
   A jump onto one of Xen's pads throws the player high, and they come down
   on it as fast as they went up: unhurt.
+- Xen's plants (`shared/HlXen.hpp`, `ActorKind::Xen`): the hair and the
+  three fungi sway, each at a pace of its own, and the fungi are in the way
+  as the game's boxes have them (the big one's cap up on its legs). A light
+  on its stalk draws in and goes dark as the player comes near, switching
+  off the light it casts, and comes up again five seconds after; its glow is
+  drawn at the top of its stalk. A tree strikes at what comes in front of
+  it: 25, and a shove.
+- Level version 39's: `trigger_counter`, `trigger_changetarget` (a record's
+  target, changed, is saved with it: `LogicState::target`),
+  `player_weaponstrip` (all but the suit), `player_loadsaved` (the screen
+  goes dark, its words, then the last save), `trigger_endsection` (back to
+  the title: the end of the training), `trigger_monsterjump` (what fights
+  is thrown up as it comes in), `trigger_camera` (the view from somewhere
+  else, looking at what it names; the display and the weapon in hand are
+  not drawn meanwhile, and with its flag 4 the player cannot move),
+  `speaker` (the announcements of its group, now and then), `func_guntarget`
+  (rides its path; shot enough, stops and fires its message),
+  `button_target`, `env_blood`, `cycler_sprite`; and `item_antidote`,
+  `item_security` (counted, as the game counts them) and `item_airtank`
+  (air, again half a minute on). A map's cook report names what it does not
+  handle yet ("not handled:").
 
 - A box that is pushed collides as the size it is. The map's collision
   knows only shapes a person wide, so a wider box is that shape at each of
@@ -172,10 +193,22 @@ Milestone 11, "levels of detail".
   file's own checksum). The test that guards it (`test_savestate`) plays a
   real map for a while with things made to happen, saves, lays the save
   over the same map begun afresh, plays both on, and requires them equal
-  to the byte: all 95 maps of the campaign pass it. What a save does not
-  hold: the maps on either side of the one the player is in keep only
-  what is broken, killed and picked up there; a sound half played and an
-  effect on the screen start again (the music goes on from where it was);
+  to the byte: all 95 maps of the campaign pass it. **The maps left on
+  the way are kept as they were left** (`shared/HlMapStore.hpp`): leaving
+  one by a way out writes its whole state -- the same as a save's, and its
+  monsters' minds -- to a file of its own in a folder of the run beside the
+  saves (`saves/run/<map>.mst`, 30 to 50 KB), a piece at a time (a DS has
+  no room for it in memory); coming back by a way in lays it back over the
+  map begun afresh: the door opened is open, the monster killed lies where
+  it fell, the charger is as drained as it was, who went along with the
+  player is not there twice. Twelve maps and 640 KB are kept, the oldest
+  left let go first; a map cooked again since, or let go, is come back to
+  with only what is broken, killed and picked up there (the saves'
+  per-map bits). A save holds them too, copied in after the rest (save
+  version 9; the one made coming into a map only names the folder), and
+  loading one puts the folder back as it was. What a save does not hold:
+  a sound half played and an effect on the screen start again (the music
+  goes on from where it was);
   a save and a cooked map each say what format they were written in and the
   oldest build that can read them, and a build knows the newest format it
   writes and the oldest it reads (`HlLevel.hpp`, VERSIONING; `HlSave.hpp`):

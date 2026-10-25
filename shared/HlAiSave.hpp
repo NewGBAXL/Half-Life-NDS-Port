@@ -86,7 +86,11 @@ namespace hldata
 
     namespace detail
     {
-        inline constexpr char kAiStateMagic[4] = {'A', 'I', 'S', '1'};
+        /// AIS2 has what is held (AiWorld::held: a barnacle's catch, a soldier
+        /// on his rope) after the sounds; AIS1, before it was kept, has not
+        /// (and is still read: what it held is let go).
+        inline constexpr char kAiStateMagic[4] = {'A', 'I', 'S', '2'};
+        inline constexpr char kAiStateMagicOld[4] = {'A', 'I', 'S', '1'};
 
         struct AiStateHeading
         {
@@ -100,12 +104,14 @@ namespace hldata
         /// The side table's whole state, through `a`: the time, the sounds,
         /// and each monster that has a mind (by its actor), `count` of them.
         template <class A>
-        void aiState(A &a, AiWorld &ai, ActorWorld &actors, int count)
+        void aiState(A &a, AiWorld &ai, ActorWorld &actors, int count, bool held = true)
         {
             stateField(a, ai.now);
             stateField(a, ai.lastCoverSearch);
             stateField(a, ai.talkWait);
             stateField(a, ai.sounds);
+            for (int i = 0; held && ai.held != nullptr && i < ai.actorCount; ++i)
+                stateField(a, ai.held[i]);
             for (int n = 0; n < count; ++n)
             {
                 // (Written: each in use, by its actor, in order. Read: into
@@ -113,7 +119,7 @@ namespace hldata
                 std::int16_t actor = -1;
                 AiMonster scratch;
                 AiMonster *m = &scratch;
-                if constexpr (std::is_same_v<A, StateOut> || std::is_same_v<A, StateMeasure>)
+                if constexpr (A::kGathers)
                 {
                     int seen = 0;
                     for (int s = 0; s < ai.capacity; ++s)
@@ -131,7 +137,7 @@ namespace hldata
                 }
                 stateField(a, actor);
                 stateField(a, *m);
-                if constexpr (std::is_same_v<A, StateIn>)
+                if constexpr (A::kReads)
                 {
                     if (actor >= 0)
                     {
@@ -146,12 +152,12 @@ namespace hldata
             }
         }
 
-        inline AiStateHeading aiStateHeading(AiWorld &ai, ActorWorld &actors, int count)
+        inline AiStateHeading aiStateHeading(AiWorld &ai, ActorWorld &actors, int count, bool held = true)
         {
             StateMeasure measure;
-            aiState(measure, ai, actors, count);
+            aiState(measure, ai, actors, count, held);
             AiStateHeading h{};
-            std::memcpy(h.magic, kAiStateMagic, sizeof(h.magic));
+            std::memcpy(h.magic, held ? kAiStateMagic : kAiStateMagicOld, sizeof(h.magic));
             h.print = measure.print;
             h.bytes = measure.bytes;
             h.monsters = count;
@@ -170,13 +176,11 @@ namespace hldata
         for (int s = 0; s < ai.capacity; ++s)
             count += ai.monsters[s].actor >= 0 ? 1 : 0;
         const detail::AiStateHeading heading = detail::aiStateHeading(ai, actors, count);
-        detail::StateOut out;
-        detail::aiState(out, ai, actors, count);
-        const auto buf = out.os.get_intrusive_buffer();
         const std::size_t at = bytes.size();
-        bytes.resize(at + sizeof(heading) + buf.size);
+        bytes.resize(at + sizeof(heading) + heading.bytes);
         std::memcpy(bytes.data() + at, &heading, sizeof(heading));
-        std::memcpy(bytes.data() + at + sizeof(heading), buf.data, buf.size);
+        detail::StreamOut out = detail::memoryOut(bytes.data() + at + sizeof(heading), heading.bytes);
+        detail::aiState(out, ai, actors, count);
     }
 
     /// How long the block of minds at `bytes` is, heading and all; 0 if it
@@ -187,10 +191,11 @@ namespace hldata
         if (size < sizeof(have) || actors.ai == nullptr)
             return 0;
         std::memcpy(&have, bytes, sizeof(have));
-        if (std::memcmp(have.magic, detail::kAiStateMagic, sizeof(have.magic)) != 0 || have.monsters < 0 ||
-            have.monsters > actors.ai->capacity || have.bytes > size - sizeof(have))
+        const bool held = std::memcmp(have.magic, detail::kAiStateMagic, sizeof(have.magic)) == 0;
+        if ((!held && std::memcmp(have.magic, detail::kAiStateMagicOld, sizeof(have.magic)) != 0) ||
+            have.monsters < 0 || have.monsters > actors.ai->capacity || have.bytes > size - sizeof(have))
             return 0;
-        const detail::AiStateHeading want = detail::aiStateHeading(*actors.ai, actors, have.monsters);
+        const detail::AiStateHeading want = detail::aiStateHeading(*actors.ai, actors, have.monsters, held);
         if (have.print != want.print || have.bytes != want.bytes)
             return 0;
         return sizeof(have) + have.bytes;
@@ -207,8 +212,55 @@ namespace hldata
         detail::AiStateHeading have;
         std::memcpy(&have, bytes, sizeof(have));
         aiRestart(actors);
-        detail::StateIn in(bytes + sizeof(have), length - sizeof(have));
-        detail::aiState(in, *actors.ai, actors, have.monsters);
+        detail::StreamIn in = detail::memoryIn(bytes + sizeof(have), length - sizeof(have));
+        detail::aiState(in, *actors.ai, actors, have.monsters,
+                        std::memcmp(have.magic, detail::kAiStateMagic, sizeof(have.magic)) == 0);
+        return true;
+    }
+
+    /// How many monsters have minds to be kept.
+    inline int aiStateCount(const ActorWorld &actors)
+    {
+        int count = 0;
+        for (int s = 0; actors.ai != nullptr && s < actors.ai->capacity; ++s)
+            count += actors.ai->monsters[s].actor >= 0 ? 1 : 0;
+        return count;
+    }
+
+    /// The minds, heading first, through `out` (aiAppendState's bytes).
+    inline bool aiStreamState(detail::StreamOut &out, ActorWorld &actors)
+    {
+        if (actors.ai == nullptr)
+            return out.ok;
+        const int count = aiStateCount(actors);
+        detail::AiStateHeading heading = detail::aiStateHeading(*actors.ai, actors, count);
+        out.put(&heading, sizeof(heading));
+        detail::aiState(out, *actors.ai, actors, count);
+        return out.ok;
+    }
+
+    /// ... laid back from `in`, if they are this build's (AIS1 too). False,
+    /// and they think afresh, if not -- or if `in` ran out.
+    inline bool aiLayStream(detail::StreamIn &in, ActorWorld &actors)
+    {
+        if (actors.ai == nullptr)
+            return false;
+        detail::AiStateHeading have;
+        in.get(&have, sizeof(have));
+        const bool held = std::memcmp(have.magic, detail::kAiStateMagic, sizeof(have.magic)) == 0;
+        if (!in.ok || (!held && std::memcmp(have.magic, detail::kAiStateMagicOld, sizeof(have.magic)) != 0) ||
+            have.monsters < 0 || have.monsters > actors.ai->capacity)
+            return false;
+        const detail::AiStateHeading want = detail::aiStateHeading(*actors.ai, actors, have.monsters, held);
+        if (have.print != want.print || have.bytes != want.bytes)
+            return false;
+        aiRestart(actors);
+        detail::aiState(in, *actors.ai, actors, have.monsters, held);
+        if (!in.ok)
+        {
+            aiRestart(actors);
+            return false;
+        }
         return true;
     }
 } // namespace hldata

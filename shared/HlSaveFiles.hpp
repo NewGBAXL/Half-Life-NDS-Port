@@ -149,6 +149,89 @@ namespace hldata
         }
     } // namespace detail
 
+    /// A run's map file's name ("run/c1a1.mst").
+    inline void runFileOf(const char *map, char (&out)[48]) { std::snprintf(out, sizeof(out), "run/%.31s.mst", map); }
+
+    /// The CRC of `size` bytes of a file from `offset`, read a piece at a
+    /// time into `scratch`; false if they cannot all be read.
+    inline bool cardCrc(SaveCard &card, const char *name, std::size_t offset, std::size_t size,
+                        std::vector<std::uint8_t> &scratch, std::uint32_t &crc)
+    {
+        crc = kCrcStart;
+        for (std::size_t at = 0; at < size;)
+        {
+            const std::size_t want = size - at < 4096 ? size - at : 4096;
+            if (!card.readAt(name, offset + at, want, scratch) || scratch.size() != want)
+                return false;
+            crc = crc32Update(crc, scratch.data(), want);
+            at += want;
+        }
+        crc = crc32Finish(crc);
+        return true;
+    }
+
+    /// A save file's trailer (the maps left it holds): its heading and
+    /// table, read from where the payload ends (`at`). False if there is
+    /// none, or it is not whole; the files themselves are not read.
+    inline bool saveTrailer(SaveCard &card, const char *name, std::size_t at, VisitedHead &head,
+                            std::vector<RunEntry> &table, std::vector<std::uint8_t> &scratch)
+    {
+        table.clear();
+        if (!card.readAt(name, at, sizeof(head), scratch) || scratch.size() != sizeof(head))
+            return false;
+        std::memcpy(&head, scratch.data(), sizeof(head));
+        if (std::memcmp(head.magic, kVisitedMagic, 4) != 0 || head.count > kStoredMapsMost ||
+            head.bytes < head.count * sizeof(RunEntry))
+            return false;
+        const std::size_t tableBytes = head.count * sizeof(RunEntry);
+        if (tableBytes != 0 && (!card.readAt(name, at + sizeof(head), tableBytes, scratch) || scratch.size() != tableBytes))
+            return false;
+        if (crc32(scratch.data(), static_cast<std::uint32_t>(tableBytes)) != head.tableCrc)
+            return false;
+        table.resize(head.count);
+        if (tableBytes != 0)
+            std::memcpy(table.data(), scratch.data(), tableBytes);
+        std::size_t files = 0;
+        for (const RunEntry &entry : table)
+            files += entry.bytes;
+        return (head.flags & kVisitedByRef) ? head.bytes == tableBytes : head.bytes == tableBytes + files;
+    }
+
+    /// Whether a save file is whole, all of it: its payload, and the maps
+    /// left that follow it, each file its own CRC.
+    inline bool saveFileWhole(SaveCard &card, const char *name)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (!card.read(name, bytes, kSaveHeadBytes) || bytes.size() != kSaveHeadBytes)
+            return false;
+        SaveHeader header;
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        if (header.payloadBytes > kSaveMaxBytes || !card.read(name, bytes, kSaveHeadBytes + header.payloadBytes) ||
+            !saveWhole(bytes.data(), bytes.size()))
+            return false;
+        // (Before version 9, nothing after it.)
+        std::vector<std::uint8_t> scratch;
+        VisitedHead head;
+        std::vector<RunEntry> table;
+        const std::size_t at = kSaveHeadBytes + header.payloadBytes;
+        if (!saveTrailer(card, name, at, head, table, scratch))
+        {
+            std::vector<std::uint8_t> more;
+            return header.version < 9 && card.readAt(name, at, 1, more) && more.empty();
+        }
+        std::size_t file = at + sizeof(head) + table.size() * sizeof(RunEntry);
+        for (const RunEntry &entry : table)
+        {
+            if ((head.flags & kVisitedByRef) || entry.bytes < 8)
+                break;
+            std::uint32_t crc = 0;
+            if (!cardCrc(card, name, file, entry.bytes - 8, scratch, crc) || crc != entry.crc)
+                return false;
+            file += entry.bytes;
+        }
+        return true;
+    }
+
     /// One slot put right after a write that was cut off, and what it is
     /// now. The new file, if it is whole, is the save (the old one goes);
     /// if it is not, it goes.
@@ -157,9 +240,9 @@ namespace hldata
         SaveSlot out;
         const std::string fresh = detail::freshName(slot);
         std::vector<std::uint8_t> bytes;
-        if (card.read(fresh.c_str(), bytes, kSaveMaxBytes + kSaveHeadBytes + 1))
+        if (card.read(fresh.c_str(), bytes, kSaveHeadBytes))
         {
-            if (saveWhole(bytes.data(), bytes.size()))
+            if (saveFileWhole(card, fresh.c_str()))
             {
                 card.remove(saveSlotFile(slot));
                 card.rename(fresh.c_str(), saveSlotFile(slot));
@@ -273,7 +356,10 @@ namespace hldata
         };
 
         /// False (and nothing begun) if the save cannot be made at all.
-        bool begin(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading)
+        /// `run`: the maps left, kept on the card, to be in the save after
+        /// the rest -- copied in from their files, or (`byRef`) only named.
+        bool begin(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading,
+                   const RunIndex *run = nullptr, bool byRef = false)
         {
             stage_ = Stage::Idle;
             if (slot < 0 || slot >= kSlotCount)
@@ -283,6 +369,33 @@ namespace hldata
             bytes_ = writeSave(data, heading);
             if (bytes_.size() > kSaveMaxBytes + kSaveHeadBytes)
                 return false;
+            // The maps left: a heading and their table, here; their files
+            // after, copied a piece at a time (Copy).
+            files_.clear();
+            VisitedHead head{};
+            std::memcpy(head.magic, kVisitedMagic, 4);
+            head.flags = byRef ? kVisitedByRef : 0;
+            if (run != nullptr)
+            {
+                head.count = static_cast<std::uint16_t>(run->count);
+                head.runId = run->runId;
+                head.generation = run->generation;
+                for (int k = 0; k < run->count; ++k)
+                    files_.push_back(run->entries[k]);
+            }
+            const std::size_t tableBytes = files_.size() * sizeof(RunEntry);
+            std::size_t fileBytes = 0;
+            for (const RunEntry &entry : files_)
+                fileBytes += entry.bytes;
+            head.bytes = static_cast<std::uint32_t>(tableBytes + (byRef ? 0 : fileBytes));
+            head.tableCrc = crc32(reinterpret_cast<const std::uint8_t *>(files_.data()), static_cast<std::uint32_t>(tableBytes));
+            const std::size_t at = bytes_.size();
+            bytes_.resize(at + sizeof(head) + tableBytes);
+            std::memcpy(bytes_.data() + at, &head, sizeof(head));
+            if (tableBytes != 0)
+                std::memcpy(bytes_.data() + at + sizeof(head), files_.data(), tableBytes);
+            if (byRef)
+                files_.clear();
             card_ = &card;
             index_ = &index;
             slot_ = slot;
@@ -309,7 +422,33 @@ namespace hldata
                     return fail();
                 at_ += n;
                 if (at_ == bytes_.size())
-                    stage_ = Stage::Close;
+                {
+                    stage_ = files_.empty() ? Stage::Close : Stage::Copy;
+                    file_ = 0;
+                    fileAt_ = 0;
+                }
+                return Result::Busy;
+            }
+            case Stage::Copy:
+            {
+                // A piece of a map left's file, from the run's folder into
+                // the save.
+                const RunEntry &entry = files_[file_];
+                char name[48];
+                runFileOf(entry.name, name);
+                const std::size_t left = entry.bytes - fileAt_;
+                const std::size_t n = left < kSaveStepBytes ? left : kSaveStepBytes;
+                if (!card_->readAt(name, fileAt_, n, piece_) || piece_.size() != n ||
+                    !card_->append(fresh_.c_str(), piece_.data(), n, false))
+                    return fail();
+                fileAt_ += n;
+                if (fileAt_ == entry.bytes)
+                {
+                    card_->finish(name);
+                    fileAt_ = 0;
+                    if (++file_ == files_.size())
+                        stage_ = Stage::Close;
+                }
                 return Result::Busy;
             }
             case Stage::Close:
@@ -324,12 +463,36 @@ namespace hldata
                 // and no longer.)
                 const std::size_t n = piece();
                 std::vector<std::uint8_t> back;
-                if (!card_->readAt(fresh_.c_str(), at_, n + (at_ + n == bytes_.size() ? 1 : 0), back) ||
+                const bool last = at_ + n == bytes_.size() && files_.empty();
+                if (!card_->readAt(fresh_.c_str(), at_, n + (last ? 1 : 0), back) ||
                     back.size() != n || std::memcmp(back.data(), bytes_.data() + at_, n) != 0)
                     return fail();
                 at_ += n;
                 if (at_ == bytes_.size())
                 {
+                    stage_ = files_.empty() ? Stage::Swap : Stage::CheckFiles;
+                    file_ = 0;
+                    fileAt_ = at_;
+                    if (files_.empty())
+                        card_->finish(fresh_.c_str());
+                }
+                return Result::Busy;
+            }
+            case Stage::CheckFiles:
+            {
+                // (Each file copied in is as it was: its own CRC.)
+                const RunEntry &entry = files_[file_];
+                std::uint32_t crc = 0;
+                if (entry.bytes < 8 || !cardCrc(*card_, fresh_.c_str(), fileAt_, entry.bytes - 8, piece_, crc) ||
+                    crc != entry.crc)
+                    return fail();
+                fileAt_ += entry.bytes;
+                if (++file_ == files_.size())
+                {
+                    // (... and nothing after the last.)
+                    std::vector<std::uint8_t> more;
+                    if (!card_->readAt(fresh_.c_str(), fileAt_, 1, more) || !more.empty())
+                        return fail();
                     card_->finish(fresh_.c_str());
                     stage_ = Stage::Swap;
                 }
@@ -342,13 +505,15 @@ namespace hldata
             case Stage::Rename:
                 stage_ = Stage::Idle;
                 if (!card_->rename(fresh_.c_str(), saveSlotFile(slot_)))
+                {
+                    letGo();
                     return Result::Failed; // (the new one is still there under its other name: saveRecover finds it)
+                }
                 index_->slots[slot_].status = kSaveGood;
                 index_->slots[slot_].heading = heading_;
                 ++index_->nextSerial;
                 saveIndexWrite(*card_, *index_); // (only a copy: a failure here costs a rebuild)
-                bytes_.clear();
-                bytes_.shrink_to_fit();
+                letGo();
                 return Result::Done;
             }
             return Result::Failed;
@@ -369,8 +534,10 @@ namespace hldata
         {
             Idle,
             Write,
+            Copy,
             Close,
             Check,
+            CheckFiles,
             Swap,
             Rename
         };
@@ -385,8 +552,17 @@ namespace hldata
             card_->finish(fresh_.c_str());
             card_->remove(fresh_.c_str());
             stage_ = Stage::Idle;
-            bytes_.clear();
+            letGo();
             return Result::Failed;
+        }
+        /// Every block it took, given back: none of it is to stay in the
+        /// middle of a DS's heap.
+        void letGo()
+        {
+            std::vector<std::uint8_t>().swap(bytes_);
+            std::vector<RunEntry>().swap(files_);
+            std::vector<std::uint8_t>().swap(piece_);
+            std::string().swap(fresh_);
         }
 
         Stage stage_ = Stage::Idle;
@@ -397,24 +573,48 @@ namespace hldata
         std::string fresh_;
         std::vector<std::uint8_t> bytes_;
         std::size_t at_ = 0;
+        std::vector<RunEntry> files_; ///< the maps left whose files are copied in
+        std::size_t file_ = 0, fileAt_ = 0;
+        std::vector<std::uint8_t> piece_;
     };
 
     /// The same, all at once. False if the card would not take it -- the
     /// old save is then still there.
-    inline bool saveSlotWrite(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading)
+    inline bool saveSlotWrite(SaveCard &card, SaveIndex &index, int slot, const SaveData &data, SaveHeading heading,
+                              const RunIndex *run = nullptr, bool byRef = false)
     {
         SaveWriter writer;
-        return writer.begin(card, index, slot, data, heading) && writer.finish();
+        return writer.begin(card, index, slot, data, heading, run, byRef) && writer.finish();
     }
 
+    /// The save in `slot`: its payload read and checked; and of its trailer,
+    /// the table of the maps left it holds (their files stay on the card,
+    /// for runFromSave: HlMapStore.hpp).
     inline bool saveSlotRead(SaveCard &card, int slot, SaveData &out, SaveHeading *heading = nullptr)
     {
         if (slot < 0 || slot >= kSlotCount)
             return false;
         std::vector<std::uint8_t> bytes;
-        if (!card.read(saveSlotFile(slot), bytes, kSaveMaxBytes + kSaveHeadBytes + 1))
+        if (!card.read(saveSlotFile(slot), bytes, kSaveHeadBytes) || bytes.size() != kSaveHeadBytes)
             return false;
-        return readSave(bytes.data(), bytes.size(), out, heading);
+        SaveHeader header;
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        if (header.payloadBytes > kSaveMaxBytes ||
+            !card.read(saveSlotFile(slot), bytes, kSaveHeadBytes + header.payloadBytes) ||
+            !readSave(bytes.data(), bytes.size(), out, heading))
+            return false;
+        VisitedHead head;
+        std::vector<std::uint8_t> scratch;
+        if (saveTrailer(card, saveSlotFile(slot), kSaveHeadBytes + header.payloadBytes, head, out.visited, scratch))
+        {
+            out.visitedAt = static_cast<std::uint32_t>(kSaveHeadBytes + header.payloadBytes + sizeof(head) +
+                                                       out.visited.size() * sizeof(RunEntry));
+            out.visitedByRef = (head.flags & kVisitedByRef) != 0;
+            out.visitedRunId = head.runId;
+            out.visitedGeneration = head.generation;
+        }
+        card.finish(saveSlotFile(slot));
+        return true;
     }
 
     /// The most recent save that can be loaded: of those shown, or with

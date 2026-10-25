@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 38;
+    inline constexpr std::uint16_t kLevelVersion = 39;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -61,8 +61,10 @@ namespace hldata
     /// has not got; 34: round 4's, the same; 35: round 5's, and the
     /// tanks, mortar fields and wheels; 36: Xen's gravity volumes; 37: the
     /// shotgun shell's ring among the common sounds; 38: no surface across two
-    /// leaves, the map's far distance in the header, transition volumes.)
-    inline constexpr std::uint16_t kLevelMinReader = 38;
+    /// leaves, the map's far distance in the header, transition volumes; 39:
+    /// the counters, cameras, speakers, gun targets and the rest of round
+    /// 39's kinds, Xen's plants, and three items.)
+    inline constexpr std::uint16_t kLevelMinReader = 39;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -504,13 +506,14 @@ namespace hldata
         /// volume (mins/maxs) walked into once (kLogicTouch), or used.
         Music,
         // What is only seen (and felt): HlEffects.hpp.
-        /// A sprite at a place (`move`): env_sprite, env_glow. extra[0] is
-        /// the sprite (into Sprites); extra[1] its frames a second (Q8);
-        /// extra[2] its colour (RGB555) in the low 16 bits, how solid it is
-        /// (1..31) in the next 8 and its scale (Q4) in the top 8; extra[3]
-        /// bit 0: it plays through once and goes out; bit 1: it is a glow,
-        /// seen through what it sits in. Used, it is switched
-        /// on and off (kLogicStartOpen: on from the start).
+        /// A sprite at a place (`move`): env_sprite, env_glow, cycler_sprite.
+        /// extra[0] is the sprite (into Sprites); extra[1] its frames a
+        /// second (Q8); extra[2] its colour (RGB555) in the low 16 bits, how
+        /// solid it is (1..31) in the next 8 and its scale (Q4) in the top 8;
+        /// extra[3] bit 0: it plays through once and goes out; bit 1: it is a
+        /// glow, seen through what it sits in; bit 2: a cycler_sprite, always
+        /// there, whose frames using it stops and starts. Used, it is
+        /// switched on and off (kLogicStartOpen: on from the start).
         Sprite,
         /// A beam from `move` to `mins` (whole units): env_beam, env_laser.
         /// extra[0] is its picture (into Sprites); extra[1] its width in
@@ -666,6 +669,55 @@ namespace hldata
         /// the door that shuts behind them as they arrive fires the way
         /// back, and it is the player walking on that keeps them there.
         Transition,
+        // From level version 39.
+        /// Counts the times it is used (trigger_counter): the extra[0]-th
+        /// fires its targets, and it is spent.
+        Counter,
+        /// Gives another record a target of its own (trigger_changetarget):
+        /// used, every record named `target` fires extra[0] (a name id) from
+        /// then on, in place of what the map gave it (LogicState::target).
+        ChangeTarget,
+        /// Takes every weapon and all ammunition from the player, not the
+        /// suit (player_weaponstrip).
+        WeaponStrip,
+        /// The game is lost (player_loadsaved): used, the screen fades to
+        /// extra[2] of darkness (0..255) over extra[0] ms and holds it, shows
+        /// message extra[3] (into Messages; 0xFFFFFFFF none), and extra[1] ms
+        /// after being used the last save is loaded (LogicWorld::reloadMs).
+        LoadSaved,
+        /// The end of a part of the game (trigger_endsection): touched (unless
+        /// kLogicUseOnly) or used, the game goes back to its title
+        /// (LogicWorld::endSection).
+        EndSection,
+        /// Throws what fights into the air as it comes into a volume
+        /// (trigger_monsterjump): `move` is the velocity (Q12 units a
+        /// second); kLogicStartOpen: off until used, and used again, off.
+        MonsterJump,
+        /// A view from somewhere else (trigger_camera): from `move`, looking
+        /// at what `netName` names (0: straight on, at extra[1] yaw turns)
+        /// for waitMs, then fires `target`. extra[0] its flags: 1 starts at
+        /// the player's eye, 2 looks at the player, 4 the player cannot move
+        /// meanwhile. (LogicWorld::camera.)
+        Camera,
+        /// Announcements (speaker): now and then one of the sentences of its
+        /// aux list (each LogicAux::target a sentence index), at `move`,
+        /// extra[0] its volume (0..127). kLogicStartOpen: speaking from the
+        /// start; used, it starts or stops.
+        Speaker,
+        /// A target that rides a path (func_guntarget): a Train (firstAux its
+        /// first corner, `move` its middle, speed) that, while it rides,
+        /// takes extra[0] of damage and then stops and fires `netName`.
+        /// Used, it starts (whole again) or stops.
+        GunTarget,
+        /// A brush that a shot turns on and off (button_target): each hit
+        /// toggles its texture's other frame and fires `target` on or off;
+        /// kLogicUseOnly: using it does too; kLogicStartOpen: on to begin.
+        ButtonTarget,
+        /// Blood at a place (env_blood): used, a burst of extra[0] (0 red,
+        /// 1 yellow) of size extra[1] at `move` -- or at the player's eye
+        /// (extra[2] bit 2) -- sprayed along extra[3] (a yaw | pitch << 16,
+        /// or anywhere: extra[2] bit 0), and a mark where it lands (bit 3).
+        Blood,
         Count
     };
     // A tank's spawnflags (LogicKind::Tank, maxs[0]): the game's.
@@ -892,6 +944,23 @@ namespace hldata
         BigMomma,   ///< the gonarch: walks her path, spits, lays crabs
         Nihilanth,  ///< the last of them
         Boid,       ///< one of a flock of flyers (monster_flyer_flock)
+        /// A plant of Xen (HlXen.hpp): what kind (XenPlant) in the low 8 bits
+        /// of ActorRecord::item, and for a light, its glow's colour (RGB555)
+        /// in the top 16.
+        Xen,
+        Count
+    };
+
+    /// Which plant of Xen an ActorKind::Xen is (the low 8 bits of its
+    /// ActorRecord::item).
+    enum class XenPlant : std::uint8_t
+    {
+        Hair,        ///< sways; not in the way
+        SporeSmall,  ///< the three fungi: stand, sway, in the way
+        SporeMedium,
+        SporeLarge,
+        Tree,        ///< strikes at what comes in front of it
+        Light,       ///< a glow on a stalk, that hides as the player comes near
         Count
     };
 
@@ -1093,6 +1162,12 @@ namespace hldata
         /// is this in its low 8 bits, and above them where in the level's
         /// Strings what is in it is written: "uranium=60 rockets=8".
         Weaponbox,
+        // From level version 39.
+        Antidote, ///< one more antidote (Arsenal::antidotes)
+        Security, ///< a security card (Arsenal::securityCards)
+        /// Air for the player under water (item_airtank): it stays, and
+        /// gives again 30 seconds on; shot, it bursts.
+        Airtank,
         Count
     };
     /// The first of those: an actor of one of these is cooked after every
@@ -1500,11 +1575,20 @@ namespace hldata
         return table;
     }();
 
+    /// A CRC taken a piece at a time: start with kCrcStart, add each piece
+    /// with crc32Update, and the CRC is crc32Finish of what that leaves --
+    /// the same as crc32 of all of it at once.
+    inline constexpr std::uint32_t kCrcStart = 0xFFFFFFFFu;
+    constexpr std::uint32_t crc32Update(std::uint32_t crc, const std::uint8_t *data, std::size_t size)
+    {
+        for (std::size_t i = 0; i < size; ++i)
+            crc = (crc >> 8) ^ kCrcTable[(crc ^ data[i]) & 0xFF];
+        return crc;
+    }
+    constexpr std::uint32_t crc32Finish(std::uint32_t crc) { return ~crc; }
+
     constexpr std::uint32_t crc32(const std::uint8_t *data, std::uint32_t size)
     {
-        std::uint32_t crc = 0xFFFFFFFFu;
-        for (std::uint32_t i = 0; i < size; ++i)
-            crc = (crc >> 8) ^ kCrcTable[(crc ^ data[i]) & 0xFF];
-        return ~crc;
+        return crc32Finish(crc32Update(kCrcStart, data, size));
     }
 } // namespace hldata

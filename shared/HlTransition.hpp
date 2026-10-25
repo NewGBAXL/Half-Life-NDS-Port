@@ -187,10 +187,16 @@ namespace hldata
     /// Pack what crosses, for the ChangeLevel record `index` of the map being
     /// left. The view angles are the caller's to fill in: they are not part of
     /// the movement state.
+    /// `from`, if given (kMaxVisitors of them): which actor each of the
+    /// visitors is of this map, -1 for none -- those who go are to be taken
+    /// out of it when it is kept for coming back to (HlMapStore.hpp).
     inline Arrival makeArrival(const LogicWorld &w, const Landmark *landmarks,
                                std::uint32_t landmarkCount, const PlayerState &player, int index,
-                               const ModelRef *modelRefs = nullptr)
+                               const ModelRef *modelRefs = nullptr, std::int16_t *from = nullptr)
     {
+        std::int16_t who[kMaxVisitors];
+        for (std::int16_t &one : who)
+            one = -1;
         const LogicRecord &record = w.records[index];
         Arrival arrival;
         arrival.valid = true;
@@ -272,9 +278,11 @@ namespace hldata
                 {
                     arrival.visitors[at] = arrival.visitors[at - 1];
                     far[at] = far[at - 1];
+                    who[at] = who[at - 1];
                     --at;
                 }
                 far[at] = distance;
+                who[at] = static_cast<std::int16_t>(i);
                 Arrival::Visitor &visitor = arrival.visitors[at];
                 visitor.model = nameHash(modelRefs[actor.model].name);
                 visitor.name = actor.nameHash;
@@ -365,6 +373,11 @@ namespace hldata
         }
         arrival.changeTarget = record.extra[2];
         arrival.changeDelayMs = static_cast<std::int32_t>(record.extra[3]);
+        if (from != nullptr)
+        {
+            for (int v = 0; v < kMaxVisitors; ++v)
+                from[v] = arrival.visitors[v].model != 0 ? who[v] : -1;
+        }
         return arrival;
     }
 
@@ -390,11 +403,15 @@ namespace hldata
         }
     }
 
+    /// `placed`, if given: a bit for each of the arrival's visitors who
+    /// found a place here (bit v: visitors[v]).
     inline bool applyArrival(LogicWorld &w, const Landmark *landmarks, std::uint32_t landmarkCount,
                              const std::uint32_t *nameHashes, std::uint32_t nameCount,
                              PlayerState &player, const Arrival &arrival,
-                             const ModelRef *modelRefs = nullptr)
+                             const ModelRef *modelRefs = nullptr, std::uint8_t *placed = nullptr)
     {
+        if (placed != nullptr)
+            *placed = 0;
         if (!arrival.valid)
             return false;
         player.health = arrival.health;
@@ -419,8 +436,9 @@ namespace hldata
         // Whoever came along takes one of the map's spare places -- unless
         // the map has someone of that name already, or was not given the
         // model.
-        for (const Arrival::Visitor &visitor : arrival.visitors)
+        for (int v = 0; v < kMaxVisitors; ++v)
         {
+            const Arrival::Visitor &visitor = arrival.visitors[v];
             if (visitor.model == 0 || w.actors == nullptr || modelRefs == nullptr)
                 continue;
             int model = -1, slot = -1;
@@ -430,14 +448,28 @@ namespace hldata
                 if (nameHash(modelRefs[m].name) == visitor.model)
                     model = m;
             }
+            // A place: his own, if this map knew him and he is not here
+            // (he went, and is back); else one of the places kept for
+            // visitors; else one of the map's that is gone for good -- not
+            // one that is yet to be (a maker's, a soldier's gun to drop).
+            int spare = -1, gone = -1;
             for (int i = 0; i < w.actors->count; ++i)
             {
                 const ActorState &other = w.actors->states[i];
                 if (other.active && visitor.name != 0 && other.nameHash == visitor.name)
                     here2 = true;
-                if (!other.active && slot < 0)
+                if (other.active)
+                    continue;
+                const bool own = i < w.actors->recordCount;
+                if (own && visitor.name != 0 && other.nameHash == visitor.name && slot < 0)
                     slot = i;
+                else if (!own && spare < 0)
+                    spare = i;
+                else if (own && gone < 0 && w.actors->records != nullptr &&
+                         !(w.actors->records[i].flags & kActorDormant))
+                    gone = i;
             }
+            slot = slot >= 0 ? slot : (spare >= 0 ? spare : gone);
             if (model < 0 || slot < 0 || here2)
                 continue;
             // Where they would stand must be somewhere a person can: on a
@@ -492,6 +524,8 @@ namespace hldata
             if (w.world != nullptr)
                 actorToFloor(*w.world, actor, fxFromInt(18), fxFromInt(64));
             actorPlaceBox(*w.actors, slot);
+            if (placed != nullptr)
+                *placed = static_cast<std::uint8_t>(*placed | (1u << v));
         }
 
         // The train they came in on: this map's train of the same name takes

@@ -1004,7 +1004,8 @@ namespace hlds
                 if (record.logic != kNoLogic)
                 {
                     const LogicRecord &rec = level.logic[record.logic];
-                    if (rec.kind == static_cast<std::uint8_t>(LogicKind::Train))
+                    if (rec.kind == static_cast<std::uint8_t>(LogicKind::Train) ||
+                        rec.kind == static_cast<std::uint8_t>(LogicKind::GunTarget))
                     {
                         // Follow the route, once round at most.
                         std::uint16_t corner = rec.firstAux;

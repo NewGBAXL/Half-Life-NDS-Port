@@ -5,6 +5,7 @@
 
 #include "HlMaterial.hpp"
 #include "HlSaveState.hpp"
+#include "HlMapStore.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -196,17 +197,8 @@ namespace hlrt
                 }
             }
         }
-        // (A DSi has the memory for twice as much lying about.)
-        // (A DSi has the memory for twice as much going on at once.)
-        actors.gibLimit = isDSiMode() ? kMaxGibs : kMaxGibs / 2;
-        actors.shotLimit = isDSiMode() ? kMaxProjectiles : kMaxProjectiles / 2;
-        actors.effectLimit = isDSiMode() ? kMaxEffects : kMaxEffects / 2;
-        actors.decalLimit = isDSiMode() ? kMaxDecals : 32;
-        actors.pieceLimit = isDSiMode() ? kMaxPieces : 24;
-        // (... and keeps them longer: the small things half as long again,
-        // the marks twice.)
-        actors.lifePercent = isDSiMode() ? 150 : 100;
-        actors.markLifePercent = isDSiMode() ? 200 : 100;
+        // (A DSi has the memory for twice as much lying about, and going on.)
+        consoleLimits(actors, logic, isDSiMode());
         actors.boxes = actorBoxes_;
         world.boxes = actorBoxes_;
         world.boxCount = actorCount;
@@ -218,7 +210,6 @@ namespace hlrt
         logic.nameCount = static_cast<int>(view.nameCount);
         logic.sounds = view.logicSoundCount != 0 ? view.logicSounds : nullptr;
         logic.heard = &heard;
-        logic.marksLimit = isDSiMode() ? 32 : 16;
         logic.level = &view;
         logic.modelSounds = view.modelSoundCount != 0 ? view.modelSounds : nullptr;
         logic.modelSoundCount = static_cast<int>(view.modelSoundCount);
@@ -315,7 +306,7 @@ namespace hlrt
     {
         const LevelView &view = level.view;
         Arrival arrival = hldata::makeArrival(logic, view.landmarks, view.landmarkCount,
-                                              player.state, logic.pendingChange, view.modelRefs);
+                                              player.state, logic.pendingChange, view.modelRefs, leftWith_);
         arrival.yaw = camera.yaw;
         arrival.pitch = camera.pitch;
         trainCarried_ = arrival.train != 0 && trainDriven(logic) >= 0;
@@ -327,7 +318,7 @@ namespace hlrt
         const LevelView &view = level.view;
         came_ = arrival; // (for a save of this map: who came along is in it)
         if (!hldata::applyArrival(logic, view.landmarks, view.landmarkCount, view.nameHashes,
-                                  view.nameCount, player.state, arrival, view.modelRefs))
+                                  view.nameCount, player.state, arrival, view.modelRefs, &placed_))
             return false;
         camera.yaw = arrival.yaw;
         camera.pitch = arrival.pitch;
@@ -434,15 +425,18 @@ namespace hlrt
         hldata::appendState(save.state, came_);
         const std::vector<std::uint8_t> state = takeMapState(logic, player.state, level.view.header->crc32);
         save.state.insert(save.state.end(), state.begin(), state.end());
-        hldata::appendState(save.state, weapon_);
-        hldata::appendState(save.state, player.view);
-        Kept kept{};
+        ConsoleKept kept{};
         kept.playMs = playMs_;
         kept.music = sound.musicTrack();
         kept.musicMs = sound.musicMs();
         std::memcpy(kept.chapter, chapter_, sizeof(kept.chapter));
-        save.state.insert(save.state.end(), reinterpret_cast<const std::uint8_t *>(&kept),
-                          reinterpret_cast<const std::uint8_t *>(&kept) + sizeof(kept));
+        // (Under a heading of its own: another build's is passed over.)
+        const ConsoleHeading console = consoleHeading(weapon_, player.view, kept);
+        save.state.insert(save.state.end(), reinterpret_cast<const std::uint8_t *>(&console),
+                          reinterpret_cast<const std::uint8_t *>(&console) + sizeof(console));
+        hldata::appendState(save.state, weapon_);
+        hldata::appendState(save.state, player.view);
+        hldata::appendState(save.state, kept);
         // ... and what the monsters think (HlAiSave.hpp): a save without it
         // is read all the same.
         aiAppendState(save.state, actors);
@@ -479,10 +473,20 @@ namespace hlrt
             return false;
         const std::size_t length = hldata::mapStateLength(bytes + at, size - at);
         // (All of it or none: the map's state, then the console's own, to
-        // the last byte.)
+        // the last byte.) The console's: under a heading of its own from
+        // version 9 -- another build's passed over, and the defaults kept --
+        // and before that as it lay.
         WeaponState weapon;
         ViewState view;
-        const std::size_t own = hldata::stateBytes(weapon) + hldata::stateBytes(view) + sizeof(Kept);
+        ConsoleKept kept;
+        const ConsoleHeading want = consoleHeading(weapon, view, kept);
+        ConsoleHeading have{};
+        bool framed = save.version >= 9;
+        if (framed && length != 0 && size - at >= length + sizeof(have))
+            std::memcpy(&have, bytes + at + length, sizeof(have));
+        const std::size_t own =
+            framed ? sizeof(have) + have.bytes
+                   : hldata::stateBytes(weapon) + hldata::stateBytes(view) + sizeof(ConsoleKept);
         // (What the monsters think may follow, in a block of its own: a save
         // written before, or by another build, has none, or one not read.)
         const std::size_t minds = length != 0 && size - at >= length + own
@@ -490,30 +494,57 @@ namespace hlrt
                                       : 0;
         // (A block that is not this build's is left: they think afresh.)
         if (length == 0 || size - at < length + own ||
+            (framed && std::memcmp(have.magic, kConsoleMagic, sizeof(have.magic)) != 0) ||
             !layMapState(bytes + at, length, logic, player.state, level.view.header->crc32))
             return false;
         at += length;
-        hldata::readState(bytes, size, at, weapon_);
+        weapon_ = WeaponState();
+        player.view = ViewState();
+        if (!framed)
+        {
+            hldata::readState(bytes, size, at, weapon_);
+            hldata::readState(bytes, size, at, player.view);
+            std::memcpy(&kept, bytes + at, sizeof(kept));
+            at += sizeof(kept);
+        }
+        else if (have.print == want.print && have.bytes == want.bytes)
+        {
+            at += sizeof(have);
+            hldata::readState(bytes, size, at, weapon_);
+            hldata::readState(bytes, size, at, player.view);
+            hldata::readState(bytes, size, at, kept);
+        }
+        else
+        {
+            at += own;
+        }
         weapon_.anim = nullptr;
-        hldata::readState(bytes, size, at, player.view);
-        Kept kept;
-        std::memcpy(&kept, bytes + at, sizeof(kept));
         playMs_ = kept.playMs;
         std::memcpy(chapter_, kept.chapter, sizeof(chapter_));
         chapter_[sizeof(chapter_) - 1] = 0;
-        at += sizeof(kept);
         if (minds != 0)
             hldata::aiLayState(bytes + at, minds, actors);
         came_ = came;
+        afterLay();
+        // The music that was playing, from where it was.
+        sound.setMusic(kept.music, kept.musicMs);
+        lastHealth_ = player.state.health;
+        return true;
+    }
+
+    void Game::afterLay()
+    {
         // What the map did as it began afresh is not what is to be heard
-        // or shown now: what was going on when it was saved is.
+        // or shown now: what was going on when it was left is.
         heard.count = 0;
         logic.shownCount = 0;
         logic.saveRequested = false;
         logic.pendingChange = -1;
-        // The music that was playing, from where it was.
         logic.musicRequest = -1;
-        sound.setMusic(kept.music, kept.musicMs);
+        logic.reloadMs = -1;
+        logic.endSection = false;
+        logic.camera = -1;
+        cameraWas_ = -1;
         startMessagesMs_ = -1;
         topText.clear();
         // (What was on its way somewhere goes on sounding as it goes.)
@@ -524,10 +555,50 @@ namespace hlrt
                 detail::recordSound(logic, i, false);
         }
         // The lights that change are worked out again, and the weapon in
-        // hand taken up again.
+        // hand taken up again; and what lies about kept to what this console
+        // has room for (a state from the other kind of console brings its
+        // own).
         std::memset(styleValues_, 0xFF, sizeof(styleValues_));
         inHand_ = -1;
-        lastHealth_ = player.state.health;
+        consoleLimits(actors, logic, isDSiMode());
+    }
+
+    std::uint32_t Game::storedBytes()
+    {
+        const std::uint32_t map =
+            static_cast<std::uint32_t>(sizeof(detail::StateHeading)) +
+            detail::stateHeading(logic, player.state, level.view.header->crc32).bytes;
+        const std::uint32_t minds =
+            actors.ai != nullptr
+                ? static_cast<std::uint32_t>(sizeof(detail::AiStateHeading)) +
+                      detail::aiStateHeading(*actors.ai, actors, aiStateCount(actors)).bytes
+                : 0u;
+        return map + minds;
+    }
+
+    bool Game::storeMap(detail::StreamOut &out)
+    {
+        // As it is left: not on its way out of itself, nor asking anything
+        // of the console.
+        logic.pendingChange = -1;
+        logic.saveRequested = false;
+        logic.reloadMs = -1;
+        logic.endSection = false;
+        logic.camera = -1;
+        return streamMapState(out, logic, player.state, level.view.header->crc32) && aiStreamState(out, actors);
+    }
+
+    bool Game::layStored(detail::StreamIn &in, const std::int16_t *sentAway, std::uint8_t landed)
+    {
+        // (The player is the Arrival's, not who left: what the map kept of
+        // them goes nowhere.)
+        PlayerState left = player.state;
+        if (!layMapStateStream(in, logic, left, level.view.header->crc32))
+            return false;
+        aiLayStream(in, actors);
+        // Those who went along, and came into the map after: not here.
+        runSendAway(actors, sentAway, landed);
+        afterLay();
         return true;
     }
 
@@ -609,6 +680,60 @@ namespace hlrt
         }
     }
 
+    void Game::cameraView()
+    {
+        const int index = logic.camera;
+        if (index < 0)
+        {
+            if (cameraWas_ >= 0)
+            {
+                camera.yaw = ownYaw_;
+                camera.pitch = ownPitch_;
+                cameraWas_ = -1;
+                camera.update();
+            }
+            return;
+        }
+        if (cameraWas_ < 0)
+        {
+            ownYaw_ = camera.yaw;
+            ownPitch_ = camera.pitch;
+        }
+        cameraWas_ = index;
+        const LogicRecord &record = logic.records[index];
+        const LogicState &state = logic.states[index];
+        for (int a = 0; a < 3; ++a)
+            camera.pos[a] = state.base[a];
+        // At the player's eye, or at what it names (wherever that has got
+        // to); with neither, straight on as the map turned it.
+        fx at[3];
+        bool aimed = false;
+        if (record.extra[0] & 2)
+        {
+            for (int a = 0; a < 3; ++a)
+                at[a] = player.state.origin[a];
+            at[2] += player.state.viewHeight;
+            aimed = true;
+        }
+        else
+        {
+            aimed = placeOfName(logic, record.target, at);
+        }
+        if (aimed)
+        {
+            const fx d[3] = {at[0] - camera.pos[0], at[1] - camera.pos[1], 0};
+            camera.yaw = fxAtan2Turns(d[1], d[0]);
+            camera.pitch = static_cast<std::int16_t>(fxAtan2Turns(at[2] - camera.pos[2], fxLength(d)));
+        }
+        else
+        {
+            camera.yaw = static_cast<std::uint16_t>(record.extra[1]);
+            camera.pitch = 0;
+        }
+        camera.kickPitch = camera.kickYaw = camera.roll = 0;
+        camera.update();
+    }
+
     void Game::frame(int vblanks)
     {
         // Time slowed or hurried (host_timescale): the sixtieths run are the
@@ -635,6 +760,16 @@ namespace hlrt
         if (vblanks > kMaxVblanks)
             vblanks = kMaxVblanks;
         playMs_ += static_cast<std::uint64_t>(vblanks) * 1000 / 60;
+        // A view from a camera that takes the controls (trigger_camera's
+        // flag 4): the player can do nothing meanwhile.
+        if (logic.camera >= 0 && (logic.records[logic.camera].extra[0] & 4))
+        {
+            input.moveForward = input.moveSide = 0;
+            input.jump = input.duck = input.usePressed = input.attack = input.second = false;
+            input.reloadPressed = input.lampPressed = false;
+            input.weaponPick = input.weaponStep = 0;
+            input.lookDx = input.lookDy = input.lookFineX = input.lookFineY = 0;
+        }
         std::uint32_t netDid = 0; // what the weapon did this frame, for a game between consoles
         // (A development aid: debug_start.txt's sixth number, the seconds
         // after which the player dies, once -- for seeing what dying goes
@@ -925,6 +1060,7 @@ namespace hlrt
         }
         const fx stoodAt[3] = {player.state.origin[0], player.state.origin[1], player.state.origin[2]};
         player.frame(vblanks);
+        cameraView();
         // A game between consoles: what this player did goes out, what the
         // others did comes in (HlNetGame.hpp). And a player just put back
         // into the map looks where that place faces, with a weapon as it

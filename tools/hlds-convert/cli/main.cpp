@@ -206,6 +206,13 @@ namespace
                     r.worstPolygons, r.worstVertices, r.brushes, r.logicRecords,
                     r.unsupportedEntities, r.unsupportedClasses, r.texturesUsed,
                     r.texturesEncoded, r.texelKb, r.alphaTexelKb);
+        if (!r.unsupported.empty())
+        {
+            std::printf("    not handled:");
+            for (const auto &entry : r.unsupported)
+                std::printf(" %s (%d)", entry.first.c_str(), entry.second);
+            std::printf("\n");
+        }
         if (r.streamedTextures != 0)
             std::printf("  %d streamed: %d KB texels total; single view up to %d KB (%d KB free), %d KB resident\n",
                         r.streamedTextures, r.streamTotalKb, r.streamWorstViewKb, r.streamRegionKb, r.streamResidentKb);

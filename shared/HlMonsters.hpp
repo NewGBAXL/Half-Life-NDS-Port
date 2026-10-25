@@ -44,6 +44,7 @@ namespace hldata
 {
     // What happened to the player's things (ActorWorld::got).
     inline constexpr std::uint32_t kGotItem = 1;   ///< something was picked up
+    inline constexpr int kAirtankRechargeMs = 30000; ///< before an air tank gives again
     inline constexpr std::uint32_t kGotWeapon = 2; ///< ... and it was a weapon not had before
     inline constexpr std::uint32_t kGotHurt = 4;   ///< a monster hurt the player
 
@@ -528,7 +529,7 @@ namespace hldata
         for (int i = 0; i < w.recordCount; ++i)
         {
             const LogicRecord &record = w.records[i];
-            if (w.states[i].dead || record.brush == kNoBrush || !detail::isBreakable(record))
+            if (w.states[i].dead || record.brush == kNoBrush || !detail::takesBlows(record))
                 continue;
             const MoverHull &hull = w.movers[record.brush];
             const fx middle[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,
@@ -859,6 +860,10 @@ namespace hldata
                     return true;
                 }
                 return false;
+            case ItemKind::Antidote:
+                return add(ars->antidotes, 1, 99);
+            case ItemKind::Security:
+                return add(ars->securityCards, 1, 99);
             default:
                 return false;
             }
@@ -2989,6 +2994,38 @@ namespace hldata
                 }
             }
         }
+
+        /// What fights and comes into a trigger_monsterjump, on its feet, is
+        /// thrown: the volume's velocity, as the AI's own leap does it.
+        inline void monsterJumps(LogicWorld &w)
+        {
+            ActorWorld &a = *w.actors;
+            for (int r = 0; r < w.recordCount; ++r)
+            {
+                const LogicRecord &record = w.records[r];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::MonsterJump) || w.states[r].dead ||
+                    !w.states[r].running)
+                    continue;
+                for (int i = 0; i < a.count; ++i)
+                {
+                    ActorState &actor = a.states[i];
+                    if (!actor.active || actor.ai >= kAiDying || actor.script >= 0 || !actorThinks(actor.kind) ||
+                        isPerson(actor.kind))
+                        continue;
+                    AiMonster *mind = aiOf(a, i);
+                    if (mind == nullptr || mind->inAir)
+                        continue;
+                    const int x = fxToInt(actor.pos[0]), y = fxToInt(actor.pos[1]), z = fxToInt(actor.pos[2]);
+                    if (x + 16 < record.mins[0] || x - 16 > record.maxs[0] || y + 16 < record.mins[1] ||
+                        y - 16 > record.maxs[1] || z + 72 < record.mins[2] || z > record.maxs[2])
+                        continue;
+                    for (int k = 0; k < 3; ++k)
+                        actor.velocity[k] = record.move[k];
+                    mind->inAir = true;
+                    actor.ai = kAiLeap;
+                }
+            }
+        }
     } // namespace detail
 
     /// The player takes what lies at actor `index`, if it is of any use to
@@ -2998,6 +3035,20 @@ namespace hldata
     {
         ActorWorld &a = *w.actors;
         ActorState &actor = a.states[index];
+        // An air tank stays where it is: it gives the player all the air
+        // there is (the game's twelve seconds), and again half a minute on.
+        if (actor.item == static_cast<std::uint8_t>(ItemKind::Airtank))
+        {
+            if (actor.cooldownMs > 0)
+                return false;
+            player.underMs = 0;
+            actor.cooldownMs = kAirtankRechargeMs;
+            if (w.heard != nullptr)
+                w.heard->add(CommonSound::GunPickup, nullptr);
+            if (actor.fires != 0)
+                logicFire(w, player, actor.fires, -1, kUseToggle, 0);
+            return true;
+        }
         if (!detail::itemTakeAt(w, player, index, a.got))
             return false;
         a.got |= kGotItem;
@@ -3028,6 +3079,8 @@ namespace hldata
         inline void repelTick(LogicWorld &w, PlayerState &player, int index, int ms); // (HlMilitary.hpp)
     }
 
+    inline void xenTick(LogicWorld &w, PlayerState &player, int ms); // (HlXen.hpp)
+
     inline void monstersTick(LogicWorld &w, PlayerState &player, int ms)
     {
         if (w.actors == nullptr || w.world == nullptr)
@@ -3040,7 +3093,9 @@ namespace hldata
         {
             a.hurtLookMs = 125;
             detail::hurtPlaces(w);
+            detail::monsterJumps(w);
         }
+        xenTick(w, player, ms);
         for (int k = 0; k < 3; ++k)
             a.foe[k] = player.origin[k];
         // The bodies that fade: on towards nothing, and gone at the end.
@@ -3440,7 +3495,7 @@ namespace hldata
             for (int i = 0; i < w.recordCount; ++i)
             {
                 if (w.records[i].brush == static_cast<std::uint16_t>(shot.mover) && !w.states[i].dead &&
-                    detail::isBreakable(w.records[i]))
+                    detail::takesBlows(w.records[i]))
                 {
                     w.struckFrom[0] = dir[0];
                     w.struckFrom[1] = dir[1];
@@ -4153,7 +4208,7 @@ namespace hldata
                         for (int i = 0; i < w.recordCount; ++i)
                         {
                             if (w.records[i].brush == static_cast<std::uint16_t>(sweep.mover) && !w.states[i].dead &&
-                                isBreakable(w.records[i]))
+                                takesBlows(w.records[i]))
                             {
                                 w.struckFrom[0] = forward[0];
                                 w.struckFrom[1] = forward[1];
@@ -5345,3 +5400,4 @@ namespace hldata
 #include "HlAliens.hpp"
 #include "HlMilitary.hpp"
 #include "HlPeople.hpp"
+#include "HlXen.hpp"

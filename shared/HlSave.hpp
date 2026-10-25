@@ -1,15 +1,14 @@
 #pragma once
 
-// The saved game: one small file that says where the player is and what of
-// the world does not grow back.
-//
-// It is NOT the PC game's save, which writes every entity of every map of the
-// chapter. A map that is come back to starts as it started, with two
-// exceptions that would otherwise be glaring: what has been BROKEN stays
-// broken (a bitset per map visited), and the global switches keep their
-// states. Loading a save puts the player where they stood, facing as they
-// faced, on the train they were riding if they were riding one -- exactly
-// what walking through a level change carries, plus a position.
+// The saved game: where the player is, the whole of the map they are in, and
+// (from version 9) the maps they have left on the way, as they were left
+// (HlMapStore.hpp's files, copied in after the rest: the "visited" trailer).
+// For a map left before those were kept, or one cooked again since, what has
+// been BROKEN stays broken (a bitset per map visited), and the global
+// switches keep their states. Loading a save puts the player where they
+// stood, facing as they faced, on the train they were riding if they were
+// riding one -- exactly what walking through a level change carries, plus a
+// position.
 //
 // On the card it is the same shape as the settings file: a fixed header with
 // a magic, a version, the payload's length and its CRC, then a yas archive.
@@ -43,6 +42,65 @@ namespace hldata
             ar &map &broken &gone;
         }
     };
+
+    /// One map left, kept to come back to (HlMapStore.hpp): what the run's
+    /// index has of it, and what a save's trailer lists.
+    inline constexpr int kRunVisitors = 4; ///< (kMaxVisitors: HlMapStore.hpp checks they agree)
+    inline constexpr int kStoredMapsMost = 12;
+    struct RunEntry
+    {
+        char name[32];          ///< the map, lower case
+        std::uint32_t level;    ///< as in its file
+        std::uint32_t bytes;    ///< the whole file
+        std::uint32_t crc;      ///< its tail's
+        std::uint32_t stamp;
+        std::int16_t sentAway[kRunVisitors];
+        /// Bit v: sentAway[v] did come into the next map (and so is taken
+        /// out of this one when it is laid back).
+        std::uint8_t landed;
+        std::uint8_t spare[3];
+    };
+    static_assert(sizeof(RunEntry) == 60);
+
+    /// The maps kept, for one run of the game (a new game, or a save
+    /// loaded, begins another: `runId`).
+    struct RunIndex
+    {
+        std::uint32_t runId = 0;
+        std::uint32_t generation = 0; ///< one more each time the folder changes
+        std::int32_t count = 0;
+        RunEntry entries[kStoredMapsMost] = {};
+    };
+    static_assert(sizeof(RunIndex) == 12 + 60 * kStoredMapsMost);
+
+    /// What the console keeps beside the map's state, in a save: how long
+    /// has been played, the chapter's title as it was last shown, the
+    /// music that was playing.
+    struct ConsoleKept
+    {
+        std::uint64_t playMs = 0;
+        std::int32_t music = -1;
+        std::uint32_t musicMs = 0; ///< how far into it
+        char chapter[44] = {};
+        std::uint32_t spare = 0;
+    };
+    static_assert(sizeof(ConsoleKept) == 64);
+
+    /// A save's trailer (version 9 on), after its payload: this, the table
+    /// of the maps it holds, and each map's file as it was on the card, one
+    /// after another.
+    inline constexpr char kVisitedMagic[4] = {'H', 'L', 'V', 'T'};
+    inline constexpr std::uint16_t kVisitedByRef = 1; ///< the files are not in it: the run's folder as it was (runId, generation)
+    struct VisitedHead
+    {
+        char magic[4];
+        std::uint16_t flags;
+        std::uint16_t count;
+        std::uint32_t runId, generation;
+        std::uint32_t bytes;    ///< the table and the files after it
+        std::uint32_t tableCrc; ///< of the table
+    };
+    static_assert(sizeof(VisitedHead) == 24);
 
     struct SaveData
     {
@@ -92,8 +150,19 @@ namespace hldata
         /// What they carry of the weapons that came later: after all the rest,
         /// written by writeSave and read by readSave only when it is there (a
         /// save of version 7 or before has none: then nothing of these). Not
-        /// part of serialize(), which is the rest, as it always was.
+        /// part of serialize(), which is the rest, as it always was. (Its
+        /// antidotes and security cards after it, from version 9.)
         Arsenal arsenal;
+
+        // Not in the payload: what reading the file found besides.
+        std::uint16_t version = 0; ///< of the file it was read from (readSave)
+        /// The maps it holds, left on the way (its trailer: saveSlotRead); and
+        /// where in the file the first of their files begins -- or, `byRef`,
+        /// that it holds none but names the run's folder as it was.
+        std::vector<RunEntry> visited;
+        std::uint32_t visitedAt = 0;
+        bool visitedByRef = false;
+        std::uint32_t visitedRunId = 0, visitedGeneration = 0;
 
         template <class Ar>
         void serialize(Ar &ar)
@@ -106,7 +175,7 @@ namespace hldata
     };
 
     inline constexpr char kSaveMagic[4] = {'H', 'L', 'S', 'G'};
-    inline constexpr std::uint16_t kSaveVersion = 8;
+    inline constexpr std::uint16_t kSaveVersion = 9;
     /// The oldest save format this build can read: 6.
     /// Note some fields in save format 6 are unreadable.
     /// kSaveMinReader is the oldest build that can read what this one writes;
@@ -116,8 +185,12 @@ namespace hldata
     /// 7 -> 8: the Arsenal after the rest (a version 7 save has none, and is
     /// read as before); a build before 8 would not know the weapons it
     /// names, so it is the oldest that reads one.
+    /// 8 -> 9: the maps left on the way after the payload (the visited
+    /// trailer), the antidotes and security cards after the Arsenal, and what
+    /// the console keeps (its weapon, its view, ConsoleKept) given a heading of
+    /// its own in the state. A build before would refuse a save so long.
     inline constexpr std::uint16_t kSaveMinVersion = 6;
-    inline constexpr std::uint16_t kSaveMinReader = 8;
+    inline constexpr std::uint16_t kSaveMinReader = 9;
     /// Whether this build can read a save with these header values: its
     /// version is one we still read, its minReader is not newer than this
     /// build, and the maps it was made against are still compatible
@@ -127,7 +200,8 @@ namespace hldata
         return version >= kSaveMinVersion && minReader <= kSaveVersion && levelSaveVersionOk(levelVersion);
     }
     /// A save with a map's whole state in it is tens of kilobytes; one that
-    /// claims to be more than this is not one.
+    /// claims to be more than this is not one. (Its payload: the maps left
+    /// that follow it are kept within kStoredBytesMost, HlMapStore.hpp.)
     inline constexpr std::uint32_t kSaveMaxBytes = 256 * 1024;
 
     // What kind of save a file is.
@@ -227,6 +301,8 @@ namespace hldata
         oa &data;
         Arsenal arsenal = data.arsenal;
         oa &arsenal;
+        std::int16_t antidotes = data.arsenal.antidotes, cards = data.arsenal.securityCards;
+        oa &antidotes &cards;
         const auto buf = os.get_intrusive_buffer();
 
         SaveHeader header{};
@@ -294,9 +370,15 @@ namespace hldata
         yas::mem_istream is(bytes + kSaveHeadBytes, payload);
         yas::binary_iarchive<yas::mem_istream, flags> ia(is);
         ia &read;
-        // (The Arsenal, if the save is of a version that has one.)
+        // (The Arsenal, if the save is of a version that has one; and what
+        // came after it.)
         if (!is.empty())
             ia &read.arsenal;
+        if (!is.empty())
+            ia &read.arsenal.antidotes &read.arsenal.securityCards;
+        SaveHeader header;
+        std::memcpy(&header, bytes, sizeof(header));
+        read.version = header.version;
 
         // What the archive says is still only what a file says: the map's
         // name becomes a path, and the lists are walked.

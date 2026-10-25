@@ -23,4 +23,10 @@ namespace hlrt
     bool Game::arrivalOf(const hldata::SaveData &save, hldata::Arrival &out) { return gameApi.arrivalOf(save, out); }
     bool Game::layState(const hldata::SaveData &save) { return gameApi.layState(*this, save); }
     hldata::SaveHeading Game::heading(const std::string &map) const { return gameApi.heading(*this, map); }
+    std::uint32_t Game::storedBytes() { return gameApi.storedBytes(*this); }
+    bool Game::storeMap(hldata::detail::StreamOut &out) { return gameApi.storeMap(*this, out); }
+    bool Game::layStored(hldata::detail::StreamIn &in, const std::int16_t *sentAway, std::uint8_t landed)
+    {
+        return gameApi.layStored(*this, in, sentAway, landed);
+    }
 } // namespace hlrt

@@ -639,6 +639,46 @@ namespace hldata
                        actor.kind == static_cast<std::uint8_t>(ActorKind::Furniture);
     }
 
+    /// The first clip of `model` that is for `activity` (its ModelClip flags,
+    /// kClipActivityShift); -1 if none is.
+    inline int clipOfActivity(const ModelView &model, std::uint8_t activity)
+    {
+        for (int c = 0; c < model.header->clipCount; ++c)
+        {
+            if (((model.clips[c].flags >> kClipActivityShift) & 0xFF) == activity)
+                return c;
+        }
+        return -1;
+    }
+
+    /// The game's ACT_IDLE (HlAi.hpp's kActIdle: HlXen.hpp checks they agree).
+    inline constexpr std::uint8_t kXenIdleActivity = 1;
+
+    /// A plant of Xen as the map starts it: somewhere in its sway, at a
+    /// pace of its own (0.7 to 1.4 of its clip's), as the game starts them
+    /// at random -- the same each time here. A light shines.
+    inline void xenStart(ActorState &actor, const ModelView &model, int index)
+    {
+        std::uint32_t roll = static_cast<std::uint32_t>(index) * 2654435761u ^
+                             static_cast<std::uint32_t>(actor.pos[0] ^ (actor.pos[1] << 3));
+        roll = roll * 1664525u + 1013904223u;
+        const auto plant = static_cast<XenPlant>(actor.item);
+        if (plant == XenPlant::Tree || plant == XenPlant::Light)
+        {
+            const int idle = clipOfActivity(model, kXenIdleActivity);
+            if (idle >= 0)
+                actor.clip = actor.restClip = static_cast<std::int16_t>(idle);
+        }
+        actor.frozen = false;
+        actor.once = false;
+        actor.attack = 0;
+        actor.cooldownMs = 0;
+        actor.reach = plant == XenPlant::Light ? 255 : 0;
+        if (actor.clip >= 0 && actor.clip < model.header->clipCount && model.clips[actor.clip].frameCount > 1)
+            actor.frame = ((roll >> 8) % (model.clips[actor.clip].frameCount - 1u)) << 8;
+        actor.speed = static_cast<fx>(179 + (roll >> 20) % 180);
+    }
+
     /// A point let fall from `pos` (HlWalk.hpp, which knows about lines):
     /// onto the world or a brush under it, at most `down` lower. False, and
     /// nothing moved, if it starts inside something or nothing is there.
@@ -677,6 +717,22 @@ namespace hldata
         // reason (a forklift is not a pillar 16 units wide, nor a wall).
         fx half = fxFromInt(16), height = fxFromInt(72);
         const ModelView *model = actorModel(a, actor);
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen))
+        {
+            // The game's own boxes for them (the big fungus's is its cap,
+            // up on its legs: under it is walked through).
+            static const std::int16_t kBoxes[][3] = {
+                {4, 0, 32}, {16, 0, 64}, {40, 0, 120}, {48, 110, 240}, {30, 0, 188}, {80, 0, 32}};
+            const int which = actor.item < static_cast<std::uint8_t>(XenPlant::Count) ? actor.item : 0;
+            for (int i = 0; i < 2; ++i)
+            {
+                box.mins[i] = actor.pos[i] - fxFromInt(kBoxes[which][0]);
+                box.maxs[i] = actor.pos[i] + fxFromInt(kBoxes[which][0]);
+            }
+            box.mins[2] = actor.pos[2] + fxFromInt(kBoxes[which][1]);
+            box.maxs[2] = actor.pos[2] + fxFromInt(kBoxes[which][2]);
+            return;
+        }
         if (model != nullptr && actor.kind >= static_cast<std::uint8_t>(ActorKind::Generic))
         {
             int reach = 0;
@@ -764,7 +820,9 @@ namespace hldata
                            record.kind == static_cast<std::uint8_t>(ActorKind::Apache) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::BigMomma) || // (hers: her path)
                            record.kind == static_cast<std::uint8_t>(ActorKind::Boid);       // (its: its leader)
-        if (record.kind != static_cast<std::uint8_t>(ActorKind::Item) && !flies)
+        // (A plant of Xen's: which, and a light's colour; one skin.)
+        const bool plant = record.kind == static_cast<std::uint8_t>(ActorKind::Xen);
+        if (record.kind != static_cast<std::uint8_t>(ActorKind::Item) && !flies && !plant)
             actor.skin = static_cast<std::uint8_t>(record.item >> kActorSkinShift);
         actor.kind = record.kind;
         actor.flags = record.flags;
@@ -772,7 +830,7 @@ namespace hldata
         // (An item's kind; a soldier's weapons; and for a soldier or a monster
         // that thinks, when it sets off what it sets off.)
         actor.item = record.kind == static_cast<std::uint8_t>(ActorKind::Item) ||
-                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) ||
+                             record.kind == static_cast<std::uint8_t>(ActorKind::Grunt) || plant ||
                              (actorThinks(record.kind) && !flies)
                          ? static_cast<std::uint8_t>(record.item)
                          : std::uint8_t(0);
@@ -794,6 +852,7 @@ namespace hldata
         const bool point = record.kind == static_cast<std::uint8_t>(ActorKind::Pose) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Furniture);
         const bool stays = record.kind == static_cast<std::uint8_t>(ActorKind::Cycler) ||
+                           record.kind == static_cast<std::uint8_t>(ActorKind::Xen) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Barnacle) ||
                            record.kind == static_cast<std::uint8_t>(ActorKind::Tripmine) ||
                            // (What flies, and what swims, is where it is put.)
@@ -858,6 +917,8 @@ namespace hldata
         // A cycler runs its sequence; furniture and poses hold theirs.
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler))
             actor.frozen = false;
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen) && model != nullptr)
+            xenStart(actor, *model, index);
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item))
             actor.frozen = true;
     }
@@ -907,10 +968,14 @@ namespace hldata
         ModelClip clip = model->clips[actor.clip];
         // A cycler goes round whatever the sequence says; a clip played
         // "once" stops at its end whatever it says.
-        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler))
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Cycler) ||
+            actor.kind == static_cast<std::uint8_t>(ActorKind::Xen))
             clip.flags |= kClipLoops;
         if (actor.once)
             clip.flags &= static_cast<std::uint16_t>(~kClipLoops);
+        // (A plant sways at a pace of its own: `speed`, Q8.)
+        if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen) && actor.speed > 0)
+            ms = static_cast<int>((static_cast<std::int64_t>(ms) * actor.speed) >> 8);
         bool finished = false;
         actor.frame = advanceClip(clip, actor.frame, ms, finished);
         actor.finished = finished;

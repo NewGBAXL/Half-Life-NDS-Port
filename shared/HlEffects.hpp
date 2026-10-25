@@ -182,6 +182,13 @@ namespace hldata
         switch (static_cast<LogicKind>(record.kind))
         {
         case LogicKind::Sprite:
+            // (A cycler_sprite is always there: using it stops its frames,
+            // or starts them again.)
+            if (record.extra[3] & 4)
+            {
+                state.bits = useType == kUseToggle ? state.bits ^ 1u : (useType == kUseOff ? 1u : 0u);
+                break;
+            }
             state.running = on;
             state.phase = 0;
             break;
@@ -308,7 +315,7 @@ namespace hldata
             {
             case LogicKind::Sprite:
             {
-                if (!state.running)
+                if (!state.running || ((record.extra[3] & 4) && state.bits != 0))
                     break;
                 // Its frame, Q8, of the frames the game's sprite has (what
                 // is drawn is the nearest the atlas kept). One that plays

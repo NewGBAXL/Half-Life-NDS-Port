@@ -1155,7 +1155,10 @@ namespace hlds
         result.pathFromGraph = report.paths.fromGraph;
         result.unsupportedClasses = static_cast<int>(report.unsupported.size());
         for (const auto &entry : report.unsupported)
+        {
             result.unsupportedEntities += entry.second;
+            result.unsupported.emplace_back(entry.first, entry.second);
+        }
         result.faces = report.faces;
         result.faceVertices = report.faceVertices;
         result.vertices = report.vertices;

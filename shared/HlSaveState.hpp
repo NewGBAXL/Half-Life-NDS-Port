@@ -45,9 +45,9 @@ namespace hldata
     // How many fields each has. (Wrong, it does not build: the compiler
     // says how many there are.)
     HL_FIELDS(BrushState, 6);
-    HL_FIELDS(LogicState, 10);
+    HL_FIELDS(LogicState, 12);
     HL_FIELDS(LogicEvent, 6);
-    HL_FIELDS(LogicWorld, 61);
+    HL_FIELDS(LogicWorld, 65);
     HL_FIELDS(Hull, 4);
     HL_FIELDS(MoverHull, 10);
     HL_FIELDS(LadderVolume, 3);
@@ -65,6 +65,7 @@ namespace hldata
     HL_FIELDS(LampState, 2);
     HL_FIELDS(Arrival::Visitor, 8);
     HL_FIELDS(Arrival, 17);
+    HL_FIELDS(ConsoleKept, 5);
 
     namespace detail
     {
@@ -94,9 +95,14 @@ namespace hldata
             }
         };
 
+        // Each archive says what it is to the code that differs by it (the
+        // minds: HlAiSave.hpp): whether it is gathering what is there to be
+        // written or measured (kGathers), or reading it back (kReads).
+
         /// Writes each value.
         struct StateOut
         {
+            static constexpr bool kGathers = true, kReads = false;
             yas::mem_ostream os;
             yas::binary_oarchive<yas::mem_ostream, kStateFlags> ar{os};
             Skips skips;
@@ -109,6 +115,7 @@ namespace hldata
         /// Reads each value.
         struct StateIn
         {
+            static constexpr bool kGathers = false, kReads = true;
             yas::mem_istream is;
             yas::binary_iarchive<yas::mem_istream, kStateFlags> ar{is};
             Skips skips;
@@ -123,6 +130,7 @@ namespace hldata
         /// makes a fingerprint of the order and the sizes of it all.
         struct StateMeasure
         {
+            static constexpr bool kGathers = true, kReads = false;
             std::uint32_t bytes = 0;
             std::uint32_t print = 2166136261u;
             Skips skips;
@@ -133,6 +141,121 @@ namespace hldata
                 print = (print ^ static_cast<std::uint32_t>(sizeof(T) + (std::is_signed_v<T> ? 16 : 0))) * 16777619u;
             }
         };
+
+        /// Writes each value as it lies (yas's binary, little-endian, without
+        /// a header, writes each as its bytes: the same bytes StateOut
+        /// makes), a buffer's worth at a time to `sink` -- a map's state put
+        /// on the card without all of it in memory at once. A CRC of all of
+        /// it is kept as it goes. `ok` false: the sink failed (and nothing
+        /// more is sent).
+        struct StreamOut
+        {
+            static constexpr bool kGathers = true, kReads = false;
+            using Sink = bool (*)(void *context, const std::uint8_t *bytes, std::size_t size);
+            Sink sink = nullptr;
+            void *context = nullptr;
+            std::uint8_t *buffer = nullptr;
+            std::size_t capacity = 0, used = 0;
+            std::uint32_t crc = kCrcStart;
+            std::uint32_t written = 0;
+            bool ok = true;
+            Skips skips;
+            void put(const void *data, std::size_t size)
+            {
+                const auto *bytes = static_cast<const std::uint8_t *>(data);
+                while (size > 0 && ok)
+                {
+                    if (used == capacity)
+                        flush();
+                    const std::size_t take = size < capacity - used ? size : capacity - used;
+                    std::memcpy(buffer + used, bytes, take);
+                    used += take;
+                    bytes += take;
+                    size -= take;
+                }
+            }
+            bool flush()
+            {
+                if (ok && used > 0)
+                {
+                    crc = crc32Update(crc, buffer, used);
+                    written += static_cast<std::uint32_t>(used);
+                    // (No sink: into memory, the buffer all there is -- more
+                    // than fits is a failure, not a flush.)
+                    ok = sink != nullptr && sink(context, buffer, used);
+                }
+                used = 0;
+                return ok;
+            }
+            template <class T>
+            void value(T &v)
+            {
+                put(&v, sizeof(T));
+            }
+        };
+        /// Reads each value, a buffer's worth at a time from `source` (what
+        /// StreamOut wrote, or StateOut). `ok` false: it ran out, or the
+        /// source failed -- and what is read after is nothing.
+        struct StreamIn
+        {
+            static constexpr bool kGathers = false, kReads = true;
+            /// Up to `most` bytes into `bytes`; how many (0: no more).
+            using Source = std::size_t (*)(void *context, std::uint8_t *bytes, std::size_t most);
+            Source source = nullptr;
+            void *context = nullptr;
+            std::uint8_t *buffer = nullptr;
+            std::size_t capacity = 0, have = 0, at = 0;
+            std::uint32_t crc = kCrcStart;
+            bool ok = true;
+            Skips skips;
+            void get(void *data, std::size_t size)
+            {
+                auto *bytes = static_cast<std::uint8_t *>(data);
+                while (size > 0)
+                {
+                    if (at == have)
+                    {
+                        have = ok && source != nullptr ? source(context, buffer, capacity) : 0;
+                        at = 0;
+                        if (have == 0)
+                        {
+                            ok = false;
+                            std::memset(bytes, 0, size);
+                            return;
+                        }
+                        crc = crc32Update(crc, buffer, have);
+                    }
+                    const std::size_t take = size < have - at ? size : have - at;
+                    std::memcpy(bytes, buffer + at, take);
+                    at += take;
+                    bytes += take;
+                    size -= take;
+                }
+            }
+            template <class T>
+            void value(T &v)
+            {
+                get(&v, sizeof(T));
+            }
+        };
+
+        /// The two, straight into and out of memory: `size` bytes there are,
+        /// no more.
+        inline StreamOut memoryOut(std::uint8_t *at, std::size_t size)
+        {
+            StreamOut out;
+            out.buffer = at;
+            out.capacity = size;
+            return out;
+        }
+        inline StreamIn memoryIn(const std::uint8_t *at, std::size_t size)
+        {
+            StreamIn in;
+            in.buffer = const_cast<std::uint8_t *>(at); // (read from, never written)
+            in.capacity = size;
+            in.have = size;
+            return in;
+        }
 
         /// One thing, by what it is: a number or a switch is a value; an
         /// array is each of its elements; a structure is each of its
@@ -229,6 +352,8 @@ namespace hldata
         };
         static_assert(sizeof(StateHeading) == 40);
 
+        inline void afterMapLay(LogicWorld &w); // (below)
+
         inline StateHeading stateHeading(LogicWorld &w, PlayerState &player, std::uint32_t level,
                                          bool older = false)
         {
@@ -257,18 +382,29 @@ namespace hldata
                                                   bool older = false)
     {
         const detail::StateHeading heading = detail::stateHeading(w, player, level, older);
-        detail::StateOut out;
-        detail::mapState(out, w, player, older);
-        const auto buf = out.os.get_intrusive_buffer();
-        std::vector<std::uint8_t> bytes(sizeof(heading) + buf.size);
+        std::vector<std::uint8_t> bytes(sizeof(heading) + heading.bytes);
         std::memcpy(bytes.data(), &heading, sizeof(heading));
-        std::memcpy(bytes.data() + sizeof(heading), buf.data, buf.size);
+        detail::StreamOut out = detail::memoryOut(bytes.data() + sizeof(heading), heading.bytes);
+        detail::mapState(out, w, player, older);
         return bytes;
     }
 
-    /// Which way `bytes` is a state that can be laid over the map `w` is
-    /// of, of this cooked map and whole: 1 as this build writes it, 2 as
-    /// save version 6 did (without the fields added since), 0 not at all.
+    /// Which way a state with heading `have` can be laid over the map `w`
+    /// is of, of this cooked map: 1 as this build writes it, 2 as save
+    /// version 6 did (without the fields added since), 0 not at all.
+    inline int mapStateFormatOf(const detail::StateHeading &have, LogicWorld &w, PlayerState &player,
+                                std::uint32_t level)
+    {
+        for (int older = 0; older < 2; ++older)
+        {
+            const detail::StateHeading want = detail::stateHeading(w, player, level, older != 0);
+            if (std::memcmp(&have, &want, sizeof(have)) == 0)
+                return 1 + older;
+        }
+        return 0;
+    }
+
+    /// ... of `bytes`, which must be the whole of it.
     inline int mapStateFormat(const std::uint8_t *bytes, std::size_t size, LogicWorld &w, PlayerState &player,
                               std::uint32_t level)
     {
@@ -278,13 +414,7 @@ namespace hldata
         std::memcpy(&have, bytes, sizeof(have));
         if (size != sizeof(have) + have.bytes)
             return 0;
-        for (int older = 0; older < 2; ++older)
-        {
-            const detail::StateHeading want = detail::stateHeading(w, player, level, older != 0);
-            if (std::memcmp(&have, &want, sizeof(have)) == 0)
-                return 1 + older;
-        }
-        return 0;
+        return mapStateFormatOf(have, w, player, level);
     }
 
     /// Whether `bytes` is a state that can be laid over the map `w` is of.
@@ -316,50 +446,80 @@ namespace hldata
         const int format = mapStateFormat(bytes, size, w, player, level);
         if (format == 0)
             return false;
-        detail::StateIn in(bytes + sizeof(detail::StateHeading), size - sizeof(detail::StateHeading));
+        detail::StreamIn in = detail::memoryIn(bytes + sizeof(detail::StateHeading), size - sizeof(detail::StateHeading));
         detail::mapState(in, w, player, format == 2);
-        // A train is turned as its map has it, for good: not as a save made
-        // by another build of the converter says (c0a0e's tram door was once
-        // cooked turned the wrong way round).
-        for (int i = 0; i < w.recordCount; ++i)
-        {
-            const LogicRecord &record = w.records[i];
-            if (record.kind != static_cast<std::uint8_t>(LogicKind::Train) || record.brush == kNoBrush ||
-                record.brush >= w.brushCount)
-                continue;
-            const std::uint16_t turned[3] = {static_cast<std::uint16_t>(record.extra[0]),
-                                             static_cast<std::uint16_t>(record.extra[1]),
-                                             static_cast<std::uint16_t>(record.extra[2])};
-            const fx at[3] = {w.brushStates[record.brush].pos[0], w.brushStates[record.brush].pos[1],
-                              w.brushStates[record.brush].pos[2]};
-            logicPlaceBrushTurned(w, record.brush, at, turned);
-        }
-        // (What the monsters thought is not kept: they think afresh.)
-        if (w.actors != nullptr)
-            aiRestart(*w.actors);
-        if (w.actors != nullptr && w.actors->boxes != nullptr)
-        {
-            for (int i = 0; i < w.actors->count; ++i)
-                actorPlaceBox(*w.actors, i);
-        }
-        // (The brushes are where the save has them: so is the table of
-        // where they are.)
-        if (w.world != nullptr)
-            moverReachAll(*w.world);
+        detail::afterMapLay(w);
         return true;
     }
 
-    /// Anything else that is all fields (what the console keeps beside the
-    /// map: the weapon in hand, the lamp, who came along), the same way.
-    template <class T>
-    void appendState(std::vector<std::uint8_t> &bytes, T &thing)
+    /// The state of the map, heading first, through `out` (to the card, a
+    /// piece at a time): the same bytes as takeMapState's. False if the sink
+    /// failed.
+    inline bool streamMapState(detail::StreamOut &out, LogicWorld &w, PlayerState &player, std::uint32_t level)
     {
-        detail::StateOut out;
-        detail::stateField(out, thing);
-        const auto buf = out.os.get_intrusive_buffer();
-        bytes.insert(bytes.end(), reinterpret_cast<const std::uint8_t *>(buf.data),
-                     reinterpret_cast<const std::uint8_t *>(buf.data) + buf.size);
+        detail::StateHeading heading = detail::stateHeading(w, player, level);
+        out.put(&heading, sizeof(heading));
+        detail::mapState(out, w, player);
+        return out.ok;
     }
+
+    /// ... and laid back from `in`. False, and nothing touched, if its
+    /// heading does not fit the map; false also if `in` ran out part of the
+    /// way -- the map is then not as it was, nor as it should be, and is to
+    /// be begun afresh. (Whoever wrote it checked it whole first: a card
+    /// that fails half way is all that is left.)
+    inline bool layMapStateStream(detail::StreamIn &in, LogicWorld &w, PlayerState &player, std::uint32_t level)
+    {
+        detail::StateHeading have;
+        in.get(&have, sizeof(have));
+        if (!in.ok)
+            return false;
+        const int format = mapStateFormatOf(have, w, player, level);
+        if (format == 0)
+            return false;
+        detail::mapState(in, w, player, format == 2);
+        if (!in.ok)
+            return false;
+        detail::afterMapLay(w);
+        return true;
+    }
+
+    namespace detail
+    {
+        /// What follows a map's state laid back: what is worked out from it.
+        inline void afterMapLay(LogicWorld &w)
+        {
+            // A train is turned as its map has it, for good: not as a save made
+            // by another build of the converter says (c0a0e's tram door was once
+            // cooked turned the wrong way round).
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                const LogicRecord &record = w.records[i];
+                if (record.kind != static_cast<std::uint8_t>(LogicKind::Train) || record.brush == kNoBrush ||
+                    record.brush >= w.brushCount)
+                    continue;
+                const std::uint16_t turned[3] = {static_cast<std::uint16_t>(record.extra[0]),
+                                                 static_cast<std::uint16_t>(record.extra[1]),
+                                                 static_cast<std::uint16_t>(record.extra[2])};
+                const fx at[3] = {w.brushStates[record.brush].pos[0], w.brushStates[record.brush].pos[1],
+                                  w.brushStates[record.brush].pos[2]};
+                logicPlaceBrushTurned(w, record.brush, at, turned);
+            }
+            // (What the monsters thought is not kept: they think afresh.)
+            if (w.actors != nullptr)
+                aiRestart(*w.actors);
+            if (w.actors != nullptr && w.actors->boxes != nullptr)
+            {
+                for (int i = 0; i < w.actors->count; ++i)
+                    actorPlaceBox(*w.actors, i);
+            }
+            // (The brushes are where the save has them: so is the table of
+            // where they are.)
+            if (w.world != nullptr)
+                moverReachAll(*w.world);
+        }
+    } // namespace detail
+
     /// How long `thing` is when written: for reading it back from where it
     /// was put.
     template <class T>
@@ -369,13 +529,47 @@ namespace hldata
         detail::stateField(measure, thing);
         return measure.bytes;
     }
+
+    /// Anything else that is all fields (what the console keeps beside the
+    /// map: the weapon in hand, the lamp, who came along), the same way.
+    template <class T>
+    void appendState(std::vector<std::uint8_t> &bytes, T &thing)
+    {
+        const std::size_t at = bytes.size();
+        bytes.resize(at + stateBytes(thing));
+        detail::StreamOut out = detail::memoryOut(bytes.data() + at, bytes.size() - at);
+        detail::stateField(out, thing);
+    }
+    /// Before what the console keeps beside a map's state in a save (its
+    /// weapon, its view, ConsoleKept: from save version 9): what it is, so a
+    /// save of another build's can have it passed over and the map still laid.
+    inline constexpr char kConsoleMagic[4] = {'H', 'L', 'C', 'N'};
+    struct ConsoleHeading
+    {
+        char magic[4];
+        std::uint32_t print; ///< of the layout of what follows
+        std::uint32_t bytes;
+    };
+    static_assert(sizeof(ConsoleHeading) == 12);
+    template <class... T>
+    ConsoleHeading consoleHeading(T &...things)
+    {
+        detail::StateMeasure measure;
+        (detail::stateField(measure, things), ...);
+        ConsoleHeading h{};
+        std::memcpy(h.magic, kConsoleMagic, sizeof(h.magic));
+        h.print = measure.print;
+        h.bytes = measure.bytes;
+        return h;
+    }
+
     template <class T>
     bool readState(const std::uint8_t *bytes, std::size_t size, std::size_t &at, T &thing)
     {
         const std::size_t length = stateBytes(thing);
         if (at + length > size)
             return false;
-        detail::StateIn in(bytes + at, length);
+        detail::StreamIn in = detail::memoryIn(bytes + at, length);
         detail::stateField(in, thing);
         at += length;
         return true;

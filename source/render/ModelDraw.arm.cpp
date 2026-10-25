@@ -308,6 +308,19 @@ namespace hlrt
                         fxMul(turn[k * 3 + 2], eye[2]);
             effectDraw.glow(at, static_cast<int>(actor.reach) * 31 / 255, RGB15(31, 2, 2), 12);
         }
+        // A light of Xen's glow, while it shines: at its second attachment
+        // (the top of its stalk), in the colour the map gave it.
+        else if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen) &&
+                 actor.item == static_cast<std::uint8_t>(XenPlant::Light) && actor.reach > 0 && id >= 0 &&
+                 id < game.actors.recordCount && attachmentPoint(model, pose, 1, eye))
+        {
+            fx at[3];
+            for (int k = 0; k < 3; ++k)
+                at[k] = actor.pos[k] + fxMul(turn[k * 3], eye[0]) + fxMul(turn[k * 3 + 1], eye[1]) +
+                        fxMul(turn[k * 3 + 2], eye[2]);
+            const auto colour = static_cast<std::uint16_t>(game.actors.records[id].item >> 16);
+            effectDraw.glow(at, static_cast<int>(actor.reach) * 31 / 255, colour, 16);
+        }
     }
 
     void ModelDraw::plan(int &polygons, int &vertices)
@@ -1022,8 +1035,9 @@ namespace hlrt
     {
         const ActorState &held = game.held;
         const ModelView *model = held.active ? actorModel(game.actors, held) : nullptr;
-        // (Not in a dead hand: the camera has fallen from it.)
-        if (model == nullptr || !heldDrawn_ || player.state.health <= 0)
+        // (Not in a dead hand: the camera has fallen from it; nor while the
+        // view is from a trigger_camera.)
+        if (model == nullptr || !heldDrawn_ || player.state.health <= 0 || game.logic.camera >= 0)
             return;
         // At the eye, turned as the view is: the model's forward, left and up
         // are the camera's.

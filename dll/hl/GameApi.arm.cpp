@@ -23,6 +23,11 @@ namespace
         .arrivalOf = [](const hldata::SaveData &save, hldata::Arrival &out) { return Game::arrivalOf(save, out); },
         .layState = [](Game &g, const hldata::SaveData &save) { return g.layState(save); },
         .heading = [](const Game &g, const std::string &map) { return g.heading(map); },
+        .storedBytes = [](Game &g) { return g.storedBytes(); },
+        .storeMap = [](Game &g, hldata::detail::StreamOut &out) { return g.storeMap(out); },
+        .layStored = [](Game &g, hldata::detail::StreamIn &in, const std::int16_t *sentAway, std::uint8_t landed) {
+            return g.layStored(in, sentAway, landed);
+        },
 
         .thinkRunOne = [](hldata::LogicWorld &w, void (*yield)()) {
             hldata::thinkYield = yield;

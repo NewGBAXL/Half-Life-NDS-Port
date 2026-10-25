@@ -82,6 +82,11 @@ namespace hldata
         std::int16_t master = -1; ///< its multisource, as a record index; -1 = none
         fx base[3] = {0, 0, 0};   ///< a mover's position at phase 0
         fx travel[3] = {0, 0, 0}; ///< ... and its whole travel from there
+        /// What it fires, if a trigger_changetarget has given it something
+        /// else to (a name id); 0: the map's own (LogicRecord::target).
+        std::uint16_t target = 0;
+        /// The damage a func_guntarget has taken this ride.
+        std::int32_t hurt = 0;
     };
 
     struct LogicEvent
@@ -279,6 +284,18 @@ namespace hldata
         /// The ChangeLevel record that has been set off, or -1. The logic only
         /// says so: changing map is the caller's to do, between frames.
         int pendingChange = -1;
+        /// The game is lost (LogicKind::LoadSaved): ms until the last save is
+        /// to be loaded, -1 none -- and, once it has counted down to 0, the
+        /// caller does it and sets it back to -1.
+        std::int32_t reloadMs = -1;
+        /// The end of a part of the game (LogicKind::EndSection): the caller
+        /// goes back to the title, and clears this.
+        bool endSection = false;
+        /// The Camera record the view is from, -1 none; and how long it has
+        /// still to be (ms). The caller sets the view from it after the
+        /// player's own (cameraView).
+        std::int16_t camera = -1;
+        std::int32_t cameraLeftMs = 0;
     };
 
     inline constexpr std::uint8_t kNodeOff = 1;   ///< the track ends before this node
@@ -646,18 +663,54 @@ namespace hldata
 
     /// What an entity does when it "fires": remove its killtarget and use its
     /// target -- after its delay, if it has one.
+    /// What record `index` fires: what a trigger_changetarget gave it, or
+    /// the map's own.
+    inline std::uint16_t logicTargetOf(const LogicWorld &w, int index)
+    {
+        const std::uint16_t changed = w.states[index].target;
+        return changed != 0 ? changed : w.records[index].target;
+    }
+
+    /// How much of what lies about and goes on at once this console has room
+    /// for -- a DSi twice as much, and keeps it longer (`dsi`) -- set as a map
+    /// is made, and again over a state laid back (a save made on the other
+    /// kind of console brings its own); what lies beyond is let go.
+    inline void consoleLimits(ActorWorld &actors, LogicWorld &w, bool dsi)
+    {
+        actors.gibLimit = dsi ? kMaxGibs : kMaxGibs / 2;
+        actors.shotLimit = dsi ? kMaxProjectiles : kMaxProjectiles / 2;
+        actors.effectLimit = dsi ? kMaxEffects : kMaxEffects / 2;
+        actors.decalLimit = dsi ? kMaxDecals : 32;
+        actors.pieceLimit = dsi ? kMaxPieces : 24;
+        // (... and keeps them longer: the small things half as long again,
+        // the marks twice.)
+        actors.lifePercent = dsi ? 150 : 100;
+        actors.markLifePercent = dsi ? 200 : 100;
+        w.marksLimit = dsi ? 32 : 16;
+        for (int i = actors.gibLimit; i < kMaxGibs; ++i)
+            actors.gibs[i].active = false;
+        for (int i = actors.shotLimit; i < kMaxProjectiles; ++i)
+            actors.shots[i].active = false;
+        for (int i = actors.effectLimit; i < kMaxEffects; ++i)
+            actors.effects[i].kind = 0;
+        for (int i = actors.decalLimit; i < kMaxDecals; ++i)
+            actors.decals[i].active = false;
+        for (int i = actors.pieceLimit; i < kMaxPieces; ++i)
+            actors.pieces[i].kind = 0;
+    }
+
     inline void logicUseTargets(LogicWorld &w, PlayerState &player, int index, int useType,
                                 int depth)
     {
         const LogicRecord &record = w.records[index];
         if (record.delayMs != 0)
         {
-            logicEnqueue(w, record.target, record.killTarget, useType, index,
+            logicEnqueue(w, logicTargetOf(w, index), record.killTarget, useType, index,
                          static_cast<std::int32_t>(record.delayMs));
             return;
         }
         logicKill(w, record.killTarget);
-        logicFire(w, player, record.target, index, useType, depth);
+        logicFire(w, player, logicTargetOf(w, index), index, useType, depth);
     }
 
     inline bool logicMasterAllows(const LogicWorld &w, int index)
@@ -1324,6 +1377,169 @@ namespace hldata
         }
     } // namespace detail
 
+    // ------------------------------------------------------------------ round 39's
+
+    namespace detail
+    {
+        /// What shots and blows land on, of the brushes: what breaks, and the
+        /// two that only take note (a func_guntarget, a button_target).
+        inline bool takesBlows(const LogicRecord &record)
+        {
+            return isBreakable(record) || record.kind == static_cast<std::uint8_t>(LogicKind::GunTarget) ||
+                   record.kind == static_cast<std::uint8_t>(LogicKind::ButtonTarget);
+        }
+
+        /// The game's chance for what talks to itself (a speaker): 24 bits.
+        inline std::uint32_t logicChance(LogicWorld &w)
+        {
+            w.effectSeed = w.effectSeed * 1664525u + 1013904223u;
+            return w.effectSeed >> 8;
+        }
+
+        /// The view goes back to the player's, and the camera fires what it
+        /// was looking at (the game's: its target, toggled).
+        inline void cameraEnd(LogicWorld &w, PlayerState &player)
+        {
+            const int index = w.camera;
+            w.camera = -1;
+            w.cameraLeftMs = 0;
+            if (index >= 0 && index < w.recordCount)
+                logicUseTargets(w, player, index, kUseToggle, 0);
+        }
+
+        inline void cameraUse(LogicWorld &w, PlayerState &player, int index, int useType)
+        {
+            const LogicRecord &record = w.records[index];
+            const bool on = useType == kUseToggle ? w.camera != index : useType != kUseOff;
+            if (!on)
+            {
+                if (w.camera == index)
+                    cameraEnd(w, player);
+                return;
+            }
+            // (One with nothing to look at is not looked through: the game's.)
+            if (!(record.extra[0] & 2) && record.target == 0)
+                return;
+            LogicState &state = w.states[index];
+            for (int a = 0; a < 3; ++a)
+                state.base[a] = (record.extra[0] & 1) ? player.origin[a] : record.move[a];
+            if (record.extra[0] & 1)
+                state.base[2] += player.viewHeight;
+            w.camera = static_cast<std::int16_t>(index);
+            w.cameraLeftMs = record.waitMs > 0 ? record.waitMs : 0;
+        }
+
+        inline void speakerUse(LogicWorld &w, int index, int useType)
+        {
+            LogicState &state = w.states[index];
+            const bool on = useType == kUseToggle ? !state.running : useType != kUseOff;
+            // Switched on, it speaks straight away.
+            if (on && !state.running)
+                state.timer = 100;
+            state.running = on;
+        }
+
+        inline void speakerTick(LogicWorld &w, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (!state.running || state.timer < 0)
+                return;
+            state.timer -= ms;
+            if (state.timer > 0)
+                return;
+            // One of its lines, and the next a while on -- a quarter of a
+            // minute to over two.
+            if (w.heard != nullptr && record.auxCount > 0 && w.aux != nullptr)
+            {
+                const LogicAux &line = w.aux[record.firstAux + logicChance(w) % record.auxCount];
+                w.heard->add(line.target, record.move, static_cast<int>(record.extra[0]), kRadiusEverywhere,
+                             kSoundSentence);
+            }
+            state.timer = 15000 + static_cast<std::int32_t>(logicChance(w) % 120000);
+        }
+
+        inline void gunTargetUse(LogicWorld &w, PlayerState &player, int index, int useType)
+        {
+            LogicState &state = w.states[index];
+            const bool on = useType == kUseToggle ? !state.running : useType != kUseOff;
+            if (on && !state.running)
+            {
+                // Whole again, and off along its path.
+                state.hurt = 0;
+                state.running = true;
+                trainNext(w, player, index);
+            }
+            else if (!on && state.running)
+            {
+                state.running = false;
+                state.move = MoveState::AtBottom;
+                state.timer = -1;
+            }
+        }
+
+        /// Hit while it rides: when it has taken all it takes it stops, and
+        /// fires its `message` (netName).
+        inline void gunTargetHurt(LogicWorld &w, PlayerState &player, int index, std::int32_t damage)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (!state.running)
+                return;
+            state.hurt += damage;
+            if (state.hurt < static_cast<std::int32_t>(record.extra[0]))
+                return;
+            state.running = false;
+            state.move = MoveState::AtBottom;
+            state.timer = -1;
+            logicFire(w, player, record.netName, index, kUseToggle, 0);
+        }
+
+        /// Its other frame, and its targets switched to match: on with it,
+        /// off with it.
+        inline void buttonTargetToggle(LogicWorld &w, PlayerState &player, int index, int depth)
+        {
+            LogicState &state = w.states[index];
+            state.bits ^= 1u;
+            logicFire(w, player, logicTargetOf(w, index), index, (state.bits & 1u) ? kUseOn : kUseOff, depth);
+        }
+
+        inline void bloodUse(LogicWorld &w, PlayerState &player, int index)
+        {
+            const LogicRecord &record = w.records[index];
+            if (w.actors == nullptr)
+                return;
+            fx at[3];
+            for (int a = 0; a < 3; ++a)
+                at[a] = (record.extra[2] & 4) ? player.origin[a] : record.move[a];
+            if (record.extra[2] & 4)
+                at[2] += player.viewHeight;
+            // Which way it goes: anywhere, or the way the map points it.
+            std::uint16_t yaw = static_cast<std::uint16_t>(record.extra[3]);
+            std::uint16_t pitch = static_cast<std::uint16_t>(record.extra[3] >> 16);
+            if (record.extra[2] & 1)
+            {
+                yaw = static_cast<std::uint16_t>(logicChance(w));
+                pitch = static_cast<std::uint16_t>(logicChance(w) & 0x3FFF);
+            }
+            fx sy, cy, sp, cp;
+            fxSinCos(yaw, sy, cy);
+            fxSinCos(pitch, sp, cp);
+            const fx along[3] = {fxMul(cy, cp), fxMul(sy, cp), -sp};
+            const bool yellow = record.extra[0] != 0;
+            const int bursts = record.extra[1] > 150 ? 3 : 1;
+            for (int n = 0; n < bursts; ++n)
+            {
+                fx where[3];
+                for (int a = 0; a < 3; ++a)
+                    where[a] = at[a] + along[a] * (8 * n);
+                effectAdd(*w.actors, kEffectBlood, where, nullptr, yellow ? 1 : 0, 400);
+            }
+            if ((record.extra[2] & 8) && w.world != nullptr)
+                markBlood(*w.actors, *w.world, at, along, yellow, record.extra[1] > 150);
+        }
+    } // namespace detail
+
     /// A blow from the player: `damage` off what the thing can take, and it
     /// breaks when that runs out. Nothing happens to what only its name can
     /// break, or to the glass that never does.
@@ -1331,6 +1547,16 @@ namespace hldata
     {
         const LogicRecord &record = w.records[index];
         LogicState &state = w.states[index];
+        if (!state.dead && record.kind == static_cast<std::uint8_t>(LogicKind::GunTarget))
+        {
+            detail::gunTargetHurt(w, player, index, damage);
+            return;
+        }
+        if (!state.dead && record.kind == static_cast<std::uint8_t>(LogicKind::ButtonTarget))
+        {
+            detail::buttonTargetToggle(w, player, index, 0);
+            return;
+        }
         if (state.dead || !detail::isBreakable(record) || (record.flags & kLogicTriggerOnly) ||
             record.extra[1] == 7)
             return;
@@ -2867,6 +3093,8 @@ namespace hldata
 
         /// Every actor's clip moved on, and the targets its clip's events
         /// name fired as they are passed.
+        inline void xenEvent(LogicWorld &w, PlayerState &player, int index, std::uint32_t event); // (HlXen.hpp)
+
         inline void actorsTick(LogicWorld &w, PlayerState &player, int ms)
         {
             if (w.actors == nullptr)
@@ -2894,9 +3122,14 @@ namespace hldata
                                                        (at == 0 && before == 0 && actor.frame > 0));
                         if (!passed)
                             continue;
-                        // (The monster's own: its AI sees to those.)
+                        // (The monster's own: its AI sees to those -- a plant's,
+                        // HlXen.hpp.)
                         if (event.kind == kEventMonster)
+                        {
+                            if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen))
+                                xenEvent(w, player, i, event.target);
                             continue;
+                        }
                         // The scene may (no longer) be broken off -- unless
                         // the map says it never may (AllowInterrupt).
                         if (event.kind == kEventInterrupt)
@@ -3567,6 +3800,95 @@ namespace hldata
             }
             break;
 
+        case LogicKind::Counter:
+            // The count-th use is the one that fires; then it is done.
+            if (++state.phase >= static_cast<std::int32_t>(record.extra[0]))
+            {
+                state.dead = true;
+                logicUseTargets(w, player, index, useType, depth);
+            }
+            break;
+
+        case LogicKind::ChangeTarget:
+            // (Its `target` names whose target is changed, not what it fires.)
+            for (int i = 0; i < w.recordCount && record.target != 0; ++i)
+            {
+                if (w.records[i].name == record.target)
+                    w.states[i].target = static_cast<std::uint16_t>(record.extra[0]);
+            }
+            break;
+
+        case LogicKind::WeaponStrip:
+        {
+            // Everything but the suit (bit 0 of Inventory::have).
+            Inventory &inv = player.inv;
+            const std::uint8_t suit = static_cast<std::uint8_t>(inv.have & 1u);
+            const std::int16_t armor = inv.armor;
+            inv = Inventory();
+            inv.have = suit;
+            inv.armor = armor;
+            if (player.arsenal != nullptr)
+            {
+                Arsenal &more = *player.arsenal;
+                const std::int16_t antidotes = more.antidotes, cards = more.securityCards;
+                more = Arsenal();
+                more.antidotes = antidotes;
+                more.securityCards = cards;
+            }
+            break;
+        }
+
+        case LogicKind::LoadSaved:
+            // The screen goes dark, what it has to say is said, and the game
+            // goes back to the last save (the caller's: LogicWorld::reloadMs).
+            if (w.reloadMs >= 0)
+                break;
+            w.fadeFrom = false;
+            w.fadeMs = 0;
+            w.fadeWholeMs = static_cast<std::int32_t>(record.extra[0]);
+            w.fadeHoldMs = static_cast<std::int32_t>(record.extra[1]) + 1000;
+            w.fadeDark = static_cast<std::uint8_t>(record.extra[2] * 16 / 255);
+            w.fading = true;
+            if (record.extra[3] != 0xFFFFFFFFu)
+            {
+                if (w.shownCount == 4)
+                    --w.shownCount;
+                w.shown[w.shownCount++] = static_cast<std::uint16_t>(record.extra[3]);
+            }
+            w.reloadMs = static_cast<std::int32_t>(record.extra[1]);
+            break;
+
+        case LogicKind::EndSection:
+            w.endSection = true;
+            break;
+
+        case LogicKind::MonsterJump:
+            // On, or off (it starts off when something switches it on).
+            state.running = useType == kUseToggle ? !state.running : useType != kUseOff;
+            break;
+
+        case LogicKind::Camera:
+            detail::cameraUse(w, player, index, useType);
+            break;
+
+        case LogicKind::Speaker:
+            detail::speakerUse(w, index, useType);
+            break;
+
+        case LogicKind::GunTarget:
+            detail::gunTargetUse(w, player, index, useType);
+            break;
+
+        case LogicKind::ButtonTarget:
+            // Only if it may be used (otherwise only a shot turns it).
+            if (record.flags & kLogicUseOnly)
+                detail::buttonTargetToggle(w, player, index, depth);
+            break;
+
+        case LogicKind::Blood:
+            detail::bloodUse(w, player, index);
+            break;
+
         default:
             // The triggers: a trigger volume cannot be "used", only
             // entered.
@@ -3611,6 +3933,16 @@ namespace hldata
                 record.kind == static_cast<std::uint8_t>(LogicKind::Beam) ||
                 record.kind == static_cast<std::uint8_t>(LogicKind::Spark))
                 state.running = (record.flags & kLogicStartOpen) != 0;
+            // A speaker that speaks from the start does so 5 to 15 seconds in.
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Speaker))
+            {
+                state.running = (record.flags & kLogicStartOpen) != 0;
+                state.timer = state.running ? 5000 + static_cast<std::int32_t>(detail::logicChance(w) % 10000) : -1;
+            }
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::ButtonTarget))
+                state.bits = (record.flags & kLogicStartOpen) ? 1u : 0u;
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::MonsterJump))
+                state.running = (record.flags & kLogicStartOpen) == 0;
             // A scripted_sentence is ready to be said; with no name it
             // looks for its speaker a second in (and in `phase`, the ms to
             // its next look).
@@ -3643,7 +3975,24 @@ namespace hldata
                 }
             }
 
-            if (record.kind == static_cast<std::uint8_t>(LogicKind::Train))
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::GunTarget))
+            {
+                // On its first corner; ridden from the start if the map says.
+                state.speed = record.speed;
+                state.bits = record.firstAux;
+                if (record.brush != kNoBrush && record.firstAux != kNoCorner)
+                {
+                    fx pos[3];
+                    detail::trainPosAt(w, i, record.firstAux, pos);
+                    logicPlaceBrush(w, record.brush, pos);
+                    if (record.flags & kLogicStartOpen)
+                    {
+                        state.running = true;
+                        state.timer = 100;
+                    }
+                }
+            }
+            else if (record.kind == static_cast<std::uint8_t>(LogicKind::Train))
             {
                 // A train begins on its first corner. With no name it sets off
                 // by itself; with one, it waits to be told.
@@ -3907,6 +4256,12 @@ namespace hldata
             w.linksDueMs = 250;
             detail::linksTick(w, player);
         }
+        // A view from elsewhere, for as long as it lasts; and the count down
+        // to loading the last save (the caller's at 0).
+        if (w.camera >= 0 && (w.cameraLeftMs -= ms) <= 0)
+            detail::cameraEnd(w, player);
+        if (w.reloadMs > 0)
+            w.reloadMs = w.reloadMs > ms ? w.reloadMs - ms : 0;
         // 1. Fires that have come due. A fire can queue more with no delay, so
         //    go round until nothing is due.
         for (LogicEvent &event : w.events)
@@ -3945,9 +4300,10 @@ namespace hldata
             // 2. Whatever it was waiting to do. (A box's timer is not one: it
             //    is the damage it has taken; nor a gun's, its rounds' time,
             //    a mortar field's, its shells', nor a wheel's door's, where it
-            //    is to go.)
+            //    is to go, nor a speaker's, its next line.)
             if (state.timer >= 0 && kind != LogicKind::Pushable && kind != LogicKind::Script &&
-                kind != LogicKind::Tank && kind != LogicKind::MortarField && kind != LogicKind::MomentaryDoor)
+                kind != LogicKind::Tank && kind != LogicKind::MortarField && kind != LogicKind::MomentaryDoor &&
+                kind != LogicKind::Speaker)
             {
                 state.timer -= ms;
                 if (state.timer < 0)
@@ -3980,6 +4336,7 @@ namespace hldata
                         detail::breakIt(w, player, i, 0); // stood on, and its delay is up
                         break;
                     case LogicKind::Train:
+                    case LogicKind::GunTarget:
                         if (state.running)
                             detail::trainNext(w, player, i);
                         break;
@@ -3993,8 +4350,10 @@ namespace hldata
             if (kind == LogicKind::Door || kind == LogicKind::Button ||
                 kind == LogicKind::DoorRotating)
                 detail::moverTick(w, player, i, ms);
-            else if (kind == LogicKind::Train)
+            else if (kind == LogicKind::Train || kind == LogicKind::GunTarget)
                 detail::trainTick(w, player, i, ms);
+            else if (kind == LogicKind::Speaker)
+                detail::speakerTick(w, i, ms);
             else if (kind == LogicKind::Rotating)
                 detail::rotatingTick(w, player, i, ms);
             else if (kind == LogicKind::PlatRot)
@@ -4035,6 +4394,15 @@ namespace hldata
                         detail::breakIt(w, player, i, 0);
                     }
                 }
+            }
+            else if (kind == LogicKind::EndSection && (record.flags & kLogicTouch) && !state.dead)
+            {
+                const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
+                                    fxFromInt(record.mins[2])};
+                const fx maxs[3] = {fxFromInt(record.maxs[0]), fxFromInt(record.maxs[1]),
+                                    fxFromInt(record.maxs[2])};
+                if (detail::playerTouchesBox(player, mins, maxs, 0))
+                    logicUse(w, player, i, -1, kUseOn);
             }
             else if (kind == LogicKind::Music && (record.flags & kLogicTouch) && !state.dead)
             {
@@ -4170,6 +4538,7 @@ namespace hldata
                 brush.frame = state.move != MoveState::AtBottom;
                 break;
             case LogicKind::Static:
+            case LogicKind::ButtonTarget:
                 brush.frame = state.bits & 1;
                 break;
             case LogicKind::HealthCharger:

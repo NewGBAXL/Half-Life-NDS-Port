@@ -68,6 +68,8 @@ namespace hlds
                 "weapon_snark", "weapon_rpg", "ammo_rpgclip", "weapon_gauss", "ammo_gaussclip", "ammo_egonclip",
                 "weapon_egon", "weapon_hornetgun", "weaponbox", "monster_cockroach", "monster_leech",
                 "monster_alien_grunt", "monster_alien_controller", "monster_snark", "monster_osprey",
+                "xen_hair", "xen_spore_small", "xen_spore_medium", "xen_spore_large", "xen_tree", "xen_plantlight",
+                "item_antidote", "item_security", "item_airtank",
                 "monster_gargantua", "monster_babycrab", "monster_hevsuit_dead",
                 "monster_human_assassin", "monster_ichthyosaur",
                 "func_tank", "func_tanklaser", "func_tankrocket", "func_tankmortar", "func_tankcontrols",
@@ -109,6 +111,7 @@ namespace hlds
             /// For what a monstermaker makes: how many places are kept for
             /// its children (they are not there when the map starts).
             int spare = 0;
+            XenPlant xen = XenPlant::Hair; ///< for an ActorKind::Xen: which
         };
 
         /// What lies about to be picked up, by class.
@@ -153,6 +156,9 @@ namespace hlds
             {"weapon_egon", ItemKind::Egon, "models/w_egon.mdl"},
             {"weapon_hornetgun", ItemKind::Hornetgun, "models/w_hgun.mdl"},
             {"weaponbox", ItemKind::Weaponbox, "models/w_weaponbox.mdl"},
+            {"item_antidote", ItemKind::Antidote, "models/w_antidote.mdl"},
+            {"item_security", ItemKind::Security, "models/w_security.mdl"},
+            {"item_airtank", ItemKind::Airtank, "models/w_oxygen.mdl"},
         };
 
         /// One of the people (talkmonster.cpp's): given chosen clips, not
@@ -445,6 +451,47 @@ namespace hlds
                 const char *clip = kPoses[std::clamp(pose, 0, 2)];
                 info = {true, ActorKind::Pose, "models/barney.mdl", {clip}, clip};
                 info.solid = false;
+            }
+            else if (cls.rfind("xen_", 0) == 0)
+            {
+                // The plants of Xen: their own models, as the game gives
+                // them. A light and a tree do things, by what their clips
+                // are for; the rest only sway.
+                struct Plant
+                {
+                    const char *cls;
+                    XenPlant kind;
+                    const char *file;
+                    bool solid;
+                };
+                static const Plant kPlants[] = {
+                    {"xen_hair", XenPlant::Hair, "models/hair.mdl", false},
+                    {"xen_spore_small", XenPlant::SporeSmall, "models/fungus(small).mdl", true},
+                    {"xen_spore_medium", XenPlant::SporeMedium, "models/fungus.mdl", true},
+                    {"xen_spore_large", XenPlant::SporeLarge, "models/fungus(large).mdl", true},
+                    {"xen_tree", XenPlant::Tree, "models/tree.mdl", true},
+                    {"xen_plantlight", XenPlant::Light, "models/light.mdl", false},
+                };
+                for (const Plant &plant : kPlants)
+                {
+                    if (cls != plant.cls)
+                        continue;
+                    info = {true, ActorKind::Xen, plant.file, {}, ""};
+                    info.solid = plant.solid;
+                    info.xen = plant.kind;
+                    if (plant.kind == XenPlant::Tree || plant.kind == XenPlant::Light)
+                    {
+                        info.activities = true;
+                        if (plant.kind == XenPlant::Tree)
+                            info.dsActivities = {kActIdle, kActMeleeAttack1};
+                        else
+                            info.dsActivities = {kActIdle, kActCrouch, kActCrouchIdle, kActStand};
+                    }
+                    else
+                    {
+                        info.firstSequence = true;
+                    }
+                }
             }
             else if ((cls == "monster_generic" || cls == "monster_furniture" || cls == "cycler") &&
                      !entity.value("model").empty())
@@ -989,6 +1036,13 @@ namespace hlds
         /// What a brush on hinges starts turned by (the game's CRotDoor
         /// keeps its angles: it opens from them), as turns, in the record's
         /// extra[1..3] (pitch, yaw, roll).
+        /// Degrees as turns (65536 to the circle).
+        std::uint32_t turnsFromDegrees(double degrees)
+        {
+            return static_cast<std::uint16_t>(
+                static_cast<std::int32_t>(std::lround(std::remainder(degrees, 360.0) * 65536.0 / 360.0)) & 0xFFFF);
+        }
+
         void turnedFrom(const Entity &entity, hldata::LogicRecord &record)
         {
             double angles[3];
@@ -1330,6 +1384,7 @@ namespace hlds
         };
         std::vector<std::vector<ManagerOutput>> managerOutputs; // by record
         std::vector<std::vector<std::array<double, 3>>> beamPlacesOf; // by record
+        std::vector<std::vector<std::uint16_t>> speakerLinesOf;     // by record
         std::vector<std::uint16_t> trainCorners;                // by record
 
         for (std::size_t e = 0; e < entities.size(); ++e)
@@ -1415,6 +1470,7 @@ namespace hlds
             std::uint16_t heardSpark = kNoSound;
             std::uint16_t beamStart = 0;
             std::vector<std::array<double, 3>> beamPlaces;
+            std::vector<std::uint16_t> speakerLines;
             bool isBeam = false;
             bool delayIsOwn = false, renderTarget = false;
             (void)renderTarget;
@@ -1730,6 +1786,26 @@ namespace hlds
                     for (int a = 0; a < 3; ++a)
                         record.extra[a] = static_cast<std::uint16_t>(std::lround(angles[a] * 65536.0 / 360.0));
                 }
+            }
+            else if (cls == "func_guntarget" && model != nullptr)
+            {
+                // A target on a path (its "target" the corner it starts at):
+                // hit while it rides, it takes "health" and then stops and
+                // fires its "message". Flag 1: it rides from the start.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::GunTarget);
+                record.speed = fxFromDouble(numberKey(entity, "speed", 100));
+                if (record.speed <= 0)
+                    record.speed = fxFromInt(100);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] =
+                        fxFromDouble((double(model->mins[a]) + model->maxs[a]) / 2 + origin[a]);
+                const auto first = cornerOfName.find(std::string(entity.value("target")));
+                trainCorner = first != cornerOfName.end() ? first->second : kNoCorner;
+                record.extra[0] = static_cast<std::uint32_t>(std::max(1.0, numberKey(entity, "health", 1)));
+                record.netName = nameId(entity.value("message"));
+                if (spawnflags & 1)
+                    record.flags |= kLogicStartOpen;
             }
             else if ((cls == "func_platrot" || cls == "func_plat") && brushRecordOfEntity[e] >= 0 && model != nullptr)
             {
@@ -2119,6 +2195,147 @@ namespace hlds
                         std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
                 }
             }
+            else if (cls == "trigger_counter")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Counter);
+                const double count = numberKey(entity, "count");
+                record.extra[0] = static_cast<std::uint32_t>(count >= 1 ? std::lround(count) : 2);
+            }
+            else if (cls == "trigger_changetarget")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::ChangeTarget);
+                record.extra[0] = nameId(entity.value("m_iszNewTarget"));
+            }
+            else if (cls == "player_weaponstrip")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::WeaponStrip);
+            }
+            else if (cls == "player_loadsaved")
+            {
+                // The screen goes as dark as it says (the game's renderamt,
+                // over "duration", held), and "loadtime" after, the last save.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::LoadSaved);
+                record.extra[0] = static_cast<std::uint32_t>(std::max(0, millis(numberKey(entity, "duration", 2))));
+                record.extra[1] = static_cast<std::uint32_t>(std::max(0, millis(numberKey(entity, "loadtime"))));
+                record.extra[2] = static_cast<std::uint32_t>(std::clamp(numberKey(entity, "renderamt", 255), 0.0, 255.0));
+                const std::string said(entity.value("message"));
+                record.extra[3] = said.empty() ? 0xFFFFFFFFu : addMessage(said, 0);
+            }
+            else if (cls == "trigger_endsection")
+            {
+                // Walked into (flag 1: only used), or used: the game is over,
+                // as far as this part of it goes.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::EndSection);
+                if (model != nullptr && !(spawnflags & 1))
+                {
+                    record.flags |= kLogicTouch;
+                    for (int a = 0; a < 3; ++a)
+                    {
+                        record.mins[a] = static_cast<std::int16_t>(
+                            std::clamp(std::floor(model->mins[a] + origin[a]), -32768.0, 32767.0));
+                        record.maxs[a] = static_cast<std::int16_t>(
+                            std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
+                    }
+                }
+            }
+            else if (cls == "trigger_monsterjump" && model != nullptr)
+            {
+                // The game throws at 200 along its angle and 150 up, whatever
+                // the map says. Named, it waits to be switched on.
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::MonsterJump);
+                double direction[3];
+                moverDirection(entity, direction);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(direction[a] * 200 + (a == 2 ? 150 : 0));
+                if (named)
+                    record.flags |= kLogicStartOpen;
+                for (int a = 0; a < 3; ++a)
+                {
+                    record.mins[a] = static_cast<std::int16_t>(
+                        std::clamp(std::floor(model->mins[a] + origin[a]), -32768.0, 32767.0));
+                    record.maxs[a] = static_cast<std::int16_t>(
+                        std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
+                }
+            }
+            else if (cls == "trigger_camera")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Camera);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+                record.extra[0] = static_cast<std::uint32_t>(spawnflags & 7);
+                double angles[3];
+                entityAngles(entity, angles);
+                record.extra[1] = static_cast<std::uint32_t>(turnsFromDegrees(angles[1]));
+                record.waitMs = std::max(0, millis(numberKey(entity, "wait")));
+            }
+            else if (cls == "speaker")
+            {
+                // The announcements: a group of the game's sentences by its
+                // number ("preset"), or the map's own ("message": a group, or
+                // one sentence after a '!').
+                static const char *const kPresets[] = {"C1A0_", "C1A1_", "C1A2_", "C1A3_", "C1A4_", "C2A1_",
+                                                       "C2A2_", "C2A3_", "C2A4_", "C2A5_", "C3A1_", "C3A2_"};
+                const int preset = static_cast<int>(numberKey(entity, "preset"));
+                std::string group = preset >= 1 && preset <= 12 ? kPresets[preset - 1]
+                                                                 : std::string(entity.value("message"));
+                if (!group.empty() && group[0] == '!')
+                {
+                    const int one = sentenceIndex(group.substr(1));
+                    if (one >= 0)
+                        speakerLines.push_back(static_cast<std::uint16_t>(one));
+                }
+                else
+                {
+                    for (int n = 0, misses = 0; n < 64 && misses < 3 && !group.empty(); ++n)
+                    {
+                        const int line = sentenceIndex(group + std::to_string(n));
+                        misses = line < 0 ? misses + 1 : 0;
+                        if (line >= 0)
+                            speakerLines.push_back(static_cast<std::uint16_t>(line));
+                    }
+                }
+                if (!speakerLines.empty())
+                {
+                    make = true;
+                    record.kind = static_cast<std::uint8_t>(LogicKind::Speaker);
+                    for (int a = 0; a < 3; ++a)
+                        record.move[a] = fxFromDouble(origin[a]);
+                    // (Its "health" is how loud, in tenths.)
+                    record.extra[0] = static_cast<std::uint32_t>(
+                        std::clamp(std::lround(numberKey(entity, "health", 10) * 0.1 * 127), 1L, 127L));
+                    if (!(spawnflags & 1))
+                        record.flags |= kLogicStartOpen;
+                }
+            }
+            else if (cls == "button_target")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::ButtonTarget);
+                if (spawnflags & 1)
+                    record.flags |= kLogicUseOnly;
+                if (spawnflags & 2)
+                    record.flags |= kLogicStartOpen;
+            }
+            else if (cls == "env_blood")
+            {
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Blood);
+                for (int a = 0; a < 3; ++a)
+                    record.move[a] = fxFromDouble(origin[a]);
+                record.extra[0] = numberKey(entity, "color") != 0 ? 1 : 0;
+                record.extra[1] = static_cast<std::uint32_t>(std::clamp(numberKey(entity, "amount", 100), 0.0, 10000.0));
+                record.extra[2] = static_cast<std::uint32_t>(spawnflags & 0xF);
+                double angles[3];
+                entityAngles(entity, angles);
+                record.extra[3] = turnsFromDegrees(angles[1]) | (turnsFromDegrees(angles[0]) << 16);
+            }
             else if (cls == "trigger_autosave" && model != nullptr)
             {
                 make = true;
@@ -2377,7 +2594,7 @@ namespace hlds
                     record.kind = static_cast<std::uint8_t>(LogicKind::TriggerRelay);
                 }
             }
-            else if (cls == "env_sprite" || cls == "env_glow")
+            else if (cls == "env_sprite" || cls == "env_glow" || cls == "cycler_sprite")
             {
                 // The game's render modes: 3 (glow) and 5 (additive) are
                 // light; in the others the sprite's own file says.
@@ -2398,12 +2615,16 @@ namespace hlds
                                            std::lround(numberKey(entity, "scale", 1) * 16), 1L, 255L))
                                        << 24);
                     // A glow is always there. A sprite is if it says so (1),
-                    // or if nothing could ever switch it on.
+                    // or if nothing could ever switch it on. A cycler_sprite
+                    // is always there, and plays on and on; used, its frames
+                    // stop, or start again (bit 2).
                     const bool glow = cls == "env_glow";
+                    const bool cycler = cls == "cycler_sprite";
                     // (Bit 1: a glow, which the game draws over whatever
                     // it sits in -- a lamp's glass, as a rule.)
-                    record.extra[3] = (!glow && (spawnflags & 2) ? 1 : 0) | (glow || mode == 3 ? 2 : 0);
-                    if (glow || (spawnflags & 1) || !named)
+                    record.extra[3] = (!glow && !cycler && (spawnflags & 2) ? 1 : 0) | (glow || mode == 3 ? 2 : 0) |
+                                      (cycler ? 4 : 0);
+                    if (glow || cycler || (spawnflags & 1) || !named)
                         record.flags |= kLogicStartOpen;
                 }
             }
@@ -2712,6 +2933,7 @@ namespace hlds
             // fires.
             if (record.kind != static_cast<std::uint8_t>(LogicKind::MultiManager) &&
                 record.kind != static_cast<std::uint8_t>(LogicKind::Train) &&
+                record.kind != static_cast<std::uint8_t>(LogicKind::GunTarget) &&
                 record.kind != static_cast<std::uint8_t>(LogicKind::TrackTrain) &&
                 record.kind != static_cast<std::uint8_t>(LogicKind::TriggerTeleport))
                 record.target = nameId(entity.value("target"));
@@ -2873,6 +3095,7 @@ namespace hlds
             managerOutputs.push_back(std::move(outputs));
             trainCorners.push_back(trainCorner);
             beamPlacesOf.push_back(std::move(beamPlaces));
+            speakerLinesOf.push_back(std::move(speakerLines));
         }
 
         // The actors: every entity that is a model this map had cooked.
@@ -2891,7 +3114,7 @@ namespace hlds
         // so an actor a save points at keeps its place -- the later items,
         // then the last ones, then round 3's monsters, then round 4's, then
         // round 5's.)
-        for (int round = 0; round < 6; ++round)
+        for (int round = 0; round < 7; ++round)
         for (std::size_t e = 0; e < entities.size(); ++e)
         {
             const Entity &entity = entities[e];
@@ -2903,7 +3126,11 @@ namespace hlds
                                 lowered(entity.className()) == "monster_hevsuit_dead";
             const bool round5 = static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Tentacle) ||
                                 lowered(entity.className()) == "monster_grunt_repel";
-            const int itemRound = round5 ? 5
+            // (Round 6: level version 39's -- Xen's plants, and three items.)
+            const bool round6 = info.kind == ActorKind::Xen ||
+                                static_cast<int>(info.item) >= static_cast<int>(ItemKind::Antidote);
+            const int itemRound = round6 ? 6
+                                  : round5 ? 5
                                   : round4 ? 4
                                   : info.item == ItemKind::None
                                       ? (static_cast<int>(info.kind) >= static_cast<int>(ActorKind::Cockroach) ? 3 : 0)
@@ -2996,6 +3223,20 @@ namespace hlds
             if (entity.className().rfind("monster_", 0) == 0 && (static_cast<int>(numberKey(entity, "spawnflags")) & 512))
                 actor.light |= kActorLightFadeCorpse;
             const std::string actorClass = lowered(entity.className());
+            if (info.kind == ActorKind::Xen)
+            {
+                // Which plant; a light's glow its colour, and what it
+                // switches off as it hides.
+                std::uint32_t colour = 0x7FFF;
+                double rgb[3];
+                if (entity.vec3("rendercolor", rgb) && (rgb[0] + rgb[1] + rgb[2]) > 0)
+                    colour = (static_cast<std::uint32_t>(std::clamp(rgb[0], 0.0, 255.0)) >> 3) |
+                             ((static_cast<std::uint32_t>(std::clamp(rgb[1], 0.0, 255.0)) >> 3) << 5) |
+                             ((static_cast<std::uint32_t>(std::clamp(rgb[2], 0.0, 255.0)) >> 3) << 10);
+                actor.item = static_cast<std::uint32_t>(info.xen) | (colour << 16);
+                if (info.xen == XenPlant::Light)
+                    actor.target = nameId(entity.value("target"));
+            }
             if (info.kind == ActorKind::Grunt)
             {
                 // His head and his gun are by what he carries (the model's
@@ -3326,6 +3567,7 @@ namespace hlds
         {
             LogicRecord &record = out.records[r];
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Train) ||
+                record.kind == static_cast<std::uint8_t>(LogicKind::GunTarget) ||
                 record.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain))
             {
                 record.firstAux = trainCorners[r];
@@ -3337,6 +3579,11 @@ namespace hlds
             {
                 for (const ManagerOutput &output : managerOutputs[r])
                     out.aux.push_back(LogicAux{output.target, 0, output.delayMs});
+            }
+            else if (record.kind == static_cast<std::uint8_t>(LogicKind::Speaker) && r < speakerLinesOf.size())
+            {
+                for (const std::uint16_t line : speakerLinesOf[r])
+                    out.aux.push_back(LogicAux{line, 0, 0});
             }
             else if (record.kind == static_cast<std::uint8_t>(LogicKind::Beam) && r < beamPlacesOf.size())
             {

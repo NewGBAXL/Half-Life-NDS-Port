@@ -193,10 +193,18 @@ namespace
 
         // What is broken in the map being left is noted first: it is still
         // broken if the player comes back. (Not a map of a game given up.)
+        // And by a way out of it, all of it is kept, as it is, to come back
+        // to (HlMapStore.hpp) -- not in a game between consoles, whose maps
+        // begin afresh.
+        const bool changing = hlrt::level.loaded() && !leavingAbandoned && arrival != nullptr;
+        const std::string left = currentMap;
+        bool stored = false;
         if (hlrt::level.loaded())
         {
             if (!leavingAbandoned)
                 hlrt::game.rememberMap(hldata::nameHash(currentMap.c_str()));
+            if (changing && !hlrt::netGame.playing())
+                stored = hlrt::SaveGame::leaveMap(currentMap, hlrt::level.view.header->crc32);
             logPerformance();
         }
         leavingAbandoned = false;
@@ -247,7 +255,38 @@ namespace
             return LoadResult::Failed;
         }
         hlrt::worldDraw.setBrushStates(hlrt::game.brushStates());
-        hlrt::game.restoreMap(hldata::nameHash(name.c_str()));
+        // Come back to by a way in: as it was left, if it was kept; else as
+        // it begins, with what was broken in it broken. (Spoilt half-way by
+        // the card: begun again.)
+        const int laid = changing && !hlrt::netGame.playing()
+                             ? hlrt::SaveGame::arriveMap(name, hlrt::level.view.header->crc32)
+                             : 0;
+        if (laid < 0)
+        {
+            hlrt::game.destroy();
+            if (!hlrt::game.create())
+            {
+                error = "Not enough memory for this map.";
+                return LoadResult::Failed;
+            }
+            hlrt::worldDraw.setBrushStates(hlrt::game.brushStates());
+        }
+        if (laid <= 0)
+            hlrt::game.restoreMap(hldata::nameHash(name.c_str()));
+#ifdef HLDS_PROFILE
+        // (How the maps left are kept: stored as left, laid as come back to.)
+        if (changing)
+        {
+            if (std::FILE *log = std::fopen(global.dataPath("perf.txt").c_str(), "a"))
+            {
+                std::fprintf(log, "kept: %s %s; %s %s (%d kept)\n", left.c_str(), stored ? "stored" : "not stored",
+                             name.c_str(), laid > 0 ? "laid back" : (laid < 0 ? "spoilt" : "fresh"),
+                             static_cast<int>(hlrt::SaveGame::runIndex().count));
+                std::fclose(log);
+            }
+        }
+#endif
+        (void)stored;
         currentMap = name;
         hlrt::debugOverlay.setMapName(currentMap.c_str());
 
@@ -260,6 +299,10 @@ namespace
             // (Even with no landmark to put them by: what they carry is theirs.)
             hlrt::game.applyArrival(*arrival);
             hlrt::player.arsenal = carried;
+            // Those who came along are not in the map they left, if it is
+            // come back to.
+            if (changing && !hlrt::netGame.playing())
+                hlrt::SaveGame::landed(left, hlrt::game.placed());
         }
         clock.mark("game");
         hlrt::sound.load();
@@ -377,6 +420,8 @@ namespace
             !hlrt::Level::peekHeader(save.map, header))
             return false;
         hlrt::game.adoptProgress(save);
+        // (The maps left on the way, as the save had them.)
+        hlrt::SaveGame::fromSave(slot, save, Global::vblanks() * 2654435761u + 1u);
         leavingAbandoned = true;
         const std::string map = save.map; // loadLevel changes currentMap, which this may be
         // (Whoever came into that map with the player comes into it again.)
@@ -769,6 +814,7 @@ int main(int argc, char *argv[])
             {
                 leaving();
                 hlrt::game.resetProgress();
+                hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                 leavingAbandoned = true;
                 if (loadLevel(map, nullptr, error) == LoadResult::Ok)
                 {
@@ -786,6 +832,7 @@ int main(int argc, char *argv[])
     auto newGame = [&]()
     {
         hlrt::game.resetProgress();
+        hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
         leavingAbandoned = true;
         // (A new game is played straight: the COMMAND line's cheats are off.)
         hlrt::game.cheats = hldata::Cheats();
@@ -959,6 +1006,7 @@ int main(int argc, char *argv[])
                         paused = false;
                         hlrt::sound.setPaused(false);
                         hlrt::game.resetProgress();
+                        hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                         leavingAbandoned = true;
                         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
                             haltWith("Cannot start:", error.c_str(), startMap.c_str());
@@ -1025,6 +1073,32 @@ int main(int argc, char *argv[])
                             haltWith("Cannot go on:", error.c_str(), again.c_str());
                     }
                     lastVblank = wentBack = Global::vblanks();
+                }
+                // The game is lost (a player_loadsaved): its fade and words
+                // have had their time, and back to the last save it goes --
+                // or the start of the map, with none.
+                if (hlrt::game.logic.reloadMs == 0)
+                {
+                    hlrt::game.logic.reloadMs = -1;
+                    if (!hlrt::netGame.playing() && !loadSave(error, latestSave()) &&
+                        !loadSave(error, hldata::kSlotArrival))
+                    {
+                        const std::string again = currentMap;
+                        if (loadLevel(again, nullptr, error) != LoadResult::Ok)
+                            haltWith("Cannot go on:", error.c_str(), again.c_str());
+                    }
+                    lastVblank = wentBack = Global::vblanks();
+                }
+                // The end of a part of the game (a trigger_endsection): the
+                // title.
+                if (hlrt::game.logic.endSection)
+                {
+                    hlrt::game.logic.endSection = false;
+                    if (!hlrt::netGame.playing())
+                    {
+                        backToTitle();
+                        return;
+                    }
                 }
                 // The map asked for a save (a trigger_autosave).
                 if (hlrt::game.logic.saveRequested)

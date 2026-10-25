@@ -334,7 +334,9 @@ namespace hldata
                 actors[i].kind >= static_cast<std::uint8_t>(ActorKind::Count) ||
                 (actors[i].kind == static_cast<std::uint8_t>(ActorKind::Item)
                      ? !itemWordOk(actors[i].item, stringsSize)
-                     : (actors[i].item >> kActorSquadShift) >= nameCount) ||
+                     : actors[i].kind == static_cast<std::uint8_t>(ActorKind::Xen)
+                           ? (actors[i].item & 0xFFu) >= static_cast<std::uint32_t>(XenPlant::Count)
+                           : (actors[i].item >> kActorSquadShift) >= nameCount) ||
                 actors[i].target >= nameCount)
                 return LevelError::BadIndex;
         }
@@ -475,6 +477,9 @@ namespace hldata
                 (r.extra[3] > 1 || (r.extra[3] == 0 && r.extra[0] >= soundCount) ||
                  (r.extra[3] == 1 && r.extra[0] >= sentenceCount)))
                 return LevelError::BadIndex;
+            if ((r.kind == static_cast<std::uint8_t>(LogicKind::ChangeTarget) && r.extra[0] >= nameCount) ||
+                (r.kind == static_cast<std::uint8_t>(LogicKind::Camera) && r.extra[0] > 7))
+                return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Maker) &&
                 (r.extra[0] > actorCount || r.extra[1] > actorCount - r.extra[0]))
                 return LevelError::BadIndex;
@@ -483,6 +488,7 @@ namespace hldata
                  (r.extra[2] != kNoCorner && r.extra[2] >= cornerCount) || r.extra[3] >= nameCount))
                 return LevelError::BadIndex;
             if (r.kind == static_cast<std::uint8_t>(LogicKind::Train) ||
+                r.kind == static_cast<std::uint8_t>(LogicKind::GunTarget) ||
                 r.kind == static_cast<std::uint8_t>(LogicKind::TrackTrain))
             {
                 // A train's firstAux is its first corner, not a list.
@@ -492,6 +498,15 @@ namespace hldata
             }
             if (static_cast<std::uint32_t>(r.firstAux) + r.auxCount > logicAuxCount)
                 return LevelError::BadIndex;
+            // A speaker's, sentences.
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Speaker))
+            {
+                for (std::uint32_t a = 0; a < r.auxCount; ++a)
+                {
+                    if (logicAux[r.firstAux + a].target >= sentenceCount)
+                        return LevelError::BadIndex;
+                }
+            }
             // A multisource's list holds record indices.
             if (r.kind == static_cast<std::uint8_t>(LogicKind::MultiSource))
             {
@@ -501,9 +516,11 @@ namespace hldata
                         return LevelError::BadIndex;
                 }
             }
-            else if (r.kind != static_cast<std::uint8_t>(LogicKind::Beam))
+            else if (r.kind != static_cast<std::uint8_t>(LogicKind::Beam) &&
+                     r.kind != static_cast<std::uint8_t>(LogicKind::Speaker))
             {
-                // Anyone else's holds names (a beam's: places).
+                // Anyone else's holds names (a beam's: places; a speaker's:
+                // sentences, above).
                 for (std::uint32_t a = 0; a < r.auxCount; ++a)
                 {
                     if (logicAux[r.firstAux + a].target >= nameCount)

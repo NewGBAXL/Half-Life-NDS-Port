@@ -81,6 +81,8 @@ namespace hlds
         int unsupportedEntities = 0; ///< entities whose class the port does not handle yet
         int stoodIn = 0; ///< (a multiplayer map) pickups given as a weapon the port has, for one it has not
         int unsupportedClasses = 0;
+        /// ... which, and how many of each ("monster_flyer" 3, ...).
+        std::vector<std::pair<std::string, int>> unsupported;
         int models = 0;      ///< models cooked for the map's actors
         int actors = 0;
         int modelKb = 0;     ///< their files, skins apart

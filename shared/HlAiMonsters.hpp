@@ -1365,7 +1365,7 @@ namespace hldata
             for (int r = 0; r < c.w.recordCount; ++r)
             {
                 const LogicRecord &record = c.w.records[r];
-                if (c.w.states[r].dead || record.brush == kNoBrush || !detail::isBreakable(record))
+                if (c.w.states[r].dead || record.brush == kNoBrush || !detail::takesBlows(record))
                     continue;
                 const MoverHull &hull = c.w.movers[record.brush];
                 const fx center[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,

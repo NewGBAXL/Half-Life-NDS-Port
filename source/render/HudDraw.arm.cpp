@@ -453,7 +453,16 @@ namespace hlrt
         hurtKinds_ = 0;
         hurtPulse = HudHurts::pulse(now);
         hurts.tick(now, hurtPulse);
-        if (atlas640_)
+        if (game.logic.camera >= 0)
+        {
+            // (Nothing of it over a view from a trigger_camera.)
+            for (int n = 0; n < kSprites; ++n)
+                hide(n);
+            flashColour = 0;
+            std::memset(painColour, 0, sizeof(painColour));
+            std::memset(hurtColour, 0, sizeof(hurtColour));
+        }
+        else if (atlas640_)
         {
             compose640();
         }

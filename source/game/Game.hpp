@@ -29,6 +29,12 @@
 #include "HlSave.hpp"
 #include "HlTransition.hpp"
 
+namespace hldata::detail
+{
+    struct StreamOut; // (HlSaveState.hpp)
+    struct StreamIn;
+}
+
 namespace hlrt
 {
     class Game
@@ -134,6 +140,25 @@ namespace hlrt
         bool layState(const hldata::SaveData &save);
         /// What a save says of itself: where, the chapter, how long played.
         hldata::SaveHeading heading(const std::string &map) const;
+
+        // ---- the maps left, kept to come back to (HlMapStore.hpp) ----
+
+        /// How long what storeMap writes is.
+        std::uint32_t storedBytes();
+        /// The whole of the map as it is left -- its state and its monsters'
+        /// minds -- through `out`. Call after makeArrival (who went along is
+        /// leftWith()), before the map is let go.
+        bool storeMap(hldata::detail::StreamOut &out);
+        /// ... laid back over the map just begun (before applyArrival), and
+        /// those of sentAway who `landed` (bit by bit) taken out of it. False
+        /// if it does not fit the map as it is cooked -- or ran out part of
+        /// the way, and the map is to be begun again.
+        bool layStored(hldata::detail::StreamIn &in, const std::int16_t *sentAway, std::uint8_t landed);
+        /// Which actors went along with the player at the last makeArrival
+        /// (-1: none), and which of an Arrival's visitors the last
+        /// applyArrival placed (bit by bit).
+        const std::int16_t *leftWith() const { return leftWith_; }
+        std::uint8_t placed() const { return placed_; }
         /// Seconds played, this game.
         std::uint32_t playSeconds() const { return static_cast<std::uint32_t>(playMs_ / 1000); }
 
@@ -189,21 +214,24 @@ namespace hlrt
         std::uint8_t *aiHeld_ = nullptr;
         bool wasDeep_ = false; ///< the player was in water to the waist a frame ago
         int trainForward_ = 0; ///< forward or back as it was held a frame ago: a press drives a train
+        /// The view from a trigger_camera (LogicWorld::camera), put over the
+        /// player's own after it is worked out -- whose yaw and pitch (the
+        /// way the player looks, which is the camera's) are kept here
+        /// meanwhile, and given back as it ends.
+        void cameraView();
+        mutable std::int16_t leftWith_[hldata::kMaxVisitors] = {-1, -1, -1, -1};
+        std::uint8_t placed_ = 0;
+        int cameraWas_ = -1;
+        std::uint16_t ownYaw_ = 0;
+        std::int16_t ownPitch_ = 0;
+        /// What laying a state back over the map (a save's, a map come back
+        /// to) does besides: what it was doing at that moment is cleared,
+        /// what moves sounds again, the limits are this console's.
+        void afterLay();
         /// The player left the last map at its train's controls (makeArrival),
         /// and has this one's (applyArrival).
         mutable bool trainCarried_ = false;
         std::vector<hldata::SaveMapState> visited_;
-        /// What a save keeps of the game beside the map's own state: how
-        /// long has been played, the chapter's title as it was last
-        /// shown, the music that was playing.
-        struct Kept
-        {
-            std::uint64_t playMs = 0;
-            std::int32_t music = -1;
-            std::uint32_t musicMs = 0; ///< how far into it
-            char chapter[44] = {};
-            std::uint32_t spare = 0;
-        };
         std::uint64_t playMs_ = 0;
         int slowCarry_ = 0; ///< host_timescale: the part of a sixtieth not yet run (Q8)
         char chapter_[44] = {};
