@@ -109,6 +109,32 @@ Milestone 11, "levels of detail".
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
+- How hard the game is: NEW GAME asks, as the game's does -- EASY, MEDIUM
+  or DIFFICULT -- and every number of the game's `skill.cfg` is taken at
+  that level (`shared/HlSkill.hpp`, the three columns typed in and checked
+  against the file by `test_skill`): the monsters' health and blows, the
+  rounds of the soldiers, turrets and tanks, what a health kit, a battery, a
+  scientist and a wall charger give. The level is kept with the game's
+  switches (`kGlobalSkill`), so it goes into the next map and into a save; a
+  save from before there was a choice is MEDIUM, as everything was. A game
+  between consoles is played at the host's (its START says which). The
+  SDK's own rules by level are kept too: on DIFFICULT a grunt of a squad
+  tosses a grenade as he runs for cover and fires his launcher again
+  sooner, an assassin standing still fades almost out of sight, an alien
+  slave's zap goes half again as fast; on EASY the Apache does not fire its
+  rockets with its gun. And autoaim (the OPTIONS' CONTROLS, AUTOAIM: the
+  game's `sv_aim`): on EASY and MEDIUM the pistol, the python, the MP5 and
+  the shotgun bend their aim to the monster nearest it within their cone
+  (10 or 5 degrees) -- a third of the way on EASY, nine tenths on MEDIUM, as
+  the game's GetAutoaimVector has it -- and the crosshair moves with it (red
+  while it is on one, on EASY); on DIFFICULT the aim is straight.
+- Wall chargers are used for as long as USE is held on them (its button, the
+  touch screen's USE), as the game's are: their first sound, then their
+  loop while they give, a point a tenth of a second, stopped a quarter of a
+  second after USE is let go or as soon as the player is full (to someone
+  already full they are silent); empty, or to someone without the suit,
+  they refuse, with their own sound. What they
+  hold is the level's.
 - What crushes: a door or a train with a `dmg` hurts the player who holds it
   up (a door each time it tries, a train every half second, as the game's
   `Blocked` do), and a monster it comes into while it moves -- it does not

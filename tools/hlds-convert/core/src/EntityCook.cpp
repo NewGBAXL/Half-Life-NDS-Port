@@ -2480,7 +2480,9 @@ namespace hlds
                 const bool suit = cls == "func_recharge";
                 record.kind = static_cast<std::uint8_t>(suit ? LogicKind::SuitCharger
                                                              : LogicKind::HealthCharger);
-                record.extra[0] = suit ? 75 : 50; // what it holds, at "normal"
+                // (What it holds is the game's level's: chargerCapacity. This,
+                // the easy level's, is for a build from before there was one.)
+                record.extra[0] = suit ? 75 : 50;
             }
             else if (cls == "ambient_generic")
             {
@@ -3108,6 +3110,15 @@ namespace hlds
                     "debris/bustmetal2.wav",  "debris/bustglass2.wav",    "debris/bustconcrete2.wav"};
                 const int material = std::clamp(static_cast<int>(numberKey(entity, "material")), 0, 8);
                 sound.move = soundIndex(kBreaks[material], false);
+            }
+            else if (cls == "func_healthcharger" || cls == "func_recharge")
+            {
+                // A wall charger's: as it starts, as it goes on (round and
+                // round, from the file's cue), and as it refuses.
+                const bool suit = cls == "func_recharge";
+                sound.unlocked = soundIndex(suit ? "items/suitchargeok1.wav" : "items/medshot4.wav", false);
+                sound.move = soundIndex(suit ? "items/suitcharge1.wav" : "items/medcharge4.wav", true);
+                sound.locked = soundIndex(suit ? "items/suitchargeno1.wav" : "items/medshotno1.wav", false);
             }
             if (heardSpark != kNoSound)
                 sound.move = heardSpark;

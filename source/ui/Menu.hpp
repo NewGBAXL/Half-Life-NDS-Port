@@ -40,6 +40,8 @@ namespace hlrt
         void setSaves(const hldata::SaveIndex *saves) { saves_ = saves; }
         /// Which save an action is about (a kSlot*).
         int slot() const { return slot_; }
+        /// How hard a new game (Action::NewGame) is to be: kSkillEasy..Hard.
+        int skill() const { return skill_; }
         /// Once a frame while it is open (after the keys have been scanned).
         Action frame();
         /// What a console line said, and whether it closes the console.
@@ -75,6 +77,7 @@ namespace hlrt
             NetPause,    ///< the pause menu of a game between consoles (which goes on)
             TouchAim,    ///< how the stylus turns the view, and how hard it must press
             Buttons,     ///< which button does what (a custom layout)
+            Difficulty,  ///< a new game's: EASY, MEDIUM, DIFFICULT
         };
         /// The buttons page: which of its two screens; and the action whose
         /// button is being asked for (-1: none), with what was held when it
@@ -87,6 +90,7 @@ namespace hlrt
         bool title_ = false;   ///< it is the title's menu, not the pause's
         bool saving_ = false;  ///< the list is shown to save into
         int slot_ = -1;
+        int skill_ = 2; ///< (kSkillMedium)
         Action asked_ = Action::None; ///< what "yes" on the confirm page does
         Page asker_ = Page::Main;     ///< ... and where "no" goes back to
         void showSaves(bool saving);

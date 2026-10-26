@@ -606,7 +606,8 @@ namespace hlrt
     {
         globals = Globals();
         for (std::size_t i = 0; i < save.globalHash.size(); ++i)
-            globals.set(save.globalHash[i], save.globalState[i] > kGlobalDead && save.globalHash[i] != kGlobalPlayerGravity
+            globals.set(save.globalHash[i], save.globalState[i] > kGlobalDead && save.globalHash[i] != kGlobalPlayerGravity &&
+                                                    save.globalHash[i] != kGlobalSkill
                                                 ? kGlobalOff
                                                 : save.globalState[i]);
         visited_ = save.maps;
@@ -765,7 +766,7 @@ namespace hlrt
         if (logic.camera >= 0 && (logic.records[logic.camera].extra[0] & 4))
         {
             input.moveForward = input.moveSide = 0;
-            input.jump = input.duck = input.usePressed = input.attack = input.second = false;
+            input.jump = input.duck = input.usePressed = input.useHeld = input.attack = input.second = false;
             input.reloadPressed = input.lampPressed = false;
             input.weaponPick = input.weaponStep = 0;
             input.lookDx = input.lookDy = input.lookFineX = input.lookFineY = 0;
@@ -815,6 +816,17 @@ namespace hlrt
                 }
                 else
                     personUse(logic, player.state, eye, camera.forward); // (a scientist or a guard: follow, or stay)
+            }
+            else if (input.useHeld && player.state.health > 0)
+            {
+                // Held: what goes on being used while it is (FCAP_CONTINUOUS_USE:
+                // a wall charger) is used again, each frame -- whatever is
+                // in view now, as the game's PlayerUse looks again.
+                const fx eye[3] = {player.state.origin[0], player.state.origin[1],
+                                   player.state.origin[2] + player.state.viewHeight};
+                const int target = logicFindUsable(logic, eye, camera.forward);
+                if (target >= 0 && logicContinuousUse(logic.records[target]))
+                    logicUse(logic, player.state, target, -1, kUseSet);
             }
         }
         // What fights, what lies about, and what is in hand.
@@ -945,6 +957,7 @@ namespace hlrt
             // At a gun's controls: the fire button is the gun's, and what is
             // in hand is put away (the game's holstered weapon).
             const bool manning = tankManned(logic) >= 0;
+            logic.noAutoaim.value = !autoaim;
             if (manning)
                 tankControl(logic, player.state, camera.yaw, camera.pitch, alive && input.attack, ms);
             const std::uint32_t did = netDid = weaponsTick(logic, player.state, weapon_, eye, camera.forward,

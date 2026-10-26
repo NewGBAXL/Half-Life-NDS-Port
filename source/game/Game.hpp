@@ -61,6 +61,10 @@ namespace hlrt
         hldata::Cheats cheats;
         /// Whether the crosshair is drawn (the COMMAND line's crosshair).
         bool crosshair = true;
+        /// Whether the guns' aim may bend towards a monster (the OPTIONS'
+        /// AUTOAIM, the game's sv_aim): put here each frame from the
+        /// settings, for the game to give its logic.
+        bool autoaim = true;
         /// The models of what the player's weapons throw and leave about, by
         /// the projectile's kind (a hand grenade, the launcher's, and
         /// kShotBolt..kShotHornet), found by name when the map is set up: -1

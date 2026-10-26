@@ -256,6 +256,11 @@ namespace hldata
         bool jump = false;
         bool duck = false;
         bool usePressed = false;
+        /// USE is held down (its button, the touch screen's USE, a firm press
+        /// that is USE): what is used for as long as it is held -- a wall
+        /// charger -- is used again each frame. (A tap of the aim pad is a
+        /// press only.)
+        bool useHeld = false;
         bool attack = false;
         bool second = false;
         int weaponPick = 0; ///< a slot was touched: its kind of weapon (1..5: weaponOfCategory), or 0
@@ -562,6 +567,8 @@ namespace hldata
         out.jump = state.jumping || state.touch == kTouchJump || faceJump || (firmNow && set.firmPress == kFirmJump);
         out.duck = state.touch == kTouchDuck || state.crouched || duckHeld;
         out.touchOn = state.touching ? state.touch : kTouchAim;
+        out.useHeld = on(kActionUse) || (state.touching && state.touch == kTouchUse) ||
+                      (firmNow && set.firmPress == kFirmUse);
         state.lastHeld = held;
         state.lastBlank = in.blank;
         return out;

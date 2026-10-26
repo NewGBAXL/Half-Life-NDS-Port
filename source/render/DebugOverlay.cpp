@@ -9,6 +9,7 @@
 #include "data/ModelCache.hpp"
 #include "data/TextureCache.hpp"
 #include "data/TextureStream.hpp"
+#include "game/Game.hpp"
 #include "game/Player.hpp"
 #include "render/Camera.hpp"
 #include "render/GpuStats.hpp"
@@ -93,13 +94,15 @@ namespace hlrt
                               worldDraw.stats().brushesDropped, worldDraw.stats().brushesOverflow != 0 ? " OVER" : "");
                 break;
             }
-            std::snprintf(line, sizeof(line), "pos %5d %5d %5d %s",
+            // (And how hard the game is: E, M, H.)
+            std::snprintf(line, sizeof(line), "pos %5d %5d %5d %s %c",
                           hldata::fxToInt(camera.pos[0]), hldata::fxToInt(camera.pos[1]),
                           hldata::fxToInt(camera.pos[2]),
                           player.noclip ? "fly"
                                         : (player.state.stuck
                                                ? "STUCK"
-                                               : (player.state.onGround ? "ground" : "air")));
+                                               : (player.state.onGround ? "ground" : "air")),
+                          "EMH"[hldata::skillLevelOf(game.logic) - 1]);
             break;
         case 4:
             // ... and the sound: how many of the map's sounds are in memory,

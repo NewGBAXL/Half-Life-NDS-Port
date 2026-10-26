@@ -26,7 +26,6 @@ namespace hldata
 
     namespace scientist
     {
-        inline constexpr int kHeal = 25;          ///< sk_scientist_heal
         inline constexpr int kHealWaitMs = 60000; ///< ... once a minute
         // His animation events.
         inline constexpr int kAeHeal = 1, kAeNeedleOn = 2, kAeNeedleOff = 3;
@@ -154,15 +153,16 @@ namespace hldata
             AiTarget t;
             if (!aiTargetOf(c.w, c.player, c.m.targetEnt, t) || aiDist(t.origin, c.me.pos) > fxFromInt(100))
                 return;
+            const int heal = skillOf(c.w).scientistHeal;
             if (t.isPlayer)
             {
-                c.player.health = c.player.health + kHeal > 100 ? 100 : c.player.health + kHeal;
+                c.player.health = c.player.health + heal > 100 ? 100 : c.player.health + heal;
             }
             else if (AiMonster *m = aiFind(c.a, t.id))
             {
                 ActorState &them = c.a.states[t.id];
-                them.health = static_cast<std::int16_t>(them.health + kHeal > m->maxHealth ? m->maxHealth
-                                                                                          : them.health + kHeal);
+                them.health = static_cast<std::int16_t>(them.health + heal > m->maxHealth ? m->maxHealth
+                                                                                         : them.health + heal);
             }
             c.m.talk.healTime = c.ai.now + kHealWaitMs;
         }
@@ -580,7 +580,6 @@ namespace hldata
     {
         inline constexpr int kAeDraw = 2, kAeShoot = 3, kAeHolster = 4;
         inline constexpr int kBodyHolstered = 0, kBodyDrawn = 1, kBodyGone = 2;
-        inline constexpr int kRound = 5; ///< sk_9mm_bullet
 
         inline constexpr AiTask tlBaFollow[] = {{kTaskMoveToTargetRange, 128}, {kTaskSetSchedule, kSchedTargetFace}};
         inline constexpr AiSchedule slBaFollow = {
@@ -710,7 +709,7 @@ namespace hldata
                 const int group = hit >= 0 ? hitGroup(c.a, c.a.states[hit], gun, end) : kHitBody;
                 if (hit >= 0)
                     bleed(c.w, hit, end, aim, false);
-                aiDamageTarget(c, hit, kRound, kDmgBullet | kDmgNeverGib, static_cast<std::uint8_t>(group));
+                aiDamageTarget(c, hit, skillOf(c.w).monster9mmBullet, kDmgBullet | kDmgNeverGib, static_cast<std::uint8_t>(group)); // (BULLET_MONSTER_9MM)
             }
             const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
             effectAdd(c.a, kEffectMuzzle, flash, nullptr, 0, 50);

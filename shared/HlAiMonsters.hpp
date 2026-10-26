@@ -76,7 +76,6 @@ namespace hldata
     namespace headcrab
     {
         inline constexpr int kJumpAttack = 2; ///< HC_AE_JUMPATTACK
-        inline constexpr int kDmgBite = 10;   ///< sk_headcrab_dmg_bite
 
         inline constexpr AiTask tlRangeAttack1[] = {
             {kTaskStopMoving, 0},
@@ -164,7 +163,7 @@ namespace hldata
             if (c.m.inAir)
             {
                 detail::aiSay(c, CommonSound::HeadcrabBite);
-                aiDamageTarget(c, other, kDmgBite, kDmgSlash);
+                aiDamageTarget(c, other, skillOf(c.w).headcrabDmgBite, kDmgSlash);
             }
             c.m.touchArmed = false;
         }
@@ -261,7 +260,6 @@ namespace hldata
     namespace zombie
     {
         inline constexpr int kAttackRight = 1, kAttackLeft = 2, kAttackBoth = 3;
-        inline constexpr int kDmgOneSlash = 20, kDmgBothSlash = 40;
         inline constexpr int kFlinchDelay = 2000; ///< at most one flinch every two seconds
 
         inline int yawSpeed(AiCtx &) { return 120; }
@@ -285,7 +283,7 @@ namespace hldata
             if (event != kAttackRight && event != kAttackLeft && event != kAttackBoth)
                 return;
             const bool both = event == kAttackBoth;
-            const std::int16_t hit = aiHullAttack(c, 70, both ? kDmgBothSlash : kDmgOneSlash, kDmgSlash);
+            const std::int16_t hit = aiHullAttack(c, 70, both ? skillOf(c.w).zombieDmgBothSlash : skillOf(c.w).zombieDmgOneSlash, kDmgSlash);
             if (hit != kAiNone)
             {
                 fx right[3], forward[3];
@@ -382,7 +380,6 @@ namespace hldata
     namespace slave
     {
         inline constexpr int kClaw = 1, kClawRake = 2, kZapPowerUp = 3, kZapShoot = 4, kZapDone = 5;
-        inline constexpr int kDmgClaw = 10, kDmgClawRake = 25, kDmgZap = 10;
         /// Its own map flag (spawnflag 64): it goes for the player only once
         /// provoked (kept where a turret keeps its ceiling).
         inline constexpr std::uint8_t kActorWaitProvoked = kActorCeiling;
@@ -528,7 +525,7 @@ namespace hldata
             case kClaw:
             case kClawRake:
             {
-                const std::int16_t hit = aiHullAttack(c, 70, event == kClaw ? kDmgClaw : kDmgClawRake, kDmgSlash);
+                const std::int16_t hit = aiHullAttack(c, 70, event == kClaw ? skillOf(c.w).islaveDmgClaw : skillOf(c.w).islaveDmgClawrake, kDmgSlash);
                 if (hit != kAiNone)
                 {
                     detail::aiPunch(c, hit, fxFromInt(5), -fxFromInt(18));
@@ -541,6 +538,10 @@ namespace hldata
                 break;
             }
             case kZapPowerUp:
+                // (On DIFFICULT the rest of the attack goes half again as
+                // fast: ISLAVE_AE_ZAP_POWERUP's framerate 1.5.)
+                if (skillLevelOf(c.w) == kSkillHard)
+                    c.me.quickClip.value = static_cast<std::int16_t>(c.me.clip + 1);
                 armBeam(c, -1);
                 armBeam(c, 1);
                 c.me.skin = static_cast<std::uint8_t>(c.m.count1 / 2 > 2 ? 2 : c.m.count1 / 2);
@@ -556,14 +557,14 @@ namespace hldata
                 detail::aiSay(c, CommonSound::SlaveZap);
                 if (first != kAiNone && first == second)
                 {
-                    aiDamageTarget(c, first, kDmgZap * 2, kDmgShock);
+                    aiDamageTarget(c, first, skillOf(c.w).islaveDmgZap * 2, kDmgShock);
                 }
                 else
                 {
                     if (first != kAiNone)
-                        aiDamageTarget(c, first, kDmgZap, kDmgShock);
+                        aiDamageTarget(c, first, skillOf(c.w).islaveDmgZap, kDmgShock);
                     if (second != kAiNone)
-                        aiDamageTarget(c, second, kDmgZap, kDmgShock);
+                        aiDamageTarget(c, second, skillOf(c.w).islaveDmgZap, kDmgShock);
                 }
                 c.m.time1 = c.ai.now + aiRandomMs(c.a, 500, 4000); // m_flNextAttack
                 break;
@@ -714,7 +715,6 @@ namespace hldata
     namespace bullsquid
     {
         inline constexpr int kSpit = 1, kBite = 2, kBlink = 3, kTailWhip = 4, kHop = 5, kThrow = 6;
-        inline constexpr int kDmgBite = 25, kDmgWhip = 35, kDmgSpit = 10;
         inline constexpr int kSprintDist = 256; ///< SQUID_SPRINT_DIST
 
         enum : std::uint8_t
@@ -881,7 +881,7 @@ namespace hldata
         inline bool checkMelee1(AiCtx &c, fx dot, fx dist)
         {
             AiTarget t;
-            return aiTargetOf(c.w, c.player, c.m.enemy, t) && t.health <= kDmgWhip && dist <= fxFromInt(85) &&
+            return aiTargetOf(c.w, c.player, c.m.enemy, t) && t.health <= skillOf(c.w).bullsquidDmgWhip && dist <= fxFromInt(85) &&
                    dot >= fxDot(0.7);
         }
         /// The bite: anything else up close.
@@ -936,7 +936,7 @@ namespace hldata
             }
             case kBite:
             {
-                const std::int16_t hit = aiHullAttack(c, 70, kDmgBite, kDmgSlash);
+                const std::int16_t hit = aiHullAttack(c, 70, skillOf(c.w).bullsquidDmgBite, kDmgSlash);
                 detail::aiSay(c, CommonSound::SquidBite);
                 const fx shove[3] = {-forward[0] * 100, -forward[1] * 100, fxFromInt(100)};
                 if (hit != kAiNone)
@@ -945,7 +945,7 @@ namespace hldata
             }
             case kTailWhip:
             {
-                const std::int16_t hit = aiHullAttack(c, 70, kDmgWhip, kDmgClub | kDmgAlwaysGib);
+                const std::int16_t hit = aiHullAttack(c, 70, skillOf(c.w).bullsquidDmgWhip, kDmgClub | kDmgAlwaysGib);
                 if (hit != kAiNone)
                 {
                     detail::aiPunch(c, hit, fxFromInt(20), -fxFromInt(20));
@@ -1164,7 +1164,6 @@ namespace hldata
         inline constexpr int kSquadBonus = 110; ///< HOUNDEYE_SQUAD_BONUS, in hundredths
         inline constexpr int kEyeFrames = 3;
         inline constexpr int kStartleVolume = 128;
-        inline constexpr int kDmgBlast = 15;
 
         inline constexpr int kWarn = 1, kStartAttack = 2, kThump = 3, kAngerSound1 = 4, kAngerSound2 = 5,
                              kHopBack = 6, kCloseEye = 7;
@@ -1333,7 +1332,8 @@ namespace hldata
             const fx middle[3] = {c.me.pos[0], c.me.pos[1], c.me.pos[2] + fxFromInt(16)};
             effectAdd(c.a, kEffectRing, middle, nullptr, kMaxAttackRadius, 300);
             const int squad = aiSquadCount(c);
-            const int full = squad > 1 ? kDmgBlast + (kDmgBlast * kSquadBonus * (squad - 1)) / 100 : kDmgBlast;
+            const int blast = skillOf(c.w).houndeyeDmgBlast;
+            const int full = squad > 1 ? blast + (blast * kSquadBonus * (squad - 1)) / 100 : blast;
             auto hurt = [&](std::int16_t id, const fx *center)
             {
                 const int dist = fxToInt(aiDist(center, c.me.pos));

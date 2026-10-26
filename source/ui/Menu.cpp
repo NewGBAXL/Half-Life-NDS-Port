@@ -3,6 +3,7 @@
 #include "ui/Menu.hpp"
 
 #include "HlCommands.hpp"
+#include "HlSkill.hpp"
 #include "Settings.hpp"
 #include "audio/DspAudio.hpp"
 #include "game/Input.hpp"
@@ -55,6 +56,7 @@ namespace hlrt
             kNetMap,
             kNetFrags,
             kNetMinutes,
+            kNetSkill,
             kNetStart,
             kNetFound, ///< a game found (which, by its row)
             kLeave,
@@ -80,6 +82,10 @@ namespace hlrt
             kKey,     ///< an action's button (which, by its row: buttonActions)
             kMore,    ///< the buttons' other screen
             kResetKeys,
+            kAutoaim,
+            kSkillEasy, ///< a new game's difficulty (kSkillEasy + its level - 1)
+            kSkillMedium,
+            kSkillHard,
         };
         struct Row
         {
@@ -100,6 +106,7 @@ namespace hlrt
         const Row kHostRows[] = {{Kind::Value, kNetMap, "Map"},
                                  {Kind::Value, kNetFrags, "Frag limit"},
                                  {Kind::Value, kNetMinutes, "Time limit"},
+                                 {Kind::Value, kNetSkill, "Difficulty"},
                                  {Kind::Button, kNetStart, "START"},
                                  {Kind::Button, kBack, "BACK"}};
         const Row kLobbyRows[] = {{Kind::Button, kBack, "LEAVE"}};
@@ -111,6 +118,11 @@ namespace hlrt
         NetGame::Found foundList[kFoundListed];
         int foundCount = 0;
         const Row kConfirmRows[] = {{Kind::Button, kYes, "YES"}, {Kind::Button, kNo, "NO"}};
+        // A new game's difficulty, as the game's NEW GAME asks it.
+        const Row kSkillRows[] = {{Kind::Button, kSkillEasy, "EASY"},
+                                  {Kind::Button, kSkillMedium, "MEDIUM"},
+                                  {Kind::Button, kSkillHard, "DIFFICULT"},
+                                  {Kind::Button, kBack, "BACK"}};
         // The list of saves: its lines are made when it is shown (they say
         // what is in each), then BACK.
         Row listRows[kSlotsListed + 1];
@@ -144,6 +156,7 @@ namespace hlrt
                                     {Kind::Value, kDuck, "Crouch"},
                                     {Kind::Value, kPadSide, "Pad left/right"},
                                     {Kind::Value, kPadUp, "Pad up/down"},
+                                    {Kind::Value, kAutoaim, "Autoaim"},
                                     {Kind::Button, kButtons, "BUTTONS"},
                                     {Kind::Button, kTouchAim, "TOUCH AIM"},
                                     {Kind::Button, kBack, "BACK"}};
@@ -195,6 +208,11 @@ namespace hlrt
         bool isVolume(Id id) { return id == kMusic || id == kEffects || id == kVoices || id == kAmbience; }
         const Row *rowsOf(int page, int &count)
         {
+            if (page == 14)
+            {
+                count = static_cast<int>(sizeof(kSkillRows) / sizeof(kSkillRows[0]));
+                return kSkillRows;
+            }
             if (page == 12)
             {
                 count = static_cast<int>(sizeof(kTouchRows) / sizeof(kTouchRows[0]));
@@ -337,7 +355,7 @@ namespace hlrt
     bool Menu::big() const
     {
         return page_ == Page::Main || page_ == Page::Title || page_ == Page::Confirm || page_ == Page::Multiplayer ||
-               page_ == Page::NetPause;
+               page_ == Page::NetPause || page_ == Page::Difficulty;
     }
 
     /// What of the lobby is on the screen: who is there, what they are
@@ -441,8 +459,10 @@ namespace hlrt
             drawTextCentred(canvas, title, 128, page_ == Page::Confirm ? 14 : 8,
                             page_ == Page::Main || page_ == Page::NetPause
                                 ? "PAUSED"
-                                : (page_ == Page::Title ? "HALF-LIFE"
-                                                        : (page_ == Page::Multiplayer ? "MULTIPLAYER" : question)),
+                                : (page_ == Page::Title       ? "HALF-LIFE"
+                                   : page_ == Page::Multiplayer ? "MULTIPLAYER"
+                                   : page_ == Page::Difficulty  ? "NEW GAME"
+                                                                : question),
                             inkFor(title, kUiOrange));
         }
         for (int row = 0; row < rowCount(); ++row)
@@ -538,6 +558,9 @@ namespace hlrt
         case kBob:
             std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.viewBob ? "on" : "off");
             break;
+        case kAutoaim:
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, settings.autoaim ? "on" : "off");
+            break;
         case kFog:
             std::snprintf(text, sizeof(text), "%s: %s", item.label, kFogTypeName[settings.graphics.fog]);
             break;
@@ -580,6 +603,12 @@ namespace hlrt
             else
                 std::snprintf(text, sizeof(text), "%s: %d minutes", item.label, netMinutes_);
             break;
+        case kNetSkill:
+        {
+            static const char *const kNames[] = {"easy", "medium", "difficult"};
+            std::snprintf(text, sizeof(text), "%s: %s", item.label, kNames[(skill_ - 1) % 3]);
+            break;
+        }
         case kScheme:
             std::snprintf(text, sizeof(text), "%s: %s", item.label,
                           settings.controlScheme == kControlsModern
@@ -673,13 +702,23 @@ namespace hlrt
         case kSave:    return Action::Save;
         case kCommand: return Action::Command;
         case kNewGame:
-            // (From the title there is nothing to lose. No save is touched
-            // either way: a new game only begins.)
-            if (title_)
-                return Action::NewGame;
+            // (From the title there is nothing to lose: straight to how hard
+            // it is to be. No save is touched either way: a new game only
+            // begins.)
             asker_ = page_;
+            if (title_)
+            {
+                page_ = Page::Difficulty;
+                draw();
+                break;
+            }
             ask(Action::NewGame, "NEW GAME?");
             break;
+        case kSkillEasy:
+        case kSkillMedium:
+        case kSkillHard:
+            skill_ = hldata::kSkillEasy + (item.id - kSkillEasy);
+            return Action::NewGame;
         case kContinue:
             if (saves_ != nullptr && saveMostRecent(*saves_) >= 0)
             {
@@ -721,6 +760,13 @@ namespace hlrt
         {
             const Action action = asked_;
             asked_ = Action::None;
+            // (A new game: yes, and then how hard.)
+            if (action == Action::NewGame)
+            {
+                page_ = Page::Difficulty;
+                draw();
+                break;
+            }
             return action;
         }
         case kNo:
@@ -748,7 +794,7 @@ namespace hlrt
                         ? Page::Controls
                         : page_ == Page::Graphics || page_ == Page::Controls
                         ? Page::Options
-                        : (page_ == Page::Saves
+                        : (page_ == Page::Saves || page_ == Page::Difficulty
                                ? asker_
                                : (title_ ? Page::Title : (netGame.playing() ? Page::NetPause : Page::Main)));
             settings.save();
@@ -808,13 +854,17 @@ namespace hlrt
             drawRow(row, false);
             break;
         }
+        case kNetSkill:
+            skill_ = skill_ % hldata::kSkillHard + 1;
+            drawRow(row, false);
+            break;
         case kNetStart:
             // (Whoever runs the screens loads the map when the match says
             // it has been started: main.cpp.)
             // (Alone, too: a host may look round a map before anyone comes --
             // though nobody can then, a match under way lets no one in.)
             if (!netGame.maps().empty())
-                netGame.start(netGame.maps()[netMap_ % netGame.maps().size()], netFrags_, netMinutes_);
+                netGame.start(netGame.maps()[netMap_ % netGame.maps().size()], netFrags_, netMinutes_, skill_);
             break;
         case kLeave:
             return Action::Leave;
@@ -865,6 +915,10 @@ namespace hlrt
             break;
         case kBob:
             settings.viewBob = !settings.viewBob;
+            drawRow(row, false);
+            break;
+        case kAutoaim:
+            settings.autoaim = !settings.autoaim;
             drawRow(row, false);
             break;
         case kControls:

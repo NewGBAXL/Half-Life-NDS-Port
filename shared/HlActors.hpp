@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "HlAnim.hpp"
+#include "HlFields.hpp"
 #include "HlMovers.hpp"
 
 namespace hldata
@@ -132,6 +133,15 @@ namespace hldata
         fx groundAt[3] = {0, 0, 0};
         bool airborne = false;
         std::int32_t hurtMs = 0;     ///< until a place that hurts may hurt them again
+        /// How far it has faded from sight, 0 (all there) to 235 (an
+        /// assassin's cloak on DIFFICULT: 255 less its renderamt). Worked
+        /// out again as it thinks, and not kept in a save, as the game's
+        /// is not.
+        Unsaved<std::uint8_t> cloak;
+        /// The clip (plus one; 0: none) it plays half again as fast, until
+        /// that clip is done -- an alien slave's zap on DIFFICULT (its
+        /// framerate 1.5, which the next sequence puts back).
+        Unsaved<std::int16_t> quickClip;
         std::uint8_t attack = 0;     ///< which of its kind's attacks it is making (kAttack*)
         std::uint8_t item = 0;       ///< ItemKind, for something to pick up
         std::uint16_t fires = 0;     ///< ... and the name id of what taking it fires
@@ -976,9 +986,14 @@ namespace hldata
         // (A plant sways at a pace of its own: `speed`, Q8.)
         if (actor.kind == static_cast<std::uint8_t>(ActorKind::Xen) && actor.speed > 0)
             ms = static_cast<int>((static_cast<std::int64_t>(ms) * actor.speed) >> 8);
+        // (Half again as fast: for the rest of this clip.)
+        if (actor.quickClip.value != 0 && actor.quickClip.value == actor.clip + 1)
+            ms = ms * 3 / 2;
         bool finished = false;
         actor.frame = advanceClip(clip, actor.frame, ms, finished);
         actor.finished = finished;
+        if (finished || actor.quickClip.value != actor.clip + 1)
+            actor.quickClip.value = 0;
         // Someone sitting, left to himself, has done with one way of
         // sitting: another.
         // (With minds about -- HlAi.hpp -- his own sees to that: SittingThink.)

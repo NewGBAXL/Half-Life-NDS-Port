@@ -146,13 +146,15 @@ namespace hlrt
         ended_ = why;
     }
 
-    void NetGame::start(const std::string &map, int fragLimit, int minuteLimit)
+    void NetGame::start(const std::string &map, int fragLimit, int minuteLimit, int skill)
     {
         if (phase_ != Phase::Hosting)
             return;
         const std::uint32_t hash = nameHash(map.c_str());
+        // (How hard: every console runs its own monsters and chargers.)
         netSay(match_, netEvent(NetEventType::Start, 0, static_cast<std::int16_t>(hash & 0xFFFF),
-                                static_cast<std::int16_t>(hash >> 16), fragLimit, minuteLimit));
+                                static_cast<std::int16_t>(hash >> 16), fragLimit, minuteLimit, skill));
+        pendingSkill_ = skill;
         match_.fragLimit = fragLimit;
         match_.minuteLimit = minuteLimit;
         netlink::admit(false);
@@ -166,12 +168,13 @@ namespace hlrt
         }
     }
 
-    bool NetGame::startAsked(std::string &map)
+    bool NetGame::startAsked(std::string &map, int &skill)
     {
         if (!startPending_)
             return false;
         startPending_ = false;
         map = pendingMap_;
+        skill = pendingSkill_;
         return true;
     }
 
@@ -336,6 +339,8 @@ namespace hlrt
                 }
                 match_.fragLimit = event.v[2];
                 match_.minuteLimit = event.v[3];
+                // (A host from before there was a choice says 0: MEDIUM.)
+                pendingSkill_ = event.v[4] >= 1 && event.v[4] <= 3 ? event.v[4] : 2;
                 if (pendingMap_.empty())
                 {
                     match_.passedCount = 0;

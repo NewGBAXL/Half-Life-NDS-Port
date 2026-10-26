@@ -62,10 +62,11 @@ namespace hlrt
 
         /// The host: begin the match on `map`. (It then loads the map
         /// itself, as the clients do when they hear.)
-        void start(const std::string &map, int fragLimit, int minuteLimit);
+        void start(const std::string &map, int fragLimit, int minuteLimit, int skill);
         /// Whether a match has been started and its map is to be loaded:
-        /// which map. True once per start, on every console.
-        bool startAsked(std::string &map);
+        /// which map, and how hard the host made it (kSkill*). True once per
+        /// start, on every console.
+        bool startAsked(std::string &map, int &skill);
         /// The map is loaded: the match begins here.
         void mapLoaded();
 
@@ -95,6 +96,7 @@ namespace hlrt
         int lostFrames_ = 0;
         const char *ended_ = "";
         std::string pendingMap_;
+        int pendingSkill_ = 2; ///< (kSkillMedium)
         bool startPending_ = false;
         std::uint32_t sent_ = 0, heard_ = 0;
 

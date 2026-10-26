@@ -20,16 +20,18 @@
 
 namespace hldata
 {
-    // The game's numbers, at "normal".
-    inline constexpr int kGruntHealth = 50;
+    // The game's numbers. Those that go with how hard the game is are its
+    // skill.cfg's (HlSkill.hpp: what he does uses the game's level); these
+    // are them at MEDIUM, for what wants a number to measure by.
+    inline constexpr int kGruntHealth = skillData(kSkillMedium).hgruntHealth;
     inline constexpr int kGruntLimp = 20;  ///< HGRUNT_LIMP_HEALTH
     inline constexpr int kGruntClip = 36;  ///< GRUNT_CLIP_SIZE
     inline constexpr int kGruntShells = 8; ///< a shotgun's
-    inline constexpr int kGruntRound = 4;  ///< sk_9mmAR_bullet: a round of his MP5
-    inline constexpr int kGruntPellet = 5; ///< sk_plr_buckshot: each of his shotgun's pellets
-    inline constexpr int kGruntPellets = 5; ///< sk_hgrunt_pellets
-    inline constexpr int kGruntKick = 10;  ///< sk_hgrunt_kick
-    inline constexpr int kGruntGrenadeSpeed = 600; ///< sk_hgrunt_gspeed
+    inline constexpr int kGruntRound = skillData(kSkillMedium).monster9mmARBullet; ///< a round of his MP5
+    inline constexpr int kGruntPellet = skillData(kSkillMedium).plrBuckshot; ///< each of his shotgun's pellets
+    inline constexpr int kGruntPellets = skillData(kSkillMedium).hgruntPellets;
+    inline constexpr int kGruntKick = skillData(kSkillMedium).hgruntKick;
+    inline constexpr int kGruntGrenadeSpeed = skillData(kSkillMedium).hgruntGspeed;
     inline constexpr std::uint8_t kHitStomach = 3;
     inline constexpr std::uint8_t kHitHelmet = 11;
 
@@ -542,7 +544,7 @@ namespace hldata
                 if (aiHas(c, kCondSeeEnemy))
                 {
                     const fx d[3] = {target[0] - c.me.pos[0], target[1] - c.me.pos[1], target[2] - c.me.pos[2]};
-                    const std::int64_t ms = static_cast<std::int64_t>(fxToInt(fxLength(d))) * 1000 / kGruntGrenadeSpeed;
+                    const std::int64_t ms = static_cast<std::int64_t>(fxToInt(fxLength(d))) * 1000 / skillOf(c.w).hgruntGspeed;
                     for (int k = 0; k < 3; ++k)
                         target[k] += static_cast<fx>((static_cast<std::int64_t>(t.velocity[k]) * ms) / 1000);
                 }
@@ -576,7 +578,7 @@ namespace hldata
             }
             else
             {
-                if (vecCheckThrow(c, gun, target, kGruntGrenadeSpeed, 50, c.m.vec1))
+                if (vecCheckThrow(c, gun, target, skillOf(c.w).hgruntGspeed, 50, c.m.vec1))
                 {
                     c.m.flag1 = true;
                     c.m.time1 = c.ai.now + 300;
@@ -673,7 +675,7 @@ namespace hldata
             gunPosition(c, gun);
             aiShootAtEnemy(c, gun, dir);
             const bool shotgun = has(c, kGruntShotgun);
-            const int shots = shotgun ? kGruntPellets : 1;
+            const int shots = shotgun ? skillOf(c.w).hgruntPellets : 1;
             // (VECTOR_CONE_10DEGREES and _15DEGREES: their sines, Q12.)
             const fx cone = shotgun ? 535 : 357;
             fx right[3], up[3];
@@ -710,7 +712,7 @@ namespace hldata
                 const int group = hit >= 0 ? hitGroup(c.a, c.a.states[hit], gun, end) : kHitBody;
                 if (hit >= 0)
                     bleed(c.w, hit, end, aim, false);
-                aiDamageTarget(c, hit, shotgun ? kGruntPellet : kGruntRound, kDmgBullet | kDmgNeverGib,
+                aiDamageTarget(c, hit, shotgun ? skillOf(c.w).plrBuckshot : skillOf(c.w).monster9mmARBullet, kDmgBullet | kDmgNeverGib,
                                static_cast<std::uint8_t>(group));
             }
             const fx flash[3] = {gun[0] + dir[0] * 24, gun[1] + dir[1] * 24, gun[2] + dir[2] * 24};
@@ -754,7 +756,9 @@ namespace hldata
                 if (Projectile *shot = projectileAdd(c.a, kShotContact, gun, c.m.vec1, 10000))
                     shot->sprite = 1; // (a soldier's: it goes off at the player too)
                 c.m.flag1 = false;
-                c.m.time1 = c.ai.now + 6000;
+                // (On DIFFICULT, a while at random before he shoots again;
+                // else six seconds before he even looks.)
+                c.m.time1 = c.ai.now + (skillLevelOf(c.w) == kSkillHard ? aiRandomLong(c.a, 2000, 5000) : 6000);
                 break;
             }
             case kGrenDrop:
@@ -794,7 +798,7 @@ namespace hldata
                     detail::aiPunch(c, hit, fxFromInt(15), 0);
                     const fx shove[3] = {forward[0] * 100, forward[1] * 100, fxFromInt(50)};
                     detail::aiShove(c, hit, shove);
-                    aiDamageTarget(c, hit, kGruntKick, kDmgClub);
+                    aiDamageTarget(c, hit, skillOf(c.w).hgruntKick, kDmgClub);
                 }
                 break;
             }
@@ -1014,7 +1018,18 @@ namespace hldata
             {
             case kSchedTakeCoverFromEnemy:
                 if (aiInSquad(c))
-                    return &slTakeCover; // (only "hard" tosses a grenade first)
+                {
+                    // (On DIFFICULT one of a squad who can tosses a grenade
+                    // as he goes.)
+                    if (skillLevelOf(c.w) == kSkillHard && aiHas(c, kCondCanRangeAttack2) &&
+                        aiOccupySlot(c, kSlotsGruntGrenade))
+                    {
+                        if (okToSpeak(c))
+                            say(c, kSpeakThrow);
+                        return &slTossGrenadeCover;
+                    }
+                    return &slTakeCover;
+                }
                 return aiRandomLong(c.a, 0, 1) ? &slTakeCover : &slGrenadeCover;
             case kSchedTakeCoverFromBestSound:
                 return &slTakeCoverFromBestSound;

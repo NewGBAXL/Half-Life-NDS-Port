@@ -2751,7 +2751,9 @@ namespace hldata
     inline void aiInit(AiCtx &c)
     {
         c.m.capability = c.kind.capability;
-        c.m.maxHealth = c.kind.health;
+        // (As much as its kind has at the game's difficulty.)
+        const int health = skillHealth(skillOf(c.w), c.me.kind, c.kind.health);
+        c.m.maxHealth = health;
         c.m.idealState = kStateIdle;
         c.m.idealActivity = kActIdle;
         c.m.idealYaw = c.me.yaw;
@@ -2775,7 +2777,7 @@ namespace hldata
         if (isPerson(c.me.kind) && c.me.health <= 0)
             c.me.health = static_cast<std::int16_t>(personHealth(c.me.kind) + c.me.health);
         if (c.me.health <= 0)
-            c.me.health = static_cast<std::int16_t>(c.kind.health);
+            c.me.health = static_cast<std::int16_t>(health);
         else if (c.me.ai != kAiIdle && !isPerson(c.me.kind))
             c.m.idealState = kStateAlert;
     }

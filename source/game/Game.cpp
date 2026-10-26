@@ -1,6 +1,7 @@
 #include "game/Game.hpp"
 
 #include "game/GameApi.hpp"
+#include "Settings.hpp"
 
 // The engine's half of Game: the state is here, the code is the game
 // library's (dll/hl/Game.arm.cpp). Each call goes on through its table.
@@ -11,7 +12,11 @@ namespace hlrt
 
     bool Game::create() { return gameApi.create(*this); }
     void Game::destroy() { gameApi.destroy(*this); }
-    void Game::frame(int vblanks) { gameApi.frame(*this, vblanks); }
+    void Game::frame(int vblanks)
+    {
+        autoaim = settings.autoaim;
+        gameApi.frame(*this, vblanks);
+    }
     hldata::Arrival Game::makeArrival() const { return gameApi.makeArrival(*this); }
     bool Game::applyArrival(const hldata::Arrival &arrival) { return gameApi.applyArrival(*this, arrival); }
     void Game::resetProgress() { gameApi.resetProgress(*this); }

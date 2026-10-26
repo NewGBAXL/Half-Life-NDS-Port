@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 41;
+    inline constexpr std::uint16_t kLevelVersion = 42;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -65,8 +65,8 @@ namespace hldata
     /// the counters, cameras, speakers, gun targets and the rest of round
     /// 39's kinds, Xen's plants, and three items; 40: func_friction's
     /// volumes, and beams that throw sparks. 41 -- a pendulum's damping and
-    /// its going back, which a build of 40 reads as none -- does not raise
-    /// it.)
+    /// its going back, which a build of 40 reads as none -- and 42 -- the
+    /// chargers' own sounds, which it does not play -- do not raise it.)
     inline constexpr std::uint16_t kLevelMinReader = 40;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
@@ -494,7 +494,10 @@ namespace hldata
         /// fired for each one made.
         Maker,
         /// A wall unit that gives health (or, the other, armour) while USE
-        /// is held on it: extra[0] is how much it holds.
+        /// is held on it. How much it holds is the game's level's
+        /// (chargerCapacity); extra[0] is the easy level's, which a build of
+        /// before level 42 used. Its LogicSound: `unlocked` as it starts,
+        /// `move` its loop while it gives, `locked` as it refuses.
         HealthCharger,
         SuitCharger,
         /// Something heard at a place (`move`): extra[0] is the sound (into

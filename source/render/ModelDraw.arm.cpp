@@ -816,12 +816,16 @@ namespace hlrt
             // and of yaw to make up for it).
             const fx over[9] = {cosine, sine, 0, sine, -cosine, 0, 0, 0, -kFxOne};
             const bool ceiling = isTurret(actor.kind) && (actor.flags & kActorCeiling) != 0;
-            // (A body the game fades: as much of it as is left.)
+            // (A body the game fades: as much of it as is left. An
+            // assassin cloaked: its renderamt, of 255.)
             const int fading = corpseFadeLeft(actor);
+            const int cloaked = actor.cloak.value != 0 ? (255 - actor.cloak.value) * 31 / 255 : -1;
             if (fading >= 0)
                 modelAlpha(1 + (fading * 30) / kCorpseFadeMs);
+            else if (cloaked >= 0)
+                modelAlpha(cloaked);
             drawActor(actor, model, actor.model, ceiling ? over : turn, order[n], level_[n]);
-            if (fading >= 0)
+            if (fading >= 0 || cloaked >= 0)
                 modelAlpha(31);
             ++drawn;
         }

@@ -35,6 +35,8 @@ public:
     std::uint8_t firmPress = hldata::kFirmOff;
     /// The CUSTOM layout's buttons, each action's.
     std::uint16_t keys[hldata::kActionCount] = {};
+    /// The guns' aim bends towards a monster near it (EASY and MEDIUM).
+    bool autoaim = true;
     /// All of it, for whoever reads the buttons.
     hldata::ControlSettings controls() const
     {

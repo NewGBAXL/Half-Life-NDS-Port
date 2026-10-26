@@ -670,6 +670,45 @@ namespace
     }
 } // namespace
 
+namespace
+{
+    /// USE held: its button, or the touch screen's USE, for as long as it
+    /// is down -- what a wall charger is used by; a tap of the aim pad is a
+    /// press and no more.
+    void testUseHeld()
+    {
+        // (A layout of the player's own, with USE on A: the others have it
+        // on the touch screen only.)
+        ControlSettings set;
+        set.scheme = kControlsCustom;
+        set.keys[kActionUse] = kButtonA;
+        std::uint16_t keys[kActionCount];
+        keysOf(set, keys);
+        ControlsState state;
+        std::uint32_t blank = 100;
+        ControlsOut out = press(set, state, keys[kActionUse], blank);
+        check(out.usePressed && out.useHeld, "USE's button: pressed, and held");
+        out = press(set, state, keys[kActionUse], blank);
+        check(!out.usePressed && out.useHeld, "... held, it is held and not pressed again");
+        out = press(set, state, 0, blank);
+        check(!out.useHeld, "... let go, not held");
+        const TouchLayout at = touchLayout(false);
+        out = touch(set, state, at.use.x + 2, at.use.y + 2, blank);
+        check(out.usePressed && out.useHeld, "the touch screen's USE: pressed, and held");
+        out = touch(set, state, at.use.x + 3, at.use.y + 2, blank);
+        check(!out.usePressed && out.useHeld, "... and held while the stylus stays");
+        out = press(set, state, 0, blank);
+        check(!out.useHeld, "... and not once it is lifted");
+        ControlSettings modern;
+        modern.scheme = kControlsModern;
+        ControlsState tapped;
+        out = touch(modern, tapped, at.pad.x + 80, at.pad.y + 60, blank);
+        check(!out.useHeld, "a touch of the aim pad is not USE held");
+        out = press(modern, tapped, 0, blank);
+        check(out.usePressed && !out.useHeld, "... its tap is USE pressed, once, and not held");
+    }
+} // namespace
+
 int main()
 {
     testClassicIsAsBefore();
@@ -682,6 +721,7 @@ int main()
     testCustom();
     testTouchFilter();
     testSensitivity();
+    testUseHeld();
     if (g_failures == 0)
         std::printf("test_controls: ok\n");
     return g_failures == 0 ? 0 : 1;

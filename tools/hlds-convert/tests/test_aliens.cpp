@@ -476,7 +476,7 @@ namespace
         {
             const int before = g.player.health;
             tickStill(g);
-            if (before - g.player.health >= agrunt::kDmgPunch * 4 / 5 - 1)
+            if (before - g.player.health >= skillData(kSkillMedium).agruntDmgPunch * 4 / 5 - 1)
                 ++punched;
             g.player.health = 100;
         }

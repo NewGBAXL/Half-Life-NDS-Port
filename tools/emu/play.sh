@@ -3,7 +3,8 @@
 # EMU_START="x y z yaw" starts the player there (whole units, degrees), armed;
 # a fifth number starts that track of the music (-1: none); a sixth is the
 # seconds until the player dies, once; a seventh how many
-# models may be drawn at once (up to 12).
+# models may be drawn at once (up to 12); an eighth a weapon, a ninth god
+# mode; a tenth how hard the game is (1 easy, 2 medium, 3 difficult).
 # EMU_AUDIO=<file> captures the sound (see below).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

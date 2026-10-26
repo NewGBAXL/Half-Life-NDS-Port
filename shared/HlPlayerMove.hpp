@@ -201,6 +201,16 @@ namespace hldata
         fx v[3] = {0, 0, 0};
     };
 
+    /// Where the guns' aim was bent to, this frame (HlMonsters.hpp's
+    /// autoaim): by how much across and up (turns, 65536 a circle), and
+    /// whether it is on a monster -- for the crosshair.
+    struct AutoAim
+    {
+        std::int16_t yaw = 0;
+        std::int16_t pitch = 0;
+        bool onTarget = false;
+    };
+
     struct PlayerState
     {
         fx origin[3] = {0, 0, 0};
@@ -246,6 +256,8 @@ namespace hldata
         /// in percent (func_friction's volumes, set by logicTick: the game's
         /// pmove->friction, put back after each move).
         Unsaved<std::uint8_t> slip;
+        /// Where the guns' aim was bent to (HlMonsters.hpp's autoaim).
+        Unsaved<AutoAim> autoAim;
         /// The brush entity the last move ran into sideways, as a mover
         /// index; -1 if none. What a box that can be pushed is pushed by.
         std::int16_t touchedMover = -1;

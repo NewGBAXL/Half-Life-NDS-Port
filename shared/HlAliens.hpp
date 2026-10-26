@@ -358,7 +358,6 @@ namespace hldata
     {
         inline constexpr int kHornet1 = 1, kHornet5 = 5, kLeftPunch = 12, kRightPunch = 13;
         inline constexpr int kMeleeDist = 100; ///< AGRUNT_MELEE_DIST
-        inline constexpr int kDmgPunch = 20;   ///< sk_agrunt_dmg_punch
         inline constexpr int kArmour = 10;     ///< the hit group of its armour
         // m_flNextHornetAttackCheck: time1; m_fCanHornetAttack: flag1;
         // m_flNextSpeakTime, m_flNextWordTime: time2, time3; m_iLastWord:
@@ -611,7 +610,7 @@ namespace hldata
         /// the side the blow came from.
         inline void punch(AiCtx &c, int side)
         {
-            const std::int16_t hit = aiHullAttack(c, kMeleeDist, kDmgPunch, kDmgClub);
+            const std::int16_t hit = aiHullAttack(c, kMeleeDist, skillOf(c.w).agruntDmgPunch, kDmgClub);
             if (hit == kAiNone)
             {
                 detail::aiSay(c, CommonSound::ClawMiss);
@@ -913,9 +912,6 @@ namespace hldata
     namespace controller
     {
         inline constexpr int kHeadOpen = 1, kBallShoot = 2, kSmallShoot = 3, kPowerupFull = 4, kPowerupHalf = 5;
-        inline constexpr int kDmgZap = 25;   ///< sk_controller_dmgzap: its head ball's jolt
-        inline constexpr int kDmgBall = 4;   ///< sk_controller_dmgball: each small one
-        inline constexpr int kSpeedBall = 800; ///< sk_controller_speedball
         // m_flShootTime, m_flShootEnd: time1, time2; m_fInCombat: flag1;
         // m_vecEstVelocity: vec1.
 
@@ -1030,7 +1026,7 @@ namespace hldata
                     for (int k = 0; k < 3; ++k)
                     {
                         const fx unit = far > 0 ? static_cast<fx>((static_cast<std::int64_t>(d[k]) << kFxShift) / far) : 0;
-                        velocity[k] = unit * kSpeedBall + fxFromInt(aiRandomLong(c.a, -28, 28));
+                        velocity[k] = unit * skillOf(c.w).controllerSpeedball + fxFromInt(aiRandomLong(c.a, -28, 28));
                     }
                     projectileAdd(c.a, kShotZapBall, hand, velocity, 5000);
                 }
@@ -1225,7 +1221,6 @@ namespace hldata
         inline constexpr int kSwimDecel = 10;   ///< LEECH_SWIM_DECEL
         inline constexpr int kTurnRate = 90;    ///< LEECH_TURN_RATE
         inline constexpr int kSizeX = 10;       ///< LEECH_SIZEX
-        inline constexpr int kDmgBite = 2;      ///< sk_leech_dmg_bite
         // m_top, m_bottom, m_height: vec1; pev->speed: value1 (units/s);
         // m_flTurning: count1 (degrees/s); m_obstacle: value2 (Q12, 1.0 = clear);
         // m_stateTime, m_waterTime, m_zTime: time1..3; m_sideTime:
@@ -1518,7 +1513,7 @@ namespace hldata
                 return;
             const std::int64_t dot = (static_cast<std::int64_t>(d[0]) * face[0] + static_cast<std::int64_t>(d[1]) * face[1]) / far;
             if (dot > fxDot(0.9))
-                aiDamageTarget(c, c.m.enemy, kDmgBite, kDmgSlash);
+                aiDamageTarget(c, c.m.enemy, skillOf(c.w).leechDmgBite, kDmgSlash);
             c.m.time1 -= 2000;
         }
 
@@ -1593,10 +1588,8 @@ namespace hldata
         inline constexpr int kRightFoot = 4;     ///< GARG_AE_RIGHT_FOOT
         inline constexpr int kStomp = 5;         ///< GARG_AE_STOMP
         inline constexpr int kBreathe = 6;       ///< GARG_AE_BREATHE
-        // sk_gargantua_*, at "normal".
+        // sk_gargantua_health at "normal" (aiInit gives the game's level's).
         inline constexpr int kHealth = 800;
-        inline constexpr int kDmgSlash = 30;
-        inline constexpr int kDmgFire = 5;
         /// GARG_DAMAGE: all that hurts it (DMG_MORTAR is a blast here).
         inline constexpr std::uint32_t kHurtBy = kDmgEnergyBeam | kDmgCrush | kDmgBlast;
         // m_flameTime: time1; m_seeTime: time2; m_painSoundTime: time3; its
@@ -1674,7 +1667,8 @@ namespace hldata
                     return;
                 const fx off[3] = {spot[0] - src[0], spot[1] - src[1], spot[2] - src[2]};
                 const int far = fxToInt(fxLength(off));
-                const int damage = far > 64 ? kDmgFire - (far - 64) * 2 / 5 : kDmgFire;
+                const int fire = skillOf(c.w).gargantuaDmgFire;
+                const int damage = far > 64 ? fire - (far - 64) * 2 / 5 : fire;
                 if (damage > 0)
                     aiDamageTarget(c, id, damage, kDmgBurn);
             };
@@ -1775,7 +1769,7 @@ namespace hldata
             {
             case kSlashLeft:
             {
-                const std::int16_t hit = aiHullAttack(c, kAttackDist + 10, kDmgSlash, kDmgSlash);
+                const std::int16_t hit = aiHullAttack(c, kAttackDist + 10, skillOf(c.w).gargantuaDmgSlash, kDmgSlash);
                 if (hit != kAiNone)
                 {
                     detail::aiPunch(c, hit, -fxFromInt(30), fxFromInt(30));
@@ -2065,7 +2059,7 @@ namespace hldata
             if (c.m.inAir)
             {
                 say(c, CommonSound::HeadcrabBite);
-                aiDamageTarget(c, other, headcrab::kDmgBite * 3 / 10, kDmgSlash);
+                aiDamageTarget(c, other, skillOf(c.w).headcrabDmgBite * 3 / 10, kDmgSlash);
             }
             c.m.touchArmed = false;
         }
@@ -2111,7 +2105,6 @@ namespace hldata
         inline constexpr int kShakeRight = 1; ///< ICHTHYOSAUR_AE_SHAKE_RIGHT
         inline constexpr int kShakeLeft = 2;  ///< ICHTHYOSAUR_AE_SHAKE_LEFT
         inline constexpr int kHealth = 200;   ///< sk_ichthyosaur_health (at "normal")
-        inline constexpr int kDmgShake = 35;  ///< sk_ichthyosaur_shake
         inline constexpr int kProbe = 150;    ///< PROBE_LENGTH
         inline constexpr int kHalf = 32;      ///< its box: 64 across, about its middle
         // Its own think, as the leech's (the game's is a CFlyingMonster's
@@ -2432,7 +2425,7 @@ namespace hldata
                     aiSet(c, kCondEnemyFacingMe);
                 else
                     aiClear(c, kCondEnemyFacingMe);
-                if (c.me.health < kHealth - 20)
+                if (c.me.health < c.m.maxHealth - 20)
                     c.m.flag1 = true;
                 if (facing >= fxDot(0.7) && c.m.time1 > c.ai.now - 200)
                 {
@@ -2558,7 +2551,7 @@ namespace hldata
                     detail::aiPunch(c, c.m.enemy, fxFromInt(5), -fxFromInt(18));
                     const fx shove[3] = {-right[0] * 300, -right[1] * 300, 0};
                     detail::aiShove(c, c.m.enemy, shove);
-                    aiDamageTarget(c, c.m.enemy, kDmgShake, kDmgSlash);
+                    aiDamageTarget(c, c.m.enemy, skillOf(c.w).ichthyosaurShake, kDmgSlash);
                 }
             }
             say(c, CommonSound::IckyBite);
@@ -3283,8 +3276,6 @@ namespace hldata
         inline constexpr int kAttackDist = 170;  ///< BIG_ATTACKDIST
         inline constexpr int kMortarDist = 800;  ///< BIG_MORTARDIST
         inline constexpr int kChildren = 6;      ///< the places kept after her for her young (the game's 20)
-        inline constexpr int kHealthFactor = 15; ///< sk_bigmomma_health_factor, tenths ("normal")
-        inline constexpr int kDmgSlash = 60;     ///< sk_bigmomma_dmg_slash
         // BIG_AE_*
         enum : int
         {
@@ -3378,7 +3369,8 @@ namespace hldata
             if (at == nullptr)
                 return;
             if (at->extra[0] != 0)
-                c.me.health = static_cast<std::int16_t>(c.m.maxHealth = static_cast<int>(at->extra[0]) * kHealthFactor / 10);
+                c.me.health = static_cast<std::int16_t>(c.m.maxHealth = static_cast<int>(at->extra[0]) *
+                                                                        skillOf(c.w).bigmommaHealthFactorTenths / 10);
             if (!aiHasMemory(c, kMemoryFiredNode) && at->extra[2] != 0)
                 logicFire(c.w, c.player, static_cast<std::uint16_t>(at->extra[2]), -1, kUseToggle, 0);
             aiForgetMemory(c, kMemoryFiredNode);
@@ -3497,7 +3489,7 @@ namespace hldata
                 }
                 if (hurt == kAiNone)
                     break;
-                aiDamageTarget(c, hurt, kDmgSlash, kDmgCrush | kDmgSlash);
+                aiDamageTarget(c, hurt, skillOf(c.w).bigmommaDmgSlash, kDmgCrush | kDmgSlash);
                 detail::aiPunch(c, hurt, fxFromInt(15), 0);
                 const int side = event == kAttackBr ? -200 : (event == kAttackBl ? 200 : 0);
                 const int ahead = event == kAttack1 ? 220 : 150;
@@ -3763,7 +3755,7 @@ namespace hldata
             {
                 AiKind k;
                 k.kind = static_cast<std::uint8_t>(ActorKind::BigMomma);
-                k.health = 150 * kHealthFactor / 10;
+                k.health = 150 * skillData(kSkillMedium).bigmommaHealthFactorTenths / 10; // (aiInit: the game's level's)
                 k.eye = fxFromInt(128);
                 k.fov = fxDot(0.3);
                 k.blood = kBloodYellow;
@@ -3793,7 +3785,6 @@ namespace hldata
         inline constexpr int kScale = 15;    ///< N_SCALE
         inline constexpr int kSpheres = 20;  ///< N_SPHERES
         inline constexpr int kHealth = 800;  ///< sk_nihilanth_health
-        inline constexpr int kZap = 30;      ///< sk_nihilanth_zap
         inline constexpr int kFriends = 6;   ///< the places kept after it: three slaves, three controllers
         // Its own think (HuntThink, DyingThink), as the game's is, ten times
         // a second. m_velocity: me.velocity; m_avelocity: vec1 (degrees a
@@ -3961,7 +3952,7 @@ namespace hldata
                             shot.velocity[k] += static_cast<fx>((static_cast<std::int64_t>(shot.velocity[k]) * 4 * ms) / 1000);
                     if (c.player.health > 0 && far < fxFromInt(256) && lineClear(*c.w.world, shot.pos, target))
                     {
-                        aiDamageTarget(c, kAiPlayer, kZap, kDmgShock);
+                        aiDamageTarget(c, kAiPlayer, skillOf(c.w).nihilanthZap, kDmgShock);
                         if (c.w.heard != nullptr)
                             c.w.heard->add(CommonSound::Electro4, shot.pos, 64, kRadiusMedium);
                         effectAdd(c.a, kEffectBolt, shot.pos, target, 0, 200);
@@ -4117,7 +4108,7 @@ namespace hldata
             c.me.mood = static_cast<std::uint8_t>(c.m.count1);
             fx forward[3];
             aiForward(c.me.yaw, forward);
-            if ((c.me.health < kHealth / 2 || c.m.squadMember[2] < kSpheres / 2) && c.m.other < 0 && c.m.squadMember[0] <= 9)
+            if ((c.me.health < skillOf(c.w).nihilanthHealth / 2 || c.m.squadMember[2] < kSpheres / 2) && c.m.other < 0 && c.m.squadMember[0] <= 9)
             {
                 // To the nearest of its rechargers for its level.
                 const int recharger = recordNamed(c, "n_recharger", c.m.squadMember[0]);
@@ -4174,7 +4165,7 @@ namespace hldata
             if (c.m.enemy != kAiNone && c.m.count1 != 0 && c.m.time2 + 5000 > c.ai.now && dist < fxFromInt(256) &&
                 facing > 0)
             {
-                if (c.m.count1 >= 2 && c.me.health < kHealth / 2)
+                if (c.m.count1 >= 2 && c.me.health < skillOf(c.w).nihilanthHealth / 2)
                     playNamed(c, "attack1_open");
                 else if (aiRandomLong(c.a, 0, 1) == 0)
                     playNamed(c, "attack1"); // (a zap)
@@ -4213,8 +4204,7 @@ namespace hldata
                 posDesired(c)[0] = c.me.pos[0];
                 posDesired(c)[1] = c.me.pos[1];
                 posDesired(c)[2] = fxFromInt(512);
-                c.me.health = kHealth;
-                c.m.maxHealth = kHealth;
+                c.me.health = static_cast<std::int16_t>(c.m.maxHealth = skillOf(c.w).nihilanthHealth);
             }
             // (Its recharger, taken away by the map -- its crystal broken --
             // is nobody's: the game's handle to it is empty.)
@@ -4289,8 +4279,8 @@ namespace hldata
                 }
                 c.m.waitFinished += 200;
             }
-            if (c.me.health < kHealth && absorbSphere(c))
-                c.me.health = static_cast<std::int16_t>(c.me.health + kHealth / kSpheres);
+            if (c.me.health < skillOf(c.w).nihilanthHealth && absorbSphere(c))
+                c.me.health = static_cast<std::int16_t>(c.me.health + skillOf(c.w).nihilanthHealth / kSpheres);
             if (c.m.seqFinished)
                 nextActivity(c);
             if (c.m.enemy != kAiNone && c.m.other < 0)
@@ -4416,7 +4406,7 @@ namespace hldata
             if (c.m.moveWaitFinished <= c.ai.now)
             {
                 c.m.moveWaitFinished = c.ai.now + aiRandomMs(c.a, 2000, 5000);
-                if (c.me.health > kHealth / 2)
+                if (c.me.health > skillOf(c.w).nihilanthHealth / 2)
                     say(c, CommonSound::NihilLaugh);
                 else if (c.m.count1 >= 2)
                     say(c, CommonSound::NihilPain);

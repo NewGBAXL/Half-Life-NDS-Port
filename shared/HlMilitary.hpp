@@ -529,15 +529,14 @@ namespace hldata
         inline constexpr int kShoot = 1;     ///< ASSASSIN_AE_SHOOT1
         inline constexpr int kToss = 2;      ///< ASSASSIN_AE_TOSS1
         inline constexpr int kJump = 3;      ///< ASSASSIN_AE_JUMP
-        inline constexpr int kHealth = 50;   ///< sk_hassassin_health
-        inline constexpr int kRound = 5;     ///< BULLET_MONSTER_9MM: sk_9mm_bullet
+        inline constexpr int kHealth = 50;   ///< sk_hassassin_health at MEDIUM (aiInit: the game's level's)
         inline constexpr std::uint32_t kMemoryBadJump = kMemoryCustom1;
         // m_flLastShot: time1; m_flDiviation: value1 (Q12); m_flNextJump:
         // time2; m_vecJumpVelocity: vec1; m_flNextGrenadeCheck: time3;
         // m_vecTossVelocity: foeAt (a guard's, which it is not);
         // m_fThrowGrenade: flag1; MOVETYPE_TOSS (in the air from a jump):
-        // flag2; m_iFrustration: count1. (Its cloak is the hard skill's
-        // only: at this port's, the game's "normal", it is always seen.)
+        // flag2; m_iFrustration: count1. (Its cloak, on DIFFICULT only, is
+        // the actor's own `cloak`: runAI.)
 
         enum : std::uint8_t
         {
@@ -704,7 +703,7 @@ namespace hldata
             const int group = hit >= 0 ? hitGroup(c.a, c.a.states[hit], gun, end) : kHitBody;
             if (hit >= 0)
                 bleed(c.w, hit, end, aim, false);
-            aiDamageTarget(c, hit, kRound, kDmgBullet | kDmgNeverGib, static_cast<std::uint8_t>(group));
+            aiDamageTarget(c, hit, skillOf(c.w).monster9mmBullet, kDmgBullet | kDmgNeverGib, static_cast<std::uint8_t>(group)); // (BULLET_MONSTER_9MM)
         }
 
         inline void animEvent(AiCtx &c, int event)
@@ -943,6 +942,20 @@ namespace hldata
             return aiBaseGetSchedule(c);
         }
 
+        /// CHAssassin::RunAI's cloak: on DIFFICULT, with an enemy, alive, on
+        /// the ground and neither walking nor running, it fades -- 50 of 255
+        /// a think -- to nearly nothing (20); otherwise back, as fast.
+        inline void runAI(AiCtx &c)
+        {
+            const bool hides = skillLevelOf(c.w) == kSkillHard && c.m.enemy != kAiNone && c.me.ai < kAiDying &&
+                               c.m.activity != kActRun && c.m.activity != kActWalk && !c.m.flag2;
+            const int amount = 255 - c.me.cloak.value; // (pev->renderamt)
+            const int wanted = hides ? 20 : 255;
+            const int now = amount > wanted ? (amount - 50 > wanted ? amount - 50 : wanted)
+                                            : (amount + 50 < wanted ? amount + 50 : wanted);
+            c.me.cloak.value = static_cast<std::uint8_t>(255 - now);
+        }
+
         inline const AiKind &kind()
         {
             static const AiKind k = []
@@ -964,6 +977,7 @@ namespace hldata
                 k.runTask = runTask;
                 k.scheduleOfType = scheduleOfType;
                 k.getSchedule = getSchedule;
+                k.runAI = runAI;
                 return k;
             }();
             return k;
@@ -974,8 +988,7 @@ namespace hldata
 
     namespace apache
     {
-        inline constexpr int kHealth = 250;  ///< sk_apache_health
-        inline constexpr int kRound = 10;    ///< BULLET_MONSTER_12MM: sk_12mm_bullet
+        inline constexpr int kHealth = 250;  ///< sk_apache_health at MEDIUM (aiInit: the game's level's)
         inline constexpr int kRockets = 10;
         inline constexpr std::uint8_t kActorWaitTrigger = kActorCeiling; ///< SF_WAITFORTRIGGER (0x04 | 0x40)
         // Its own think, HuntThink, ten times a second, and its flight a
@@ -1196,7 +1209,7 @@ namespace hldata
             }
             else
             {
-                aiDamageTarget(c, hit, kRound, kDmgBullet | kDmgNeverGib);
+                aiDamageTarget(c, hit, skillOf(c.w).monster12mmBullet, kDmgBullet | kDmgNeverGib); // (BULLET_MONSTER_12MM)
             }
             return true;
         }
@@ -1297,8 +1310,15 @@ namespace hldata
             flight(c);
             if (c.m.time2 + 1000 > c.ai.now && c.m.time3 + 2000 < c.ai.now && c.m.time2 != 0)
             {
-                if (fireGun(c) && c.m.value2 > fxFromInt(400))
-                    c.m.value2 = fxFromInt(400);
+                if (fireGun(c))
+                {
+                    if (c.m.value2 > fxFromInt(400))
+                        c.m.value2 = fxFromInt(400);
+                    // (On EASY it does not fire its rockets and its gun
+                    // together: m_flNextRocket ten seconds on.)
+                    if (skillLevelOf(c.w) == kSkillEasy)
+                        c.m.time1 = c.ai.now + 10000;
+                }
             }
             // Its rockets: in pairs (an odd count left fires the other at
             // once), when it is nosed down at what it is after.

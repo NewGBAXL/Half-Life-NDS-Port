@@ -121,6 +121,38 @@ namespace hldata
     {
         return kind == static_cast<std::uint8_t>(ActorKind::Guard) ? 35 : 20;
     }
+    /// How much health a monster of `kind` is made with, at the game's
+    /// difficulty (its Spawn's gSkillData.*Health); `fallback` for a kind
+    /// whose health is the same at every level.
+    inline int skillHealth(const SkillData &s, std::uint8_t kind, int fallback)
+    {
+        switch (static_cast<ActorKind>(kind))
+        {
+        case ActorKind::Headcrab:    return s.headcrabHealth;
+        case ActorKind::BabyCrab:    return s.headcrabHealth / 4; // (CBabyCrab::Spawn: a quarter of one)
+        case ActorKind::Zombie:      return s.zombieHealth;
+        case ActorKind::Slave:       return s.islaveHealth;
+        case ActorKind::Bullsquid:   return s.bullsquidHealth;
+        case ActorKind::Houndeye:    return s.houndeyeHealth;
+        case ActorKind::Grunt:       return s.hgruntHealth;
+        case ActorKind::AlienGrunt:  return s.agruntHealth;
+        case ActorKind::Controller:  return s.controllerHealth;
+        case ActorKind::Gargantua:   return s.gargantuaHealth;
+        case ActorKind::Assassin:    return s.hassassinHealth;
+        case ActorKind::Ichthyosaur: return s.ichthyosaurHealth;
+        case ActorKind::Apache:      return s.apacheHealth;
+        case ActorKind::Nihilanth:   return s.nihilanthHealth;
+        case ActorKind::Leech:       return s.leechHealth;
+        case ActorKind::Snark:       return s.snarkHealth;
+        case ActorKind::Scientist:   return s.scientistHealth;
+        case ActorKind::Guard:       return s.barneyHealth;
+        case ActorKind::BigMomma:    return 150 * s.bigmommaHealthFactorTenths / 10;
+        case ActorKind::Miniturret:  return s.miniturretHealth;
+        case ActorKind::Sentry:      return s.sentryHealth;
+        case ActorKind::Turret:      return s.turretHealth;
+        default:                     return fallback;
+        }
+    }
     inline bool isMine(std::uint8_t kind)
     {
         return kind == static_cast<std::uint8_t>(ActorKind::Tripmine);
@@ -249,26 +281,15 @@ namespace hldata
         return kHeadcrab;
     }
 
-    inline constexpr int kHeadcrabBite = 10;
-    inline constexpr int kZombieSlash = 20;
-    inline constexpr int kZombieBothSlash = 40;
-    inline constexpr int kBarnacleBite = 15; ///< each second it has hold of the player
-    // What the newer kinds do to the player, and from how far.
-    inline constexpr int kSlaveZap = 10;
-    inline constexpr int kSlaveClaw = 8;
-    inline constexpr int kSquidSpit = 10;
-    // The later weapons, as the game's skill settings have them.
-    inline constexpr int kBoltDamage = 50;    ///< a crossbow bolt, into a monster
-    inline constexpr int kSatchelBlast = 150; ///< (to two and a half times as far)
-    inline constexpr int kSnarkBite = 10;
-    inline constexpr int kSnarkPop = 5;       ///< its burst, and as much again for each bite
-    inline constexpr int kMineBlast = 150;    ///< a tripmine (HlMonsters.hpp's mines)
+    // The weapons, as the game's skill settings have them (the same at
+    // every level: HlSkill.hpp).
+    inline constexpr int kBoltDamage = skillData(kSkillMedium).plrXbowBoltMonster; ///< a crossbow bolt, into a monster
+    inline constexpr int kSatchelBlast = skillData(kSkillMedium).plrSatchel; ///< (to two and a half times as far)
+    inline constexpr int kSnarkBite = skillData(kSkillMedium).snarkDmgBite;
+    inline constexpr int kSnarkPop = skillData(kSkillMedium).snarkDmgPop; ///< its burst, and as much again for each bite
+    inline constexpr int kMineBlast = skillData(kSkillMedium).plrTripmine; ///< a tripmine (HlMonsters.hpp's mines)
     inline constexpr int kMineRange = 2048;
-    inline constexpr int kSquidBite = 25;
-    inline constexpr int kSquidWhip = 35;
-    inline constexpr int kHoundBlast = 15;
-    inline constexpr int kHoundBlastRadius = 256;
-    inline constexpr int kGrenadeBlast = 100;
+    inline constexpr int kGrenadeBlast = skillData(kSkillMedium).plrHandGrenade;
     inline constexpr int kGrenadeRadius = 250;
     inline constexpr fx kSpitSpeed = fxFromInt(900);
 
@@ -710,8 +731,10 @@ namespace hldata
 
         // ----------------------------------------------------------- items
 
-        /// The player walks over an item: true if it was taken.
-        inline bool itemTake(PlayerState &player, std::uint8_t item, std::uint32_t &got)
+        /// The player walks over an item: true if it was taken. (`skill`:
+        /// the game's level's numbers -- how much a kit or a battery gives.)
+        inline bool itemTake(PlayerState &player, std::uint8_t item, std::uint32_t &got,
+                             const SkillData &skill = skillData(kSkillMedium))
         {
             Inventory &inv = player.inv;
             auto add = [](std::int16_t &what, int amount, int most)
@@ -780,11 +803,14 @@ namespace hldata
             case ItemKind::HealthKit:
                 if (player.health >= 100)
                     return false;
-                player.health = player.health + 15 > 100 ? 100 : player.health + 15;
+            {
+                const int heal = skill.healthkit;
+                player.health = player.health + heal > 100 ? 100 : player.health + heal;
                 return true;
+            }
             case ItemKind::Battery:
                 // Armour is the suit's: without one a battery is left lying.
-                return (inv.have & kHaveSuit) != 0 && add(inv.armor, 15, 100);
+                return (inv.have & kHaveSuit) != 0 && add(inv.armor, skill.battery, 100);
             case ItemKind::Grenades:
                 if (!add(inv.grenades, 5, 10))
                     return false;
@@ -986,7 +1012,7 @@ namespace hldata
             const ActorState &actor = w.actors->states[index];
             if (actor.item == static_cast<std::uint8_t>(ItemKind::Weaponbox))
                 return weaponboxTake(player, weaponboxContents(w, index), got);
-            return itemTake(player, actor.item, got);
+            return itemTake(player, actor.item, got, skillOf(w));
         }
 
         // --------------------------------------------- makers and chargers
@@ -1066,41 +1092,105 @@ namespace hldata
                 state.dead = true;
         }
 
-        inline void chargerTick(LogicWorld &w, PlayerState &player, int index, int ms)
+        // A wall charger (CWallHealth, healthkit.cpp; CRecharge, h_battery.cpp),
+        // used each frame USE is held on it. Its state: `bits` how much it
+        // has given; `phase` the game's m_iOn (0 off, 1 its first sound
+        // heard, 2 its loop going round); `hurt` the ms until its next
+        // sound may be (m_flSoundTime); `speed` the ms until its next point
+        // (m_flNextCharge); `travel[0]` the ms until it is off, if it is
+        // not used again (its Off think, a quarter of a second on).
+        inline void chargerSound(LogicWorld &w, int index, std::uint16_t sound, std::uint8_t flags)
+        {
+            const LogicRecord &record = w.records[index];
+            if (w.heard == nullptr || record.brush == kNoBrush || w.movers == nullptr)
+                return;
+            const MoverHull &hull = w.movers[record.brush];
+            const fx at[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,
+                              (hull.mins[2] + hull.maxs[2]) / 2};
+            // (The suit's at 0.85 of the health's: h_battery.cpp's.)
+            const int volume = record.kind == static_cast<std::uint8_t>(LogicKind::SuitCharger) ? 108 : 127;
+            w.heard->add(sound, at, volume, kRadiusLarge, flags, 100, static_cast<std::uint16_t>(index));
+        }
+
+        /// Off: its loop stopped, ready to start again (Off()).
+        inline void chargerOff(LogicWorld &w, int index)
+        {
+            LogicState &state = w.states[index];
+            if (state.phase > 1 && w.heard != nullptr)
+                w.heard->add(kNoSound, nullptr, 0, 0, kSoundLoopOff, 100, static_cast<std::uint16_t>(index));
+            state.phase = 0;
+            state.running = false;
+        }
+
+        inline void chargerUse(LogicWorld &w, PlayerState &player, int index)
         {
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
-            if (!state.running)
-                return;
             const bool suit = record.kind == static_cast<std::uint8_t>(LogicKind::SuitCharger);
-            // For as long as they stay at it, it has something left, and
-            // they have room for it.
-            bool near = record.brush != kNoBrush;
-            if (near)
+            const LogicSound none = {kNoSound, kNoSound, kNoSound, kNoSound, kNoSound, kNoSound};
+            const LogicSound &sounds = w.sounds != nullptr ? w.sounds[index] : none;
+            // Empty, or a player without the suit (either kind wants it):
+            // its refusal, no more often than it takes to be heard.
+            const bool empty = static_cast<int>(state.bits) >= chargerCapacity(w, record);
+            if (empty && state.running)
+                chargerOff(w, index);
+            if (empty || !(player.inv.have & kHaveSuit))
             {
-                const MoverHull &mover = w.movers[record.brush];
-                near = playerTouchesBox(player, mover.mins, mover.maxs, kUseRange);
-            }
-            const bool full = suit ? (player.inv.armor >= 100 || !(player.inv.have & kHaveSuit))
-                                   : player.health >= 100;
-            if (!near || full || state.bits >= record.extra[0] || player.health <= 0)
-            {
-                state.running = false;
+                if (state.hurt <= 0)
+                {
+                    state.hurt = 620;
+                    chargerSound(w, index, sounds.locked, 0);
+                }
                 return;
             }
-            // (Its sound once a second while it gives.)
-            if (w.heard != nullptr && state.bits % 10 == 0 && state.speed - ms <= 0)
-                w.heard->add(CommonSound::Charge, nullptr, 100);
-            state.speed -= ms;
-            while (state.speed <= 0 && state.bits < record.extra[0])
+            // Someone with no room for it: nothing, not a sound -- and, one
+            // just filled, its loop stops.
+            if (suit ? player.inv.armor >= 100 : player.health >= 100)
             {
-                state.speed += 100; // a point every tenth of a second
-                ++state.bits;
-                if (suit)
-                    player.inv.armor = static_cast<std::int16_t>(player.inv.armor < 100 ? player.inv.armor + 1 : 100);
-                else
-                    player.health = player.health < 100 ? player.health + 1 : 100;
+                if (state.running)
+                    chargerOff(w, index);
+                return;
             }
+            state.running = true;
+            state.travel[0] = 250;
+            if (state.speed > 0)
+                return;
+            // On: its first sound; then, still held when that is done, its
+            // loop.
+            if (state.phase == 0)
+            {
+                state.phase = 1;
+                if (sounds.unlocked != kNoSound)
+                    chargerSound(w, index, sounds.unlocked, 0);
+                else if (w.heard != nullptr) // (a map cooked before it had its own)
+                    w.heard->add(CommonSound::Charge, nullptr, 100);
+                state.hurt = 560;
+            }
+            if (state.phase == 1 && state.hurt <= 0)
+            {
+                state.phase = 2;
+                chargerSound(w, index, sounds.move, kSoundLoopOn);
+            }
+            // A point.
+            if (suit)
+                player.inv.armor = static_cast<std::int16_t>(player.inv.armor + 1);
+            else
+                ++player.health;
+            ++state.bits;
+            state.speed = 100;
+        }
+
+        inline void chargerTick(LogicWorld &w, PlayerState &, int index, int ms)
+        {
+            LogicState &state = w.states[index];
+            // (Its clocks run down whether or not it is on: a refusal is
+            // timed as much as a charge.)
+            if (state.hurt > -1000)
+                state.hurt -= ms;
+            if (state.speed > -1000)
+                state.speed -= ms;
+            if (state.running && (state.travel[0] -= ms) <= 0)
+                chargerOff(w, index);
         }
     } // namespace detail
 
@@ -1153,7 +1243,7 @@ namespace hldata
         inline void stompTick(LogicWorld &w, PlayerState &player, Projectile &shot, int ms)
         {
             ActorWorld &a = *w.actors;
-            constexpr int kDmgStomp = 100; // sk_gargantua_dmg_stomp
+            const int stomp = skillOf(w).gargantuaDmgStomp;
             std::int32_t length = shot.leftMs & kStompLengthMask;
             std::int64_t speed = shot.leftMs >> kStompSpeedShift; // (sixteenths)
             const int framerate = shot.sprite & ~kStompHitPlayer;
@@ -1175,7 +1265,7 @@ namespace hldata
                 std::int64_t enter = 0;
                 if (lineEntersBox(from, to, lo, hi, enter))
                 {
-                    playerHurt(player, kDmgStomp, shot.pos);
+                    playerHurt(player, stomp, shot.pos);
                     a.got |= kGotHurt;
                     hit = kStompHitPlayer;
                 }
@@ -1190,7 +1280,7 @@ namespace hldata
                 targetBox(other, lo, hi);
                 std::int64_t enter = 0;
                 if (lineEntersBox(from, to, lo, hi, enter))
-                    monsterHurt(w, i, kDmgStomp, false, kHitGeneric, kDmgSonic, kAiNone, shot.pos);
+                    monsterHurt(w, i, stomp, false, kHitGeneric, kDmgSonic, kAiNone, shot.pos);
             }
             // On, and the sparks it leaves on the ground under it (two each
             // fortieth of a second in the game's; here one each 32 units it
@@ -1268,7 +1358,7 @@ namespace hldata
             effectAdd(a, kEffectSplat, shot.pos, nullptr, 48, 500);
             if (w.heard != nullptr)
                 w.heard->add(CommonSound::SpitHit, shot.pos, 127, kRadiusMedium);
-            radiusDamage(w, player, shot.pos, 120, 250, -1, kDmgAcid, kAiNone);
+            radiusDamage(w, player, shot.pos, skillOf(w).bigmommaDmgBlast, skillOf(w).bigmommaRadiusBlast, -1, kDmgAcid, kAiNone);
         }
 
         inline void projectilesTick(LogicWorld &w, PlayerState &player, int ms)
@@ -1750,7 +1840,7 @@ namespace hldata
                     {
                         // (The player stung: hornet.cpp's monDmgHornet.)
                         shot.active = false;
-                        playerHurt(player, 5, shot.pos);
+                        playerHurt(player, skillOf(w).hornetDmg, shot.pos);
                         a.got |= kGotHurt;
                         if (w.heard != nullptr)
                             w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
@@ -1771,7 +1861,7 @@ namespace hldata
                     {
                         // A sting.
                         shot.active = false;
-                        monsterHurt(w, struck, foe ? 5 : 7, false);
+                        monsterHurt(w, struck, foe ? skillOf(w).hornetDmg : 7, false); // (plrDmgHornet: 7 at every level)
                         if (w.heard != nullptr)
                             w.heard->add(static_cast<CommonSound>(static_cast<int>(CommonSound::HornetHit1) + static_cast<int>(chance(a) % 3)),
                                          shot.pos, 100, kRadiusSmall);
@@ -1843,7 +1933,7 @@ namespace hldata
                             if (far < fxFromInt(64))
                             {
                                 effectAdd(a, kEffectBolt, shot.pos, goal, 0, 300);
-                                jolt(target, 25, kDmgShock); // (sk_controller_dmgzap)
+                                jolt(target, skillOf(w).controllerDmgzap, kDmgShock);
                                 shot.active = false;
                                 continue;
                             }
@@ -1892,7 +1982,7 @@ namespace hldata
                         if (struck >= 0 || line.fraction < kFractionOne)
                         {
                             if (struck >= 0)
-                                jolt(struck, 4, kDmgEnergyBeam); // (sk_controller_dmgball)
+                                jolt(struck, skillOf(w).controllerDmgball, kDmgEnergyBeam);
                             shot.active = false;
                             continue;
                         }
@@ -2067,7 +2157,7 @@ namespace hldata
                              playerTouchesBox(player, end, end, fxFromInt(4)));
                 if (hits)
                 {
-                    playerHurt(player, kSquidSpit, shot.pos);
+                    playerHurt(player, skillOf(w).bullsquidDmgSpit, shot.pos);
                     a.got |= kGotHurt;
                 }
                 else
@@ -2085,7 +2175,7 @@ namespace hldata
                         if (lineEntersBox(shot.pos, end, lo, hi, enter))
                         {
                             hits = true;
-                            monsterHurt(w, i, kSquidSpit, false, kHitBody, kDmgGeneric,
+                            monsterHurt(w, i, skillOf(w).bullsquidDmgSpit, false, kHitBody, kDmgGeneric,
                                         shot.sprite < a.count ? static_cast<std::int16_t>(shot.sprite) : kAiNone,
                                         shot.pos);
                         }
@@ -2342,7 +2432,13 @@ namespace hldata
             if (player.health > 0 && lineEntersBox(eye, end, mins, maxs, enter) && enter < reach)
             {
                 reach = enter;
-                playerHurt(player, kind.damage, eye);
+                // (Its round: BULLET_MONSTER_9MM, _MP5, _12MM, at the game's level.)
+                const SkillData &s = skillOf(w);
+                const int round = actor.kind == static_cast<std::uint8_t>(ActorKind::Turret) ? s.monster12mmBullet
+                                  : actor.kind == static_cast<std::uint8_t>(ActorKind::Sentry)
+                                      ? s.monster9mmARBullet
+                                      : s.monster9mmBullet;
+                playerHurt(player, round > 0 ? round : kind.damage, eye);
                 a.got |= kGotHurt;
             }
             fx at[3];
@@ -2577,7 +2673,7 @@ namespace hldata
             if (actor.health == 0 && actor.ai == kTurretOff && actor.switched != 0xFF)
             {
                 // Its first tick. (Health in tenths: see turretHurt.)
-                actor.health = static_cast<std::int16_t>(kind.health * 10);
+                actor.health = static_cast<std::int16_t>(skillHealth(skillOf(w), actor.kind, kind.health) * 10);
                 actor.hasGoal = (actor.flags & kActorAuto) != 0;
                 actor.aimYaw = actor.wantYaw = actor.yaw;
                 actor.turnRate = kTurretTurnRate;
@@ -3649,16 +3745,16 @@ namespace hldata
         }
 
         /// A round's damage by the kind of bullet (the game's monster
-        /// rounds at "normal"), unless the map gives its own.
-        inline int tankDamage(const LogicRecord &record)
+        /// rounds, at its level), unless the map gives its own.
+        inline int tankDamage(const LogicWorld &w, const LogicRecord &record)
         {
             if (record.damage != 0)
                 return record.damage;
             switch ((record.extra[2] >> 24) & 3)
             {
-            case kTankBullet9mm: return 5;   // sk_9mm_bullet
-            case kTankBulletMp5: return 4;   // sk_9mmAR_bullet
-            case kTankBullet12mm: return 10; // sk_12mm_bullet
+            case kTankBullet9mm: return skillOf(w).monster9mmBullet;
+            case kTankBulletMp5: return skillOf(w).monster9mmARBullet;
+            case kTankBullet12mm: return skillOf(w).monster12mmBullet;
             default: return 0;
             }
         }
@@ -3732,7 +3828,7 @@ namespace hldata
                 explodeAt(w, player, end, record.mins[2] > 0 ? record.mins[2] : 100, true, true, true);
                 return;
             }
-            int damage = tankDamage(record);
+            int damage = tankDamage(w, record);
             std::uint16_t colour = 0;
             if (variant == kTankLaser)
             {
@@ -4380,6 +4476,146 @@ namespace hldata
             dot[i] = eye[i] + static_cast<fx>((static_cast<std::int64_t>(end[i] - eye[i]) * shot.fraction) >> kFractionShift);
     }
 
+    // ------------------------------------------------------------- autoaim
+    //
+    // The game's GetAutoaimVector and AutoaimDeflection (player.cpp): on
+    // EASY and MEDIUM a gun's round goes to the monster nearest the line of
+    // sight, within that gun's cone, instead of straight on -- a third of
+    // the way there on EASY, nine tenths on MEDIUM (the game clears what it
+    // kept every time: "always use non-sticky autoaim"), never more than 12
+    // degrees across or 25 up and down; on DIFFICULT, straight on.
+
+    /// The cone a gun aims within, as its sine (Q12): the pistol's first
+    /// fire and the python 10 degrees, the MP5's first fire and the shotgun
+    /// 5; 0 for what does not aim (the pistol's quick fire, the launcher,
+    /// the crossbow, what is thrown).
+    inline fx autoaimCone(std::uint8_t weapon, bool secondary)
+    {
+        switch (weapon)
+        {
+        case kWeaponGlock:   return secondary ? 0 : 711;  // (AUTOAIM_10DEGREES)
+        case kWeaponPython:  return 711;
+        case kWeaponMp5:     return secondary ? 0 : 357;  // (AUTOAIM_5DEGREES)
+        case kWeaponShotgun: return 357;
+        default:             return 0;
+        }
+    }
+
+    namespace detail
+    {
+        /// A direction's yaw and pitch, in turns (65536 a circle; up is
+        /// positive).
+        inline void autoaimAngles(const fx *dir, std::int32_t &yaw, std::int32_t &pitch)
+        {
+            const fx flat = static_cast<fx>(isqrt64(static_cast<std::uint64_t>(static_cast<std::int64_t>(dir[0]) * dir[0] +
+                                                                              static_cast<std::int64_t>(dir[1]) * dir[1])));
+            yaw = static_cast<std::int16_t>(fxAtan2Turns(dir[1], dir[0]));
+            pitch = static_cast<std::int16_t>(fxAtan2Turns(dir[2], flat));
+        }
+    } // namespace detail
+
+    /// Where a gun with `cone` (autoaimCone) fires, from `eye` looking along
+    /// `forward` (with its `right` and `up`, Q12): into `aimed`. What it
+    /// found is the player's `autoAim` (for the crosshair: where it is put,
+    /// and whether it is on something).
+    inline void autoaim(LogicWorld &w, PlayerState &player, const fx *eye, const fx *forward, const fx *right,
+                        const fx *up, fx cone, fx *aimed)
+    {
+        for (int i = 0; i < 3; ++i)
+            aimed[i] = forward[i];
+        AutoAim &aim = player.autoAim.value;
+        aim = AutoAim();
+        const int level = skillLevelOf(w);
+        if (level == kSkillHard || cone <= 0 || w.noAutoaim.value || w.actors == nullptr || w.world == nullptr)
+            return;
+        const ActorWorld &a = *w.actors;
+        // Straight on already meets something that can be hurt: so be it
+        // (and the crosshair is on target if it is a monster).
+        const fx far[3] = {eye[0] + forward[0] * 8192, eye[1] + forward[1] * 8192, eye[2] + forward[2] * 8192};
+        const Shot wall = traceShot(*w.world, eye, far);
+        std::int64_t nearest = wall.fraction;
+        bool onActor = false;
+        for (int i = 0; i < a.count; ++i)
+        {
+            const ActorState &actor = a.states[i];
+            if (!actor.active || actor.ai >= kAiDying || !canBeHurt(actor.kind))
+                continue;
+            fx mins[3], maxs[3];
+            targetBox(actor, mins, maxs);
+            std::int64_t enter = 0;
+            if (lineEntersBox(eye, far, mins, maxs, enter) && enter < nearest)
+            {
+                nearest = enter;
+                onActor = true;
+            }
+        }
+        if (onActor || (wall.mover >= 0 && detail::blowTaker(w, wall.mover) >= 0))
+        {
+            aim.onTarget = onActor;
+            return;
+        }
+        // The one that takes least turning to: in front, within the cone
+        // (across, and half as much up and down), a little further for
+        // being further off, in sight -- and not a friend.
+        fx best[3] = {0, 0, 0};
+        std::int64_t bestDot = cone;
+        bool found = false;
+        for (int i = 0; i < a.count; ++i)
+        {
+            const ActorState &actor = a.states[i];
+            if (!actor.active || actor.ai >= kAiDying || !canBeHurt(actor.kind) || !fights(actor.kind) ||
+                isPerson(actor.kind))
+                continue;
+            fx mins[3], maxs[3];
+            targetBox(actor, mins, maxs);
+            const fx center[3] = {(mins[0] + maxs[0]) / 2, (mins[1] + maxs[1]) / 2, (mins[2] + maxs[2]) / 2};
+            const fx d[3] = {center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]};
+            const fx length = fxLength(d);
+            if (length <= 0)
+                continue;
+            fx dir[3];
+            for (int k = 0; k < 3; ++k)
+                dir[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) << kFxShift) / length);
+            if (fxMul(dir[0], forward[0]) + fxMul(dir[1], forward[1]) + fxMul(dir[2], forward[2]) < 0)
+                continue;
+            const fx across = fxMul(dir[0], right[0]) + fxMul(dir[1], right[1]) + fxMul(dir[2], right[2]);
+            const fx upward = fxMul(dir[0], up[0]) + fxMul(dir[1], up[1]) + fxMul(dir[2], up[2]);
+            std::int64_t dot = (across < 0 ? -across : across) + (upward < 0 ? -upward : upward) / 2;
+            dot += dot * fxToInt(length) / (5 * 8192); // (1 + 0.2 of how far, of 8192)
+            if (dot > bestDot)
+                continue;
+            if (traceShot(*w.world, eye, center).fraction < kFractionOne)
+                continue;
+            bestDot = dot;
+            found = true;
+            for (int k = 0; k < 3; ++k)
+                best[k] = dir[k];
+        }
+        if (!found)
+            return;
+        std::int32_t viewYaw, viewPitch, toYaw, toPitch;
+        detail::autoaimAngles(forward, viewYaw, viewPitch);
+        detail::autoaimAngles(best, toYaw, toPitch);
+        std::int32_t yaw = static_cast<std::int16_t>(toYaw - viewYaw);
+        std::int32_t pitch = static_cast<std::int16_t>(toPitch - viewPitch);
+        constexpr std::int32_t kMostYaw = 12 * 65536 / 360, kMostPitch = 25 * 65536 / 360;
+        yaw = yaw > kMostYaw ? kMostYaw : (yaw < -kMostYaw ? -kMostYaw : yaw);
+        pitch = pitch > kMostPitch ? kMostPitch : (pitch < -kMostPitch ? -kMostPitch : pitch);
+        // (EASY: a third of it; MEDIUM: nine tenths.)
+        const int share = level == kSkillEasy ? 33 : 90;
+        yaw = yaw * share / 100;
+        pitch = pitch * share / 100;
+        aim.yaw = static_cast<std::int16_t>(yaw);
+        aim.pitch = static_cast<std::int16_t>(pitch);
+        aim.onTarget = true;
+        fx ys, yc, ps, pc;
+        fxSinCos(static_cast<std::uint16_t>(viewYaw + yaw), ys, yc);
+        fxSinCos(static_cast<std::uint16_t>(viewPitch + pitch), ps, pc);
+        aimed[0] = fxMul(pc, yc);
+        aimed[1] = fxMul(pc, ys);
+        aimed[2] = ps;
+    }
+
     namespace detail
     {
         inline std::uint32_t weaponsTickBody(LogicWorld &w, PlayerState &player, WeaponState &state,
@@ -4415,6 +4651,13 @@ namespace hldata
         const std::uint8_t held = player.inv.current;
         const std::uint32_t did =
             detail::weaponsTickBody(w, player, state, eye, forward, right, up, attack, next, ms, second, pick, reload);
+        // (Not fired: where it would go, for the crosshair -- as the game's
+        // guns look at each idle moment.)
+        if (!(did & kWeaponFired))
+        {
+            fx aimed[3];
+            autoaim(w, player, eye, forward, right, up, autoaimCone(player.inv.current, false), aimed);
+        }
         if ((did & kWeaponFired) && held != kWeaponCrowbar)
         {
             const int volume = weaponVolume(held, (did & kWeaponSecondary) != 0);
@@ -5258,16 +5501,21 @@ namespace hldata
                     at[i] = eye[i] + forward[i] * 30 + right[i] * 6 - up[i] * 5;
                 effectAdd(*w.actors, kEffectMuzzle, at, nullptr, 0, 50);
             }
+            // Where it goes: as aimed -- or bent, on EASY and MEDIUM, to the
+            // monster nearest that (the pistol's quick fire is not).
+            fx aimed[3];
+            autoaim(w, player, eye, forward, right, up,
+                    autoaimCone(inv.current, inv.current == kWeaponGlock && second && !attack), aimed);
             bool hit = false;
             for (int n = 0; n < pellets; ++n)
             {
-                fx dir[3] = {forward[0], forward[1], forward[2]};
+                fx dir[3] = {aimed[0], aimed[1], aimed[2]};
                 if (cone != 0)
                 {
                     const int x = (static_cast<int>(chance() % 4097) + static_cast<int>(chance() % 4097) - 4096) * cone / 4096;
                     const int y = (static_cast<int>(chance() % 4097) + static_cast<int>(chance() % 4097) - 4096) * cone / 4096;
                     for (int i = 0; i < 3; ++i)
-                        dir[i] = forward[i] + ((right[i] * x + up[i] * y) >> kFxShift);
+                        dir[i] = aimed[i] + ((right[i] * x + up[i] * y) >> kFxShift);
                 }
                 hit = fireLine(w, player, eye, dir, gun.range, gun.damage, true) || hit;
             }

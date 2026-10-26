@@ -31,6 +31,7 @@
 #include "HlLevelReader.hpp"
 #include "HlPlayerMove.hpp"
 #include "HlSound.hpp"
+#include "HlSkill.hpp"
 #include "HlSprite.hpp"
 #include "HlWalk.hpp"
 
@@ -110,6 +111,9 @@ namespace hldata
     /// (PlayerState::gravityPercent), kept among the switches so that it goes
     /// into the next map and into a save as they do.
     inline constexpr std::uint32_t kGlobalPlayerGravity = nameHash("!player_gravity");
+    /// ... and how hard the game is (kSkillEasy..kSkillHard: HlSkill.hpp),
+    /// set as a game is begun; a game that has none is MEDIUM.
+    inline constexpr std::uint32_t kGlobalSkill = nameHash("!skill");
 
     struct Globals
     {
@@ -273,6 +277,10 @@ namespace hldata
         /// the record and how hard, in pairs -- for the other consoles to
         /// be told. Only kept while `sharing`; whoever reads it empties it.
         bool sharing = false;
+        /// The guns' aim is NOT to bend towards a monster near it (it may on
+        /// EASY and MEDIUM: the game's sv_aim, HlAutoaim.hpp). The caller's
+        /// setting, given each frame: not the game's state.
+        Unsaved<bool> noAutoaim;
         std::int16_t struck[16] = {};
         int struckCount = 0;
         /// The boxes that can be pushed, as record indices: looked up once
@@ -297,6 +305,36 @@ namespace hldata
         std::int16_t camera = -1;
         std::int32_t cameraLeftMs = 0;
     };
+
+    /// How hard the game is (kSkillEasy..kSkillHard): as its switches say,
+    /// MEDIUM if they say nothing (a game from before there was a choice, a
+    /// test with no switches).
+    inline int skillLevelOf(const LogicWorld &w)
+    {
+        const int level = w.globals != nullptr ? w.globals->get(kGlobalSkill) : -1;
+        return level >= kSkillEasy && level <= kSkillHard ? level : kSkillMedium;
+    }
+    /// ... and its numbers (skill.cfg's, for that level).
+    inline const SkillData &skillOf(const LogicWorld &w)
+    {
+        return skillData(skillLevelOf(w));
+    }
+
+    /// How much a wall charger holds, at the game's level (its Spawn's
+    /// gSkillData.healthchargerCapacity, suitchargerCapacity).
+    inline int chargerCapacity(const LogicWorld &w, const LogicRecord &record)
+    {
+        return record.kind == static_cast<std::uint8_t>(LogicKind::SuitCharger) ? skillOf(w).suitcharger
+                                                                                : skillOf(w).healthcharger;
+    }
+
+    /// What is used again each frame while USE is held on it
+    /// (FCAP_CONTINUOUS_USE): the wall chargers.
+    inline bool logicContinuousUse(const LogicRecord &record)
+    {
+        return record.kind == static_cast<std::uint8_t>(LogicKind::HealthCharger) ||
+               record.kind == static_cast<std::uint8_t>(LogicKind::SuitCharger);
+    }
 
     inline constexpr std::uint8_t kNodeOff = 1;   ///< the track ends before this node
     inline constexpr std::uint8_t kNodeSpent = 2; ///< its fire-once target has fired
@@ -586,6 +624,10 @@ namespace hldata
 
     inline void logicUse(LogicWorld &w, PlayerState &player, int index, int caller, int useType,
                          int depth = 0);
+    namespace detail
+    {
+        inline void chargerUse(LogicWorld &w, PlayerState &player, int index); // (HlMonsters.hpp)
+    }
 
     /// Use every live entity called `name`.
     /// (HlEffects.hpp: the env_ entities that are only seen and felt.)
@@ -3819,9 +3861,8 @@ namespace hldata
 
         case LogicKind::HealthCharger:
         case LogicKind::SuitCharger:
-            // Held to: it gives for as long as the player stays at it
-            // (HlMonsters.hpp).
-            state.running = true;
+            // Used each frame USE is held on it (HlMonsters.hpp).
+            detail::chargerUse(w, player, index);
             break;
 
         case LogicKind::EnvGlobal:
@@ -4657,7 +4698,7 @@ namespace hldata
                 break;
             case LogicKind::HealthCharger:
             case LogicKind::SuitCharger:
-                brush.frame = state.bits >= record.extra[0]; // nothing left in it
+                brush.frame = static_cast<int>(state.bits) >= chargerCapacity(w, record); // nothing left in it
                 break;
             case LogicKind::Conveyor:
             {

@@ -18,6 +18,7 @@
 #include "data/TextureCache.hpp"
 #include "render/ScreenFade.hpp"
 #include "game/Game.hpp"
+#include "game/Player.hpp"
 #include "render/Camera.hpp"
 
 namespace hlrt
@@ -27,6 +28,33 @@ namespace hlrt
     namespace
     {
         using namespace hldata;
+
+        /// Where the crosshair is put, in pixels from the middle, for the
+        /// guns' aim bent by autoaim (the game's SET_CROSSHAIRANGLE): the
+        /// angle as the picture shows it, at its field of view.
+        void crosshairShift(int &dx, int &dy)
+        {
+            const AutoAim &aim = player.state.autoAim.value;
+            dx = dy = 0;
+            if (aim.yaw == 0 && aim.pitch == 0)
+                return;
+            fx s, c, hs, hc;
+            fxSinCos(static_cast<std::uint16_t>(aim.yaw), s, c);
+            fxSinCos(static_cast<std::uint16_t>(camera.fovAcross * 65536 / 720), hs, hc);
+            if (c > 0 && hs > 0)
+                dx = static_cast<int>(-(static_cast<std::int64_t>(s) * hc * 128) / (static_cast<std::int64_t>(c) * hs));
+            const int high = camera.zoomed ? Camera::kZoomFovDegrees : camera.fovDegrees;
+            fxSinCos(static_cast<std::uint16_t>(aim.pitch), s, c);
+            fxSinCos(static_cast<std::uint16_t>(high * 65536 / 720), hs, hc);
+            if (c > 0 && hs > 0)
+                dy = static_cast<int>(-(static_cast<std::int64_t>(s) * hc * 96) / (static_cast<std::int64_t>(c) * hs));
+        }
+        /// ... and its colour: red while it is on a monster, on EASY (the
+        /// game's AllowAutoTargetCrosshair: its "autoaim" crosshair).
+        int crosshairBank(int plain, int red)
+        {
+            return player.state.autoAim.value.onTarget && skillLevelOf(game.logic) == kSkillEasy ? red : plain;
+        }
 
         // A point of the screen as a place in front of the eye. The view is
         // 74 degrees high (Camera::kFovDegrees): at a depth of kDepth units
@@ -636,7 +664,11 @@ namespace hlrt
         // The crosshair, for what is aimed (unless the COMMAND line's
         // crosshair 0 took it away).
         if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
-            sprite(6, 128 - 16, 96 - 16, 0, 2, 0, 32, kBankWhite);
+        {
+            int dx, dy;
+            crosshairShift(dx, dy);
+            sprite(6, 128 - 16 + dx, 96 - 16 + dy, 0, 2, 0, 32, crosshairBank(kBankWhite, kBankRed));
+        }
         // At a train's controls: how it is going, where the game shows it
         // (train.cpp: a third of the way across, over the numbers).
         const int train = train_ && suit_ ? trainSpeedStep(game.logic) : -1;
@@ -823,8 +855,12 @@ namespace hlrt
         // The crosshair, for what is aimed (unless the COMMAND line's
         // crosshair 0 took it away).
         if ((gun || tankManned(game.logic) >= 0) && game.crosshair)
-            sprite(5, hudDs(kHud640CrosshairX) - 3, hudDs(kHud640CrosshairY) - 3, 0, 1, kCrosshairCell[0],
-                   kCrosshairCell[1], kBankWhite);
+        {
+            int dx, dy;
+            crosshairShift(dx, dy);
+            sprite(5, hudDs(kHud640CrosshairX) - 3 + dx, hudDs(kHud640CrosshairY) - 3 + dy, 0, 1, kCrosshairCell[0],
+                   kCrosshairCell[1], crosshairBank(kBankWhite, kBankRed));
+        }
         // At a train's controls: how it is going, where the game shows it.
         const int train = train_ && suit_ ? trainSpeedStep(game.logic) : -1;
         if (train >= 0)

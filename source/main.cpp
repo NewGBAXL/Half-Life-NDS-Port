@@ -553,7 +553,8 @@ namespace
             if (item == hldata::ItemKind::None)
                 return "no such thing to give";
             std::uint32_t got = 0;
-            if (!hldata::detail::itemTake(state, static_cast<std::uint8_t>(item), got))
+            if (!hldata::detail::itemTake(state, static_cast<std::uint8_t>(item), got,
+                                          hldata::skillData(hlrt::game.globals.get(hldata::kGlobalSkill))))
                 return "no use to you now";
             return std::string("given ") + line.args[0];
         }
@@ -682,6 +683,10 @@ namespace
         return reply;
     }
 
+    /// How hard a game begun from debug_start.txt is: its tenth number (1
+    /// easy, 2 medium, 3 hard), MEDIUM if it has none.
+    int debugSkill = hldata::kSkillMedium;
+
     /// A development aid (tools/emu): a card with debug_start.txt on it starts
     /// where that says, save or no save.
     bool debugStart()
@@ -693,10 +698,15 @@ namespace
         settings.debugReadout = true;
         // (The sixth number, the seconds until the player dies, is read by
         // Player. The seventh is how many models may be drawn at once.)
-        int n[7] = {0, 0, 0, 0, -1, 0, 0};
-        const int given = std::fscanf(file, "%d %d %d %d %d %d %d", &n[0], &n[1], &n[2], &n[3], &n[4], &n[5], &n[6]);
-        if (given == 7 && n[6] > 0)
+        // (The eighth and ninth, a weapon and god mode, are Player's too.
+        // The tenth is how hard the game is.)
+        int n[10] = {0, 0, 0, 0, -1, 0, 0, 0, 0, hldata::kSkillMedium};
+        const int given = std::fscanf(file, "%d %d %d %d %d %d %d %d %d %d", &n[0], &n[1], &n[2], &n[3], &n[4], &n[5],
+                                      &n[6], &n[7], &n[8], &n[9]);
+        if (given >= 7 && n[6] > 0)
             hlrt::modelDraw.setLimit(n[6]);
+        if (given == 10 && n[9] >= hldata::kSkillEasy && n[9] <= hldata::kSkillHard)
+            debugSkill = n[9];
         std::fclose(file);
         return true;
     }
@@ -810,10 +820,12 @@ int main(int argc, char *argv[])
             // A match: its host has said which map (on the host's own
             // console as on the others).
             std::string map;
-            if (hlrt::netGame.startAsked(map))
+            int skill = hldata::kSkillMedium;
+            if (hlrt::netGame.startAsked(map, skill))
             {
                 leaving();
                 hlrt::game.resetProgress();
+                hlrt::game.globals.set(hldata::kGlobalSkill, static_cast<std::uint8_t>(skill));
                 hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                 leavingAbandoned = true;
                 if (loadLevel(map, nullptr, error) == LoadResult::Ok)
@@ -832,6 +844,10 @@ int main(int argc, char *argv[])
     auto newGame = [&]()
     {
         hlrt::game.resetProgress();
+        // How hard it is: the first thing the new game knows, before its
+        // first map's monsters are made.
+        hlrt::game.globals.set(hldata::kGlobalSkill,
+                               static_cast<std::uint8_t>(debugging ? debugSkill : hlrt::menu.skill()));
         hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
         leavingAbandoned = true;
         // (A new game is played straight: the COMMAND line's cheats are off.)
@@ -1006,6 +1022,7 @@ int main(int argc, char *argv[])
                         paused = false;
                         hlrt::sound.setPaused(false);
                         hlrt::game.resetProgress();
+                        hlrt::game.globals.set(hldata::kGlobalSkill, static_cast<std::uint8_t>(hlrt::menu.skill()));
                         hlrt::SaveGame::newRun(Global::vblanks() * 2654435761u + 1u);
                         leavingAbandoned = true;
                         if (loadLevel(startMap, nullptr, error) != LoadResult::Ok)
