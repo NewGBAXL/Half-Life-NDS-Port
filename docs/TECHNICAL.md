@@ -109,6 +109,18 @@ Milestone 11, "levels of detail".
 - Fans and doors that turn about any axis; boxes that break (with USE, until
   there is a crowbar) and boxes that are pushed; volumes that hurt, push and
   teleport; health, and dying.
+- What crushes: a door or a train with a `dmg` hurts the player who holds it
+  up (a door each time it tries, a train every half second, as the game's
+  `Blocked` do), and a monster it comes into while it moves -- it does not
+  push monsters, so it goes through them instead: c1a1's rising wreckage
+  kills the scientists over it. A `multi_manager` taken away by a killtarget
+  fires nothing more of what it had still to fire. A `func_pendulum` swings
+  as the game's does (pulled to the middle of its distance, never faster
+  than its speed), dies down with `damp` until it rests in its middle, and,
+  stopped with flag 16, goes back to where it began. An explosion reaches a
+  brush as far as where the line to its middle meets it, and only if that
+  line gets there: a long pipe is hurt near either end, a box behind a wall
+  is not.
 - Xen pulls less: a `trigger_gravity` sets how hard the world pulls the
   player who touches it (0.6 of it through most of Xen, 0.3 in the
   Nihilanth's lair), from then on, until another sets it again. It is kept
@@ -118,6 +130,11 @@ Milestone 11, "levels of detail".
   carry, in the water both (`PlayerState::push`, `shared/HlPlayerMove.hpp`).
   A jump onto one of Xen's pads throws the player high, and they come down
   on it as fast as they went up: unhurt.
+- Slippery ground: a `func_friction` is drawn as its render mode says (the
+  faint sheets of spilt water in c1a1 and c2a1) and walked through, and
+  while the player stands in it the ground holds them only its `modifier`
+  in percent of the world's friction (`PlayerState::slip`, set each frame
+  as the game's move puts its own back after each).
 - Xen's plants (`shared/HlXen.hpp`, `ActorKind::Xen`): the hair and the
   three fungi sway, each at a pace of its own, and the fungi are in the way
   as the game's boxes have them (the big one's cap up on its legs). A light
@@ -348,8 +365,11 @@ Milestone 11, "levels of detail".
 - What the maps show and shake, from their own entities
   (`shared/HlEffects.hpp`): sprites and glows (`env_sprite`, `env_glow`),
   beams and lasers (`env_beam`, `env_laser`: straight or thrown about like
-  lightning, striking and striking again as the map times them, burning
-  whoever stands in one that burns), explosions (`env_explosion`: seen,
+  lightning, striking and striking again as the map times them; one that
+  burns stops on the first thing in its way -- the player, a monster,
+  something that breaks -- and burns it, so c1a1's lasers cut through its
+  computers and set off what they fire, with sparks where the map asks for
+  them), explosions (`env_explosion`: seen,
   heard, felt and hurting), shakes of the view (`env_shake`), sparks
   (`env_spark`), things thrown out (`env_shooter`, `gibshooter`),
   `env_render` making a brush see-through or unseen, and fades of the

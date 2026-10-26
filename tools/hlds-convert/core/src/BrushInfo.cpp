@@ -26,8 +26,8 @@ namespace hlds
         bool isVolumeOnly(const std::string &cls)
         {
             static const char *const kClasses[] = {
-                "func_ladder",      "func_monsterclip",  "func_friction",
-                "func_mortar_field", "env_bubbles",      "func_tankcontrols",
+                "func_ladder",      "func_monsterclip",  "func_mortar_field",
+                "env_bubbles",      "func_tankcontrols",
                 "func_traincontrols"};
             if (startsWith(cls, "trigger_"))
                 return true;
@@ -42,7 +42,9 @@ namespace hlds
         /// Classes (and flags) that are drawn but can be walked through.
         bool isPassable(const std::string &cls, int spawnflags)
         {
-            if (cls == "func_illusionary" || cls == "func_water")
+            // (func_friction: drawn as its render mode says -- a puddle's
+            // sheet -- but a volume the player stands in.)
+            if (cls == "func_illusionary" || cls == "func_water" || cls == "func_friction")
                 return true;
             if ((cls == "func_door" || cls == "func_door_rotating" || cls == "func_train" ||
                  cls == "func_tracktrain") &&
@@ -53,6 +55,8 @@ namespace hlds
             if (cls == "func_rot_button" && (spawnflags & 1))
                 return true;
             if (cls == "func_rotating" && (spawnflags & 64))
+                return true;
+            if (cls == "func_pendulum" && (spawnflags & 32))
                 return true;
             return false;
         }

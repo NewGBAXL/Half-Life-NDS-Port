@@ -52,7 +52,7 @@
 namespace hldata
 {
     inline constexpr char kLevelMagic[4] = {'H', 'L', 'D', 'S'};
-    inline constexpr std::uint16_t kLevelVersion = 39;
+    inline constexpr std::uint16_t kLevelVersion = 41;
     /// The oldest level format this build reads.
     inline constexpr std::uint16_t kLevelMinVersion = 28;
     /// The oldest build that can read what it writes. (32: what the people
@@ -63,8 +63,11 @@ namespace hldata
     /// shotgun shell's ring among the common sounds; 38: no surface across two
     /// leaves, the map's far distance in the header, transition volumes; 39:
     /// the counters, cameras, speakers, gun targets and the rest of round
-    /// 39's kinds, Xen's plants, and three items.)
-    inline constexpr std::uint16_t kLevelMinReader = 39;
+    /// 39's kinds, Xen's plants, and three items; 40: func_friction's
+    /// volumes, and beams that throw sparks. 41 -- a pendulum's damping and
+    /// its going back, which a build of 40 reads as none -- does not raise
+    /// it.)
+    inline constexpr std::uint16_t kLevelMinReader = 40;
     /// The oldest level format whose saves are still read.
     /// 26 -> 27 added multiplayer fields, 27 -> 28 added texture table fields,
     /// 28 -> 29 a func_train's global name (extra[3], 0 before: read as
@@ -521,7 +524,8 @@ namespace hldata
         /// about (the rest); extra[2] colour and solidity as a Sprite's;
         /// extra[3] how long a strike lasts in ms (low 16 bits; 0: it stays
         /// while it is on) and how long until it strikes again (the rest).
-        /// `damage` is what it does a second to whoever stands in it.
+        /// `damage` is what it does a second to the first thing in its way
+        /// (the player, a monster, something that breaks), where it stops.
         /// kLogicStartOpen: on from the start. kLogicToggle: switched on and
         /// off; otherwise each use is one strike.
         /// Its ends need not be fixed. `target` is the name id of what its
@@ -583,9 +587,11 @@ namespace hldata
         /// extra[0] which (a kDecal*), extra[1] how big.
         Mark,
         /// A brush that swings about its origin: `move[0]` is how far
-        /// (turns * 65536), `speed` how fast (the same a second), extra[0]
-        /// which angle. kLogicStartOpen: swinging from the start. Used, it
-        /// starts and stops.
+        /// (turns * 65536), `speed` how fast at most (the same a second),
+        /// extra[0] which angle, extra[1] its damping (the game's "damp", in
+        /// thousandths: 0 swings for ever), extra[2] bit 0: stopped, it goes
+        /// back to where it began. kLogicStartOpen: swinging from the start.
+        /// Used, it starts and stops.
         Pendulum,
         /// A vending machine's works at `move`: used, a can drops out and
         /// does whoever takes it a point of good, extra[0] times.
@@ -718,6 +724,11 @@ namespace hldata
         /// (extra[2] bit 2) -- sprayed along extra[3] (a yaw | pitch << 16,
         /// or anywhere: extra[2] bit 0), and a mark where it lands (bit 3).
         Blood,
+        // From level version 40.
+        /// A volume (mins/maxs) where the ground holds the player less
+        /// (func_friction): extra[0] is its hold, in percent of the world's
+        /// friction. Its brush, if it is seen, is drawn as any other.
+        Friction,
         Count
     };
     // A tank's spawnflags (LogicKind::Tank, maxs[0]): the game's.
@@ -821,6 +832,8 @@ namespace hldata
     inline constexpr std::uint16_t kNoBrush = 0xFFFF;
     inline constexpr std::uint16_t kBeamRandom = 1; ///< LogicKind::Beam, in maxs[1]
     inline constexpr std::uint16_t kBeamRing = 2;   ///< ... a circle between its two ends
+    inline constexpr std::uint16_t kBeamSparkStart = 4; ///< ... sparks fly at its start
+    inline constexpr std::uint16_t kBeamSparkEnd = 8;   ///< ... and where it ends
 
     /// An entry of a list a logic record owns. For a multi_manager: one target
     /// and how long after the manager is used it fires. For a multisource: one

@@ -1652,6 +1652,129 @@ namespace
         logicUse(g.logic, g.player, wayFree, -1, kUseToggle);
         check(g.logic.pendingChange == wayFree, "a way whose landmark has no volume goes from anywhere");
     }
+    /// What hurts in a mover and what a manager taken away still does: a
+    /// door with "dmg" that comes down on the player, each time it tries; a
+    /// train that does, every half second (CFuncTrain::Blocked); a
+    /// multi_manager killed half way through, which fires no more; and a
+    /// pendulum, which swings between its ends -- and, damped, dies down to
+    /// rest in its middle, or, stopped, goes back to where it began.
+    void testCrushKillAndSwing()
+    {
+        auto standUnder = [](Game &g)
+        {
+            g.player.origin[0] = g.player.origin[1] = 0;
+            g.player.origin[2] = fxFromInt(40);
+            g.player.velocity[0] = g.player.velocity[1] = g.player.velocity[2] = 0;
+            g.player.health = 100;
+        };
+        {
+            BoxRoom room;
+            // 1: a door over the player's head that comes down 48 (to 32):
+            //    it meets them at 72.
+            room.brushes = {brush("func_door", "\"targetname\" \"press\"\n\"angle\" \"-2\"\n\"speed\" \"100\"\n"
+                                               "\"wait\" \"-1\"\n\"dmg\" \"10\"\n",
+                                  -20, -20, 80, 20, 20, 128)};
+            Game g;
+            build(g, room);
+            check(g.ok, "crush room");
+            if (!g.ok)
+                return;
+            standUnder(g);
+            const int press = g.recordOfModel(1);
+            check(g.view.logic[press].damage == 10, "a door's dmg is cooked");
+            g.use(press);
+            MoveCommand idle;
+            g.frame(idle, 8);
+            std::printf("test_logic: a door of dmg 10 come down on the player: health %d\n", g.player.health);
+            check(g.player.health < 100 && (100 - g.player.health) % 10 == 0, "a door that hurts hurts whoever holds it up");
+        }
+        {
+            BoxRoom room;
+            // 1: a train (dmg 4) that comes down from 110 to 4 through where
+            //    the player stands.
+            room.brushes = {brush("func_train", "\"target\" \"e1\"\n\"speed\" \"200\"\n\"dmg\" \"4\"\n", 60, 60, 100,
+                                  100, 100, 108)};
+            room.extraEntities =
+                "{\n\"classname\" \"path_corner\"\n\"targetname\" \"e1\"\n\"target\" \"e2\"\n\"origin\" \"0 0 110\"\n}\n"
+                "{\n\"classname\" \"path_corner\"\n\"targetname\" \"e2\"\n\"origin\" \"0 0 4\"\n}\n";
+            Game g;
+            build(g, room);
+            check(g.ok, "crushing train room");
+            if (!g.ok)
+                return;
+            standUnder(g);
+            MoveCommand idle;
+            g.frame(idle, 61); // (two seconds)
+            std::printf("test_logic: two seconds under a train of dmg 4: health %d\n", g.player.health);
+            check(g.player.health <= 100 - 3 * 4 && g.player.health >= 100 - 5 * 4,
+                  "a train that hurts hurts whoever holds it up, every half second");
+        }
+        {
+            BoxRoom room;
+            room.brushes = {brush("func_wall_toggle", "\"targetname\" \"soon\"\n", 0, 100, 0, 8, 108, 64),
+                            brush("func_wall_toggle", "\"targetname\" \"later\"\n", 0, 80, 0, 8, 88, 64)};
+            room.extraEntities =
+                "{\n\"classname\" \"multi_manager\"\n\"targetname\" \"mm\"\n\"soon\" \"0.5\"\n\"later\" \"2\"\n}\n"
+                "{\n\"classname\" \"trigger_relay\"\n\"targetname\" \"stop\"\n\"killtarget\" \"mm\"\n}\n";
+            Game g;
+            build(g, room);
+            check(g.ok, "manager room");
+            if (!g.ok)
+                return;
+            const int manager = g.recordOfKind(LogicKind::MultiManager);
+            const int relay = g.recordOfKind(LogicKind::TriggerRelay);
+            g.use(manager);
+            g.tick(33, 30); // (a second)
+            check(!g.brushOfModel(1).active, "the manager's first target has gone off");
+            g.use(relay);
+            g.tick(33, 60);
+            check(g.brushOfModel(2).active, "a manager taken away fires nothing more");
+        }
+        {
+            BoxRoom room;
+            // 1: swings 90 degrees at 90 a second, for ever. 2: the same,
+            //    damped (0.1 a second): it comes to rest at 45. 3: stopped,
+            //    it goes back.
+            room.brushes = {
+                brush("func_pendulum", "\"spawnflags\" \"1\"\n\"distance\" \"90\"\n\"speed\" \"90\"\n"
+                                       "\"origin\" \"-80 -80 32\"\n",
+                      -88, -88, 0, -72, -72, 64),
+                brush("func_pendulum", "\"spawnflags\" \"1\"\n\"distance\" \"90\"\n\"speed\" \"90\"\n"
+                                       "\"damp\" \"100\"\n\"origin\" \"80 -80 32\"\n",
+                      72, -88, 0, 88, -72, 64),
+                brush("func_pendulum", "\"spawnflags\" \"17\"\n\"distance\" \"90\"\n\"speed\" \"90\"\n"
+                                       "\"origin\" \"80 80 32\"\n",
+                      72, 72, 0, 88, 88, 64),
+            };
+            Game g;
+            build(g, room);
+            check(g.ok, "pendulum room");
+            if (!g.ok)
+                return;
+            const int free = g.recordOfModel(1), damped = g.recordOfModel(2), back = g.recordOfModel(3);
+            const int axis = static_cast<int>(g.view.logic[free].extra[0] % 3);
+            auto degrees = [&](int model)
+            { return static_cast<std::int16_t>(g.brushOfModel(model).angles[axis]) * 360.0 / 65536.0; };
+            double least = 1e9, most = -1e9;
+            for (int i = 0; i < 300; ++i) // (ten seconds)
+            {
+                g.tick(33);
+                least = std::min(least, degrees(1));
+                most = std::max(most, degrees(1));
+            }
+            std::printf("test_logic: a pendulum of 90: swung between %.1f and %.1f degrees\n", least, most);
+            check(least > -1 && least < 2 && most > 88 && most < 91 && g.states[free].running,
+                  "a pendulum swings from where it began to its distance, and on");
+            g.tick(33, 300);
+            std::printf("test_logic: damped: %s at %.1f degrees after twenty seconds\n",
+                        g.states[damped].running ? "still swinging" : "at rest", degrees(2));
+            check(!g.states[damped].running && std::fabs(degrees(2) - 45) < 1, "damped, it comes to rest in its middle");
+            g.use(back);
+            g.tick(33, 60);
+            check(!g.states[back].running && std::fabs(degrees(3)) < 0.5, "stopped, one that goes back goes back");
+            check(g.states[free].running, "(the undamped one still swings)");
+        }
+    }
 } // namespace
 
 int main()
@@ -1671,6 +1794,7 @@ int main()
     testWater();
     testLevelChange();
     testTransitionVolume();
+    testCrushKillAndSwing();
     if (g_failures == 0)
         std::printf("test_logic: ok\n");
     return g_failures == 0 ? 0 : 1;

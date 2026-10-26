@@ -445,14 +445,17 @@ namespace hldata
             }
         }
         inline bool boxInMover(const LogicWorld &w, int record, int mover);
+        inline void crushPlayer(LogicWorld &w, PlayerState &player, int index, int ms);
 
         /// Move a brush to `pos`, carrying the player if they stand on it and
         /// pushing them if it runs into them -- and likewise the boxes that
         /// can be pushed: one standing on it goes where it goes, one in its
         /// way is pushed along. False -- with the brush put back, and the
         /// player where they were -- if the player or a box ends up with
-        /// nowhere to go: it is BLOCKED.
-        inline bool moveBrush(LogicWorld &w, PlayerState &player, int index, const fx *pos)
+        /// nowhere to go: it is BLOCKED (`byPlayer`, if given, says whether by
+        /// the player).
+        inline bool moveBrush(LogicWorld &w, PlayerState &player, int index, const fx *pos,
+                              bool *byPlayer = nullptr)
         {
             fx old[3], delta[3];
             for (int a = 0; a < 3; ++a)
@@ -494,7 +497,11 @@ namespace hldata
             {
                 pushPlayer(w, player, index, delta);
                 if (playerInsideBrush(w, player, index))
+                {
+                    if (byPlayer != nullptr)
+                        *byPlayer = true;
                     return refuse();
+                }
             }
             // The boxes: carried, pushed, or in the way. (Not when this is
             // itself a box being shoved by another: one deep is enough.)
@@ -628,6 +635,17 @@ namespace hldata
                 continue;
             w.states[i].dead = true;
             w.states[i].timer = -1;
+            // A multi_manager taken away fires nothing more: what it has
+            // still to fire goes with it (its think is gone -- but what is
+            // due now goes off, as the think that removed it fires it).
+            if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::MultiManager))
+            {
+                for (LogicEvent &event : w.events)
+                {
+                    if (event.active && event.caller == i && event.ms > 0)
+                        event.active = false;
+                }
+            }
             if (w.records[i].brush != kNoBrush)
                 logicSetBrushActive(w, w.records[i].brush, false);
             if (w.records[i].kind == static_cast<std::uint8_t>(LogicKind::Ladder) &&
@@ -1090,6 +1108,7 @@ namespace hldata
                 {
                     angles[axis] = before;
                     logicPlaceBrushTurned(w, record.brush, state.base, angles);
+                    crushPlayer(w, player, index, ms);
                     if (record.waitMs >= 0)
                         state.move = up ? MoveState::GoingDown : MoveState::GoingUp;
                     return;
@@ -1104,10 +1123,14 @@ namespace hldata
                              static_cast<fx>((static_cast<std::int64_t>(state.travel[a]) * phase) >>
                                              kFractionShift);
                 }
-                if (!moveBrush(w, player, record.brush, pos))
+                bool byPlayer = false;
+                if (!moveBrush(w, player, record.brush, pos, &byPlayer))
                 {
-                    // Something is in the way. A door that returns by itself
-                    // turns round; one that waits for ever just keeps trying.
+                    // Something is in the way: the player is hurt by it, if
+                    // it hurts. A door that returns by itself turns round;
+                    // one that waits for ever just keeps trying.
+                    if (byPlayer)
+                        crushPlayer(w, player, index, ms);
                     if (record.kind == static_cast<std::uint8_t>(LogicKind::Door) &&
                         record.waitMs >= 0)
                         state.move = up ? MoveState::GoingDown : MoveState::GoingUp;
@@ -1286,9 +1309,15 @@ namespace hldata
                          static_cast<fx>((static_cast<std::int64_t>(state.travel[a]) * phase) >>
                                          kFractionShift);
             }
-            // A blocked train does not turn round: it waits, pushing.
-            if (!moveBrush(w, player, record.brush, pos))
+            // A blocked train does not turn round: it waits, pushing -- and
+            // hurting the player in its way.
+            bool byPlayer = false;
+            if (!moveBrush(w, player, record.brush, pos, &byPlayer))
+            {
+                if (byPlayer)
+                    crushPlayer(w, player, index, ms);
                 return;
+            }
             state.phase = phase;
             if (phase == kFractionOne)
                 trainArrived(w, player, index,
@@ -1319,6 +1348,25 @@ namespace hldata
 
     namespace detail
     {
+        /// The mover `index` (a door, a train) is held up by the player: its
+        /// "dmg" hurts them -- a door's each time (CBaseDoor::Blocked), a
+        /// train's no more than every half second (CFuncTrain::Blocked:
+        /// state.hurt is the ms until it can again).
+        inline void crushPlayer(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            if (record.damage == 0)
+                return;
+            if (record.kind == static_cast<std::uint8_t>(LogicKind::Train))
+            {
+                if ((state.hurt -= ms) > 0)
+                    return;
+                state.hurt = 500;
+            }
+            logicHurt(player, record.damage);
+        }
+
         /// It breaks: gone from the map, whoever stood on it left in the air,
         /// and its targets fired.
         inline void breakIt(LogicWorld &w, PlayerState &player, int index, int depth)
@@ -1387,6 +1435,19 @@ namespace hldata
         {
             return isBreakable(record) || record.kind == static_cast<std::uint8_t>(LogicKind::GunTarget) ||
                    record.kind == static_cast<std::uint8_t>(LogicKind::ButtonTarget);
+        }
+
+        /// The record whose brush is `mover` and that a blow to it can
+        /// reach -- something that breaks, a target -- or -1.
+        inline int blowTaker(const LogicWorld &w, int mover)
+        {
+            for (int i = 0; i < w.recordCount; ++i)
+            {
+                if (w.records[i].brush == static_cast<std::uint16_t>(mover) && !w.states[i].dead &&
+                    takesBlows(w.records[i]))
+                    return i;
+            }
+            return -1;
         }
 
         /// The game's chance for what talks to itself (a speaker): 24 bits.
@@ -3241,24 +3302,59 @@ namespace hldata
             }
         }
 
-        /// A brush that swings: out by its distance and back, as a weight
-        /// on a string does (slow at the ends).
+        /// A brush that swings (CPendulum::Swing): pulled towards the middle
+        /// of its distance, so hard that from rest at one end it just reaches
+        /// the other at its speed, and never faster; with damping, that most
+        /// dies away until, slow enough, it stops at the middle. Its state:
+        /// travel[0] how far round it is from where it began, `speed` how
+        /// fast it turns, travel[1] the most it may (all Q8 of the record's
+        /// units); bits 1 while it goes back to where it began.
         inline void pendulumTick(LogicWorld &w, int index, int ms)
         {
             const LogicRecord &record = w.records[index];
             LogicState &state = w.states[index];
             if (record.brush == kNoBrush || !state.running || record.speed <= 0 || record.move[0] == 0)
                 return;
-            // Once out and back is twice the distance at the speed, and
-            // half as long again for slowing at the ends.
-            const fx far = record.move[0] < 0 ? -record.move[0] : record.move[0];
-            const std::int64_t wholeMs = (static_cast<std::int64_t>(far) * 3000) / record.speed;
-            state.phase = static_cast<std::int32_t>((state.phase + ms) % (wholeMs > 0 ? wholeMs : 1));
-            fx sine, cosine;
-            fxSinCos(static_cast<std::uint16_t>((static_cast<std::int64_t>(state.phase) << 16) / (wholeMs > 0 ? wholeMs : 1)), sine, cosine);
+            const std::int64_t most = static_cast<std::int64_t>(record.speed) << 8;
+            std::int64_t at = state.travel[0], speed = state.speed;
+            if (state.bits & 1)
+            {
+                // Back to where it began, at its speed, and still.
+                const std::int64_t step = most * ms / 1000;
+                at = at > step ? at - step : (at < -step ? at + step : 0);
+                if (at == 0)
+                    state.running = false, state.bits = 0;
+                speed = 0;
+            }
+            else
+            {
+                const std::int64_t distance = static_cast<std::int64_t>(record.move[0]) << 8;
+                const std::int64_t accel = most * most / (2 * (distance < 0 ? -distance : distance));
+                speed += (at - distance / 2 > 0 ? -accel : accel) * ms / 1000;
+                std::int64_t limit = most;
+                if (record.extra[1] != 0)
+                {
+                    // (m_damp is "damp" / 1000 a second -- extra[1] is in
+                    // thousandths of "damp"; under 30 degrees a second it is
+                    // done.)
+                    std::int64_t damped = state.travel[1];
+                    damped -= damped * static_cast<std::int64_t>(record.extra[1]) * ms / 1000000000;
+                    state.travel[1] = static_cast<fx>(damped);
+                    limit = damped;
+                    if (damped < (static_cast<std::int64_t>(30 * 65536 / 360) << 8))
+                    {
+                        at = distance / 2;
+                        speed = 0;
+                        state.running = false;
+                    }
+                }
+                speed = speed > limit ? limit : (speed < -limit ? -limit : speed);
+                at += speed * ms / 1000;
+            }
+            state.travel[0] = static_cast<fx>(at);
+            state.speed = static_cast<fx>(speed);
             std::uint16_t angles[3] = {0, 0, 0};
-            angles[record.extra[0] % 3] =
-                static_cast<std::uint16_t>((static_cast<std::int64_t>(record.move[0]) * (kFxOne - cosine)) >> 13);
+            angles[record.extra[0] % 3] = static_cast<std::uint16_t>(at >> 8);
             logicPlaceBrushTurned(w, record.brush, state.base, angles);
         }
 
@@ -3773,7 +3869,15 @@ namespace hldata
             break;
 
         case LogicKind::Pendulum:
-            state.running = !state.running;
+            // CPendulum::PendulumUse: one that swings stops where it is --
+            // or goes back to where it began, at its speed -- and one that
+            // is still sets off from where it is.
+            if (state.running && state.bits == 0 && (record.extra[2] & 1))
+                state.bits = 1;
+            else if (state.running)
+                state.running = false, state.speed = 0, state.bits = 0;
+            else
+                state.running = true, state.travel[1] = record.speed << 8, state.bits = 0;
             break;
 
         case LogicKind::Beverage:
@@ -4096,6 +4200,7 @@ namespace hldata
             if (record.kind == static_cast<std::uint8_t>(LogicKind::Pendulum))
             {
                 state.running = (record.flags & kLogicStartOpen) != 0;
+                state.travel[1] = record.speed << 8;
                 if (record.brush != kNoBrush)
                 {
                     for (int a = 0; a < 3; ++a)
@@ -4240,6 +4345,7 @@ namespace hldata
         // how hard they are pulled is what the switches say (a map come into,
         // a save loaded).
         player.push.value = BaseVelocity();
+        player.slip.value = 0;
         if (w.globals != nullptr)
         {
             const int gravity = w.globals->get(kGlobalPlayerGravity);
@@ -4414,7 +4520,8 @@ namespace hldata
                     logicUse(w, player, i, -1, kUseOn);
             }
             else if (kind == LogicKind::TriggerHurt || kind == LogicKind::TriggerPush ||
-                     kind == LogicKind::TriggerTeleport || kind == LogicKind::TriggerGravity)
+                     kind == LogicKind::TriggerTeleport || kind == LogicKind::TriggerGravity ||
+                     kind == LogicKind::Friction)
             {
                 const fx mins[3] = {fxFromInt(record.mins[0]), fxFromInt(record.mins[1]),
                                     fxFromInt(record.mins[2])};
@@ -4463,6 +4570,13 @@ namespace hldata
                         for (int a = 0; a < 3; ++a)
                             player.push.value.v[a] += record.move[a];
                     }
+                }
+                else if (kind == LogicKind::Friction && inside)
+                {
+                    // CFrictionModifier::ChangeFriction, for this frame (the
+                    // game's move puts it back after each).
+                    const int hold = record.extra[0] > 100 ? 100 : static_cast<int>(record.extra[0]);
+                    player.slip.value = static_cast<std::uint8_t>(100 - hold);
                 }
                 else if (kind == LogicKind::TriggerGravity && inside)
                 {
@@ -4607,7 +4721,7 @@ namespace hldata
             }
             else if (kind != LogicKind::TriggerHurt && kind != LogicKind::TriggerPush &&
                      kind != LogicKind::TriggerTeleport && kind != LogicKind::TriggerGravity &&
-                     kind != LogicKind::AutoSave &&
+                     kind != LogicKind::Friction && kind != LogicKind::AutoSave &&
                      kind != LogicKind::ChangeLevel && kind != LogicKind::Music)
                 detail::touchedBy(w, ghost, i);
         }

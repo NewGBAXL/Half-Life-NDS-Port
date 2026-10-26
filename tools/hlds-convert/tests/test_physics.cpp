@@ -334,6 +334,25 @@ namespace
         sim.cmd.forward = 0;
         sim.run(30);
         check(sim.speed2d() == 0, "friction stops the player dead");
+
+        // On a func_friction's puddle (its modifier 15: the ground holds them
+        // 15 percent of the world's): the same stop takes far longer.
+        double slid[2] = {0, 0};
+        for (int slippery = 0; slippery < 2; ++slippery)
+        {
+            sim = spawn(w);
+            sim.s.origin[0] = fxFromInt(-100);
+            sim.run(30);
+            sim.cmd.forward = 1;
+            sim.run(5);
+            sim.cmd.forward = 0;
+            sim.s.slip.value = slippery ? 85 : 0;
+            const double from = sim.x();
+            sim.run(15);
+            slid[slippery] = sim.x() - from;
+        }
+        std::printf("test_physics: half a second's stop slides %.1f units, %.1f on a puddle\n", slid[0], slid[1]);
+        check(slid[1] > slid[0] * 2, "the ground that holds them less lets them slide on");
     }
 
     void testJump()

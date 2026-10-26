@@ -242,6 +242,10 @@ namespace hldata
         /// units a second): their base velocity, set by logicTick. Upwards it
         /// is an acceleration; along the ground, a carry (pm_shared's).
         Unsaved<BaseVelocity> push;
+        /// How much less than the world's the ground holds them this frame,
+        /// in percent (func_friction's volumes, set by logicTick: the game's
+        /// pmove->friction, put back after each move).
+        Unsaved<std::uint8_t> slip;
         /// The brush entity the last move ran into sideways, as a mover
         /// index; -1 if none. What a box that can be pushed is pushed by.
         std::int16_t touchedMover = -1;
@@ -646,7 +650,9 @@ namespace hldata
                     const int friction =
                         tr.fraction == kFractionOne ? kFriction * kEdgeFriction : kFriction;
                     const fx control = speed < kStopSpeed ? kStopSpeed : speed;
-                    drop = scaleTime(control * friction, dt);
+                    drop = scaleTime(static_cast<fx>(static_cast<std::int64_t>(control) * friction *
+                                                     (100 - s.slip.value) / 100),
+                                     dt);
                 }
                 fx newSpeed = speed - drop;
                 if (newSpeed < 0)

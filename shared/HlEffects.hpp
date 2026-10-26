@@ -107,22 +107,39 @@ namespace hldata
         return false;
     }
 
-    /// The two ends of a Beam record as they are now: fixed, following
-    /// something, or (its end) wherever its present strike was sent.
+    namespace detail
+    {
+        /// Where a Beam record's two ends are aimed: fixed, following
+        /// something, or (its end) wherever its present strike was sent.
+        inline void beamAimedEnds(const LogicWorld &w, int index, fx *from, fx *to)
+        {
+            const LogicRecord &record = w.records[index];
+            const LogicState &state = w.states[index];
+            if (!placeOfName(w, record.target, from))
+            {
+                for (int k = 0; k < 3; ++k)
+                    from[k] = record.move[k];
+            }
+            if (placeOfName(w, record.netName, to))
+                return;
+            const bool picked = (record.maxs[1] & kBeamRandom) || record.auxCount > 1;
+            for (int k = 0; k < 3; ++k)
+                to[k] = picked ? state.travel[k] : fxFromInt(record.mins[k]);
+        }
+    } // namespace detail
+
+    /// The two ends of a Beam record as they are now: as aimed, or -- one
+    /// that hurts -- its end on the first thing in its way (the state's
+    /// `base`, while `hurt` is not 0).
     inline void beamEnds(const LogicWorld &w, int index, fx *from, fx *to)
     {
-        const LogicRecord &record = w.records[index];
+        detail::beamAimedEnds(w, index, from, to);
         const LogicState &state = w.states[index];
-        if (!placeOfName(w, record.target, from))
+        if (state.hurt != 0)
         {
             for (int k = 0; k < 3; ++k)
-                from[k] = record.move[k];
+                to[k] = state.base[k];
         }
-        if (placeOfName(w, record.netName, to))
-            return;
-        const bool picked = (record.maxs[1] & kBeamRandom) || record.auxCount > 1;
-        for (int k = 0; k < 3; ++k)
-            to[k] = picked ? state.travel[k] : fxFromInt(record.mins[k]);
     }
 
     /// A beam that strikes at random, or picks its end from several, does
@@ -272,6 +289,126 @@ namespace hldata
         }
     } // namespace detail
 
+    namespace detail
+    {
+        /// A beam that hurts, for `ms` more: it stops on the first thing in
+        /// its way -- the player, someone, a brush, the world -- and burns
+        /// that, so much a second (CLaser::StrikeThink, CBeam::BeamDamage):
+        /// what breaks breaks, and what it fires goes off. Sparks where it
+        /// starts and where it ends, if it was made to throw them.
+        inline void beamBurn(LogicWorld &w, PlayerState &player, int index, int ms)
+        {
+            const LogicRecord &record = w.records[index];
+            LogicState &state = w.states[index];
+            state.hurt = 0;
+            if (!effectSeen(record, state) || w.world == nullptr)
+                return;
+            fx from[3], to[3];
+            beamAimedEnds(w, index, from, to);
+            const Shot shot = traceShot(*w.world, from, to);
+            // (One that starts inside a wall -- set into it -- is not stopped
+            // by that wall.)
+            std::int64_t nearest = shot.fraction > 0 ? shot.fraction : kFractionOne;
+            // (What it follows is where it ends, not in its way.)
+            int mover = shot.fraction > 0 ? shot.mover : -1;
+            for (int r = 0; mover >= 0 && record.netName != 0 && r < w.recordCount; ++r)
+            {
+                if (w.records[r].name == record.netName && w.records[r].brush == static_cast<std::uint16_t>(mover))
+                {
+                    nearest = kFractionOne;
+                    mover = -1;
+                }
+            }
+            int struck = -1;
+            const ActorWorld *a = w.actors;
+            for (int n = 0; a != nullptr && n < a->count; ++n)
+            {
+                const ActorState &actor = a->states[n];
+                if (!actor.active || !canBeHurt(actor.kind) || actor.ai >= kAiDying ||
+                    (actor.kind == static_cast<std::uint8_t>(ActorKind::Generic) && !(actor.flags & kActorSolid)))
+                    continue;
+                fx mins[3], maxs[3];
+                targetBox(actor, mins, maxs);
+                std::int64_t enter = 0;
+                if (lineEntersBox(from, to, mins, maxs, enter) && enter < nearest)
+                {
+                    nearest = enter;
+                    struck = n;
+                }
+            }
+            bool atPlayer = false;
+            if (player.health > 0)
+            {
+                const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
+                const fx mins[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16),
+                                    player.origin[2] - tall};
+                const fx maxs[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16),
+                                    player.origin[2] + tall};
+                std::int64_t enter = 0;
+                if (lineEntersBox(from, to, mins, maxs, enter) && enter < nearest)
+                {
+                    nearest = enter;
+                    atPlayer = true;
+                    struck = -1;
+                }
+            }
+            const bool onBrush = !atPlayer && struck < 0 && mover >= 0 && nearest == shot.fraction;
+            if (nearest < kFractionOne)
+            {
+                // Where it stops. (A brush is met as its clip hull, a hand's
+                // breadth out: brought back onto its face where that can be.)
+                fx normal[3];
+                if (!((onBrush || (struck < 0 && !atPlayer)) && traceShotWall(*w.world, from, to, state.base, normal)))
+                {
+                    for (int k = 0; k < 3; ++k)
+                        state.base[k] = from[k] + static_cast<fx>((static_cast<std::int64_t>(to[k] - from[k]) * nearest) >>
+                                                                  kFractionShift);
+                }
+                state.hurt = 1;
+            }
+            // (So much a second: the parts of a point are kept.)
+            state.speed += static_cast<fx>(record.damage) * ms;
+            const int dealt = state.speed / 1000;
+            state.speed %= 1000;
+            if (dealt > 0 && atPlayer)
+            {
+                playerHurt(player, dealt, from);
+                if (w.actors != nullptr)
+                    w.actors->got |= kGotHurt;
+            }
+            else if (dealt > 0 && struck >= 0)
+            {
+                monsterHurt(w, struck, dealt, false, kHitBody, kDmgEnergyBeam, kAiNone, from);
+            }
+            else if (dealt > 0 && onBrush)
+            {
+                const int taker = blowTaker(w, mover);
+                if (taker >= 0)
+                {
+                    const fx d[3] = {to[0] - from[0], to[1] - from[1], to[2] - from[2]};
+                    const fx length = fxLength(d);
+                    for (int k = 0; length > 0 && k < 3; ++k)
+                        w.struckFrom[k] = static_cast<fx>((static_cast<std::int64_t>(d[k]) << 12) / length);
+                    logicStrike(w, player, taker, dealt);
+                }
+            }
+            // Its sparks: now and then, at either end.
+            const bool sparksStart = record.maxs[1] & kBeamSparkStart, sparksEnd = record.maxs[1] & kBeamSparkEnd;
+            if (w.actors == nullptr || !(sparksStart || sparksEnd) || (state.timer -= ms) > 0)
+                return;
+            state.timer = 150 + static_cast<std::int32_t>(effectChance(w) % 250);
+            for (int end = 0; end < 2; ++end)
+            {
+                if (!(end == 0 ? sparksStart : sparksEnd))
+                    continue;
+                const fx *at = end == 0 ? from : (state.hurt != 0 ? state.base : to);
+                Effect &spark = effectAdd(*w.actors, kEffectSprite, at, nullptr, 14, 150);
+                spark.sprite = static_cast<std::uint16_t>(CommonSprite::Glow);
+                spark.colour = 0x3BFF; // (as an env_spark's)
+            }
+        }
+    } // namespace detail
+
     /// What the effect entities do by themselves, and the shake and the
     /// fade, for `ms` more milliseconds. (Called by monstersTick.)
     inline void effectsTick(LogicWorld &w, PlayerState &player, int ms)
@@ -354,30 +491,8 @@ namespace hldata
                         state.phase += static_cast<std::int32_t>((record.extra[3] & 0xFFFF) + (record.extra[3] >> 16));
                     }
                 }
-                // What it does to someone standing in it.
-                if (record.damage != 0 && effectSeen(record, state) && player.health > 0)
-                {
-                    fx from[3], to[3];
-                    beamEnds(w, i, from, to);
-                    const fx tall = player.ducked ? kCrouchedFeet : kStandingFeet;
-                    const fx mins[3] = {player.origin[0] - fxFromInt(16), player.origin[1] - fxFromInt(16),
-                                        player.origin[2] - tall};
-                    const fx maxs[3] = {player.origin[0] + fxFromInt(16), player.origin[1] + fxFromInt(16),
-                                        player.origin[2] + tall};
-                    std::int64_t enter;
-                    if (lineEntersBox(from, to, mins, maxs, enter))
-                    {
-                        // (So much a second: the parts of a point are kept.)
-                        state.speed += static_cast<fx>(record.damage) * ms;
-                        if (state.speed >= 1000)
-                        {
-                            playerHurt(player, state.speed / 1000, from);
-                            state.speed %= 1000;
-                            if (a != nullptr)
-                                a->got |= kGotHurt;
-                        }
-                    }
-                }
+                if (record.damage != 0)
+                    detail::beamBurn(w, player, i, ms);
                 break;
             }
             case LogicKind::Spark:

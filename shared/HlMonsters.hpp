@@ -531,13 +531,29 @@ namespace hldata
             const LogicRecord &record = w.records[i];
             if (w.states[i].dead || record.brush == kNoBrush || !detail::takesBlows(record))
                 continue;
+            // (RadiusDamage's: as far as where the line to its middle meets
+            // it -- a long pipe is near all along -- and only if that line
+            // gets there.)
             const MoverHull &hull = w.movers[record.brush];
             const fx middle[3] = {(hull.mins[0] + hull.maxs[0]) / 2, (hull.mins[1] + hull.maxs[1]) / 2,
                                   (hull.mins[2] + hull.maxs[2]) / 2};
             const fx d[3] = {middle[0] - origin[0], middle[1] - origin[1], middle[2] - origin[2]};
-            const int distance = fxToInt(fxLength(d));
-            if (distance < radius)
-                logicStrike(w, player, i, (damage * (radius - distance)) / radius);
+            const fx whole = fxLength(d);
+            std::int64_t enter = 0;
+            const fx reach = lineEntersBox(origin, middle, hull.mins, hull.maxs, enter)
+                                 ? static_cast<fx>((static_cast<std::int64_t>(whole) * enter) >> kFractionShift)
+                                 : whole;
+            const int distance = fxToInt(reach);
+            if (distance >= radius)
+                continue;
+            // (Something else in the way -- a wall, another brush -- well
+            // short of it. A blast set into a wall is not stopped by it.)
+            const Shot shot = traceShot(*w.world, origin, middle);
+            const fx stopped = static_cast<fx>((static_cast<std::int64_t>(whole) * shot.fraction) >> kFractionShift);
+            if (shot.fraction > 0 && shot.mover != static_cast<std::int16_t>(record.brush) &&
+                stopped < reach - fxFromInt(8))
+                continue;
+            logicStrike(w, player, i, (damage * (radius - distance)) / radius);
         }
     }
 
@@ -2895,8 +2911,6 @@ namespace hldata
         inline void peopleGround(LogicWorld &w, ActorState &actor, int ms)
         {
             const MoveWorld &world = *w.world;
-            if (actor.hurtMs > 0)
-                actor.hurtMs -= ms;
             if (actor.groundMover == -2)
             {
                 const fx from[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36 + 1)};
@@ -2991,6 +3005,44 @@ namespace hldata
                         continue;
                     actor.hurtMs = 500;
                     monsterHurt(w, i, damage, false);
+                }
+            }
+        }
+
+        /// A door or a train that hurts (its "dmg") and is on the move hurts
+        /// whoever it has come into -- not whoever rides it -- half a
+        /// second's worth every half second: it does not push them, as the
+        /// game's would, so it is never held up by them either.
+        inline void crushPlaces(LogicWorld &w)
+        {
+            ActorWorld &a = *w.actors;
+            for (int r = 0; r < w.recordCount && w.movers != nullptr; ++r)
+            {
+                const LogicRecord &record = w.records[r];
+                const LogicState &state = w.states[r];
+                const auto kind = static_cast<LogicKind>(record.kind);
+                if (record.damage == 0 || record.brush == kNoBrush || state.dead ||
+                    (kind != LogicKind::Door && kind != LogicKind::DoorRotating && kind != LogicKind::Train) ||
+                    (state.move != MoveState::GoingUp && state.move != MoveState::GoingDown))
+                    continue;
+                const MoverHull &mover = w.movers[record.brush];
+                if (!mover.solid || !w.brushStates[record.brush].active)
+                    continue;
+                for (int i = 0; i < a.count; ++i)
+                {
+                    ActorState &actor = a.states[i];
+                    if (!actor.active || actor.hurtMs > 0 || actor.ai >= kAiDying || !canBeHurt(actor.kind) ||
+                        actor.groundMover == static_cast<std::int16_t>(record.brush))
+                        continue;
+                    const fx middle[3] = {actor.pos[0], actor.pos[1], actor.pos[2] + fxFromInt(36)};
+                    if (!nearMover(mover, false, middle, middle))
+                        continue;
+                    fx local[3];
+                    toMoverSpace(mover, middle, local);
+                    if (hullPositionFree(mover.standing, local))
+                        continue;
+                    actor.hurtMs = 500;
+                    monsterHurt(w, i, record.damage, false, kHitGeneric, kDmgCrush, kAiNone);
                 }
             }
         }
@@ -3095,6 +3147,10 @@ namespace hldata
             detail::hurtPlaces(w);
             detail::monsterJumps(w);
         }
+        // (Each frame: a door can be through someone in less than an
+        // eighth of a second.)
+        if (w.records != nullptr && w.states != nullptr)
+            detail::crushPlaces(w);
         xenTick(w, player, ms);
         for (int k = 0; k < 3; ++k)
             a.foe[k] = player.origin[k];
@@ -3148,6 +3204,10 @@ namespace hldata
             ActorState &actor = a.states[i];
             if (!actor.active)
                 continue;
+            // (The places that hurt and the movers that crush wait this
+            // long before they hurt them again: whoever they are.)
+            if (actor.hurtMs > 0)
+                actor.hurtMs -= ms;
             if (actor.kind == static_cast<std::uint8_t>(ActorKind::Item))
             {
                 if (player.health > 0 && detail::touchesPlayer(player, actor.pos, fxFromInt(12), fxFromInt(24)))
@@ -3490,43 +3550,37 @@ namespace hldata
                 *met = kMetThing;
             return true;
         }
-        if (shot.mover >= 0)
+        const int taker = shot.mover >= 0 ? detail::blowTaker(w, shot.mover) : -1;
+        if (taker >= 0)
         {
-            for (int i = 0; i < w.recordCount; ++i)
+            w.struckFrom[0] = dir[0];
+            w.struckFrom[1] = dir[1];
+            w.struckFrom[2] = dir[2];
+            logicStrike(w, player, taker, damage);
+            if (met != nullptr)
+                *met = kMetThing;
+            // Glass that takes it and stands (the marks are the
+            // brush's: they go with it). Glass that will break is
+            // cracked where it was hit -- one crack to a pane, moved
+            // by the next hit. Glass that never breaks is not: a
+            // shot leaves its small mark on it, a blow nothing but
+            // dust.
+            const std::uint32_t made = w.records[taker].extra[1];
+            fx at[3], normal[3];
+            if (w.actors != nullptr && !w.states[taker].dead && (made == 0 || made == 7) &&
+                w.brushStates != nullptr && traceShotWall(*w.world, eye, end, at, normal))
             {
-                if (w.records[i].brush == static_cast<std::uint16_t>(shot.mover) && !w.states[i].dead &&
-                    detail::takesBlows(w.records[i]))
-                {
-                    w.struckFrom[0] = dir[0];
-                    w.struckFrom[1] = dir[1];
-                    w.struckFrom[2] = dir[2];
-                    logicStrike(w, player, i, damage);
-                    if (met != nullptr)
-                        *met = kMetThing;
-                    // Glass that takes it and stands (the marks are the
-                    // brush's: they go with it). Glass that will break is
-                    // cracked where it was hit -- one crack to a pane, moved
-                    // by the next hit. Glass that never breaks is not: a
-                    // shot leaves its small mark on it, a blow nothing but
-                    // dust.
-                    const std::uint32_t made = w.records[i].extra[1];
-                    fx at[3], normal[3];
-                    if (w.actors != nullptr && !w.states[i].dead && (made == 0 || made == 7) &&
-                        w.brushStates != nullptr && traceShotWall(*w.world, eye, end, at, normal))
-                    {
-                        fx local[3];
-                        for (int k = 0; k < 3; ++k)
-                            local[k] = at[k] - w.brushStates[shot.mover].pos[k];
-                        if (made == 0)
-                            decalAdd(*w.actors, kDecalCrack, local, normal, 20, kMarkCrack, shot.mover);
-                        else if (bullet)
-                            decalAdd(*w.actors, static_cast<std::uint8_t>(kDecalShot + detail::chance(*w.actors) % kDecalShots),
-                                     local, normal, 4, kMarkCrack, shot.mover);
-                        specksAdd(*w.actors, at, normal, 2, static_cast<std::uint16_t>(24 | 26 << 5 | 27 << 10), 60);
-                    }
-                    return true;
-                }
+                fx local[3];
+                for (int k = 0; k < 3; ++k)
+                    local[k] = at[k] - w.brushStates[shot.mover].pos[k];
+                if (made == 0)
+                    decalAdd(*w.actors, kDecalCrack, local, normal, 20, kMarkCrack, shot.mover);
+                else if (bullet)
+                    decalAdd(*w.actors, static_cast<std::uint8_t>(kDecalShot + detail::chance(*w.actors) % kDecalShots),
+                             local, normal, 4, kMarkCrack, shot.mover);
+                specksAdd(*w.actors, at, normal, 2, static_cast<std::uint16_t>(24 | 26 << 5 | 27 << 10), 60);
             }
+            return true;
         }
         // On the world, or on something that does not break: its mark, its
         // dust, and now and then the whine of it glancing off.

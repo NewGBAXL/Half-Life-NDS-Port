@@ -1913,6 +1913,8 @@ namespace hlds
                 record.extra[0] = (spawnflags & 64) ? kRoll : ((spawnflags & 128) ? kPitch : kYaw);
                 record.move[0] = static_cast<fx>(std::lround(numberKey(entity, "distance", 90) * 65536.0 / 360.0));
                 record.speed = static_cast<fx>(std::lround(std::max(1.0, numberKey(entity, "speed", 100)) * 65536.0 / 360.0));
+                record.extra[1] = static_cast<std::uint32_t>(std::clamp(std::lround(numberKey(entity, "damp") * 1000), 0L, 1000000L));
+                record.extra[2] = (spawnflags & 16) ? 1u : 0u; // (stopped, it goes back)
                 if (spawnflags & 1)
                     record.flags |= kLogicStartOpen;
             }
@@ -2148,6 +2150,22 @@ namespace hlds
             {
                 make = true;
                 record.kind = static_cast<std::uint8_t>(LogicKind::Ladder);
+                for (int a = 0; a < 3; ++a)
+                {
+                    record.mins[a] = static_cast<std::int16_t>(
+                        std::clamp(std::floor(model->mins[a] + origin[a]), -32768.0, 32767.0));
+                    record.maxs[a] = static_cast<std::int16_t>(
+                        std::clamp(std::ceil(model->maxs[a] + origin[a]), -32768.0, 32767.0));
+                }
+            }
+            else if (cls == "func_friction" && model != nullptr)
+            {
+                // (Its "modifier": the percent of the world's friction the
+                // ground has in it.)
+                make = true;
+                record.kind = static_cast<std::uint8_t>(LogicKind::Friction);
+                record.extra[0] = static_cast<std::uint32_t>(
+                    std::clamp(std::lround(numberKey(entity, "modifier", 100)), 0L, 100L));
                 for (int a = 0; a < 3; ++a)
                 {
                     record.mins[a] = static_cast<std::int16_t>(
@@ -2726,6 +2744,11 @@ namespace hlds
                     }
                     if (!laser && (spawnflags & 8))
                         how |= kBeamRing;
+                    // (16 and 32: sparks at its start, at its end.)
+                    if (spawnflags & 16)
+                        how |= kBeamSparkStart;
+                    if (spawnflags & 32)
+                        how |= kBeamSparkEnd;
                     record.maxs[1] = static_cast<std::int16_t>(how);
                     record.extra[0] = sprite;
                     const double width = numberKey(entity, laser ? "width" : "BoltWidth", 20);

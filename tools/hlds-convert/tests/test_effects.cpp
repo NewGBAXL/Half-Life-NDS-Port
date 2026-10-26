@@ -247,6 +247,176 @@ namespace
         }
     }
 
+    int recordNamed(const Game &g, const char *name, LogicKind kind)
+    {
+        const std::uint32_t hash = nameHash(name);
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind == static_cast<std::uint8_t>(kind) && r.name != 0 && g.view.nameHashes[r.name] == hash)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    /// c1a1's lasers: the one that follows a train across the computers
+    /// stops on the first in its way and burns through it, and what the
+    /// computers fire as they break goes off (CLaser::StrikeThink).
+    void testLaserBurns(const char *dir)
+    {
+        auto game = load(dir, "c1a1");
+        check(game != nullptr, "c1a1 cooks");
+        if (!game)
+            return;
+        Game &g = *game;
+        // Its spilt water (func_friction, modifier 15): a volume where the
+        // ground holds them less, and a faint sheet that is seen.
+        int puddles = 0;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind != static_cast<std::uint8_t>(LogicKind::Friction))
+                continue;
+            const bool seen = r.brush != kNoBrush &&
+                              g.view.brushes[r.brush].renderClass == static_cast<std::uint8_t>(RenderClass::Blend) &&
+                              g.view.brushes[r.brush].alpha == 7 && !(g.view.brushes[r.brush].flags & kBrushSolid);
+            puddles += r.extra[0] == 15 && seen;
+        }
+        check(puddles == 2, "c1a1's two puddles: slippery, seen through, and walked through");
+        const std::uint32_t follows = nameHash("1_beam_target");
+        int laser = -1, quiet = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind != static_cast<std::uint8_t>(LogicKind::Beam))
+                continue;
+            if (r.damage != 0 && r.netName != 0 && g.view.nameHashes[r.netName] == follows)
+                laser = static_cast<int>(i);
+            else if (r.damage == 0 && quiet < 0)
+                quiet = static_cast<int>(i);
+        }
+        check(laser >= 0, "c1a1's laser follows its train and burns");
+        if (laser < 0)
+            return;
+        check((g.view.logic[laser].maxs[1] & kBeamSparkEnd) != 0, "... and throws sparks where it ends");
+        // The computers that set off the explosions, and the explosions.
+        const char *const fired[3] = {"cpu_fry1", "cpu_fry2", "cpu_fry3"};
+        int computers[3] = {-1, -1, -1};
+        for (int c = 0; c < 3; ++c)
+        {
+            const std::uint32_t hash = nameHash(fired[c]);
+            for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+            {
+                const LogicRecord &r = g.view.logic[i];
+                if (r.kind == static_cast<std::uint8_t>(LogicKind::Breakable) && r.target != 0 &&
+                    g.view.nameHashes[r.target] == hash)
+                    computers[c] = static_cast<int>(i);
+            }
+            check(computers[c] >= 0, "a computer fires each of cpu_fry1..3");
+        }
+        const int blast = recordNamed(g, "cpu_fry2", LogicKind::Explosion);
+        const int train = recordNamed(g, "1_beam_target", LogicKind::Train);
+        check(blast >= 0 && train >= 0, "the explosion and the train are there");
+        if (blast < 0 || train < 0 || computers[0] < 0 || computers[1] < 0 || computers[2] < 0)
+            return;
+        // (The player well out of its way: upstairs.)
+        const fx away[3] = {fxFromInt(1120), fxFromInt(2112), fxFromInt(836)};
+        putPlayer(g, away);
+        g.player.health = 100;
+        logicUse(g.logic, g.player, train, -1, kUseOn, 0);
+        bool stopped = false;
+        int brokenMs = -1;
+        for (int ms = 0; ms < 30000 && brokenMs < 0; ms += 33)
+        {
+            putPlayer(g, away);
+            tick(g);
+            if (g.states[laser].hurt != 0)
+            {
+                fx from[3], to[3];
+                beamEnds(g.logic, laser, from, to);
+                // (On the computers: a little in from the train's line.)
+                stopped = stopped || (to[1] > fxFromInt(1330) && to[1] < fxFromInt(1470));
+            }
+            bool all = true;
+            for (int c : computers)
+                all = all && g.states[c].dead;
+            if (all)
+                brokenMs = ms;
+        }
+        std::printf("test_effects: c1a1's laser broke the three computers in %d ms\n", brokenMs);
+        check(stopped, "the laser stops on the computers in its way");
+        check(brokenMs >= 0, "... burns through them");
+        check(g.states[blast].dead, "... and what they fire goes off");
+        check(g.player.health == 100, "... and does nothing to the player out of its way");
+        if (quiet >= 0)
+            check(g.states[quiet].hurt == 0, "a beam that does not burn is never cut short");
+    }
+
+    /// c1a1's: the door at the foot of the lift shaft that rises (dmg 1000)
+    /// crushes whoever it comes into; and a small blast beside the end of
+    /// a long computer reaches it, though its middle is out of reach.
+    void testCrushAndBlast(const char *dir)
+    {
+        auto game = load(dir, "c1a1");
+        if (!game)
+            return;
+        Game &g = *game;
+        const fx away[3] = {fxFromInt(1120), fxFromInt(2112), fxFromInt(836)};
+        putPlayer(g, away);
+        g.player.health = 100;
+        const int door = recordNamed(g, "vatup", LogicKind::Door);
+        int victim = -1;
+        for (int i = 0; i < g.actors.count && victim < 0; ++i)
+        {
+            if (g.actors.states[i].active && g.actors.states[i].kind == static_cast<std::uint8_t>(ActorKind::Scientist))
+                victim = i;
+        }
+        check(door >= 0 && victim >= 0 && g.view.logic[door].damage == 1000, "c1a1's crushing door and a scientist");
+        if (door < 0 || victim < 0)
+            return;
+        ActorState &actor = g.actors.states[victim];
+        const fx above[3] = {fxFromInt(728), fxFromInt(2112), fxFromInt(-818)};
+        for (int k = 0; k < 3; ++k)
+            actor.pos[k] = above[k];
+        actor.groundMover = -1;
+        actor.airborne = false;
+        actor.hurtMs = 0;
+        // (The place over it that hurts is taken away first, as the map
+        // does: kill_pain_relay.)
+        const int pain = recordNamed(g, "kill_pain", LogicKind::TriggerHurt);
+        if (pain >= 0)
+            logicKill(g.logic, g.view.logic[pain].name);
+        logicUse(g.logic, g.player, door, -1, kUseOn, 0);
+        for (int n = 0; n < 30; ++n)
+        {
+            putPlayer(g, away);
+            tick(g);
+        }
+        std::printf("test_effects: c1a1's rising door: whoever was over it %s\n",
+                    !actor.active || actor.ai >= kAiDying ? "is dead" : "still stands");
+        check(!actor.active || actor.ai >= kAiDying, "a door that crushes kills whoever it comes into");
+
+        // The computer that fires cpu_fry2: 54 x 109, its middle 74 in from
+        // its end at y 1339. A blast of 20 (reach 50) 20 short of that end.
+        int computer = -1;
+        for (std::uint32_t i = 0; i < g.view.logicCount; ++i)
+        {
+            const LogicRecord &r = g.view.logic[i];
+            if (r.kind == static_cast<std::uint8_t>(LogicKind::Breakable) && r.target != 0 &&
+                g.view.nameHashes[r.target] == nameHash("cpu_fry2"))
+                computer = static_cast<int>(i);
+        }
+        check(computer >= 0, "the computer that fires cpu_fry2");
+        if (computer < 0)
+            return;
+        const std::int32_t before = g.states[computer].phase;
+        const fx beside[3] = {fxFromInt(715), fxFromInt(1319), fxFromInt(-77)};
+        explodeAt(g.logic, g.player, beside, 20, false, false, true);
+        std::printf("test_effects: a blast of 20 at the end of a computer: %d damage taken\n",
+                    g.states[computer].phase - before);
+        check(g.states[computer].phase > before, "a blast reaches a long brush near its end");
+    }
+
     /// Made from the map's own: a laser that burns, something thrown out, a
     /// brush made unseen, a fade.
     void testMade(const char *dir)
@@ -560,6 +730,8 @@ int main()
     testCascade(dir);
     testMade(dir);
     testBeamEnds(dir);
+    testLaserBurns(dir);
+    testCrushAndBlast(dir);
     testCampaign(dir);
     if (g_failures == 0)
         std::printf("test_effects: ok\n");
