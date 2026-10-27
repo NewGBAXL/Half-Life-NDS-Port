@@ -29,11 +29,14 @@
 # HLDS_JOBS=4 in the environment keeps ninja to four compilers at once.
 
 import os
+import sys
 
 from architectds import *
 
 # HLDS_PROFILE=1 ./make.sh builds the frame-time readout in (see below).
 profile = ['HLDS_PROFILE=1'] if os.environ.get('HLDS_PROFILE') else []
+prebuilt_core = ['HL_ARM7_PREBUILT=1'] if os.environ.get('HL_ARM7_CORE') else []
+prebuilt_core += ['HL_DLDI_FORCE_ARM7=1'] if os.environ.get('HL_DLDI_ARM7') else []
 
 arm9 = Arm9Binary(
     sourcedirs=['source'],
@@ -45,7 +48,7 @@ arm9 = Arm9Binary(
     # the geometry engine, on the overlay and in perf.txt. Off, every one of
     # its entry points is an empty inline (DebugLog.hpp), so the shipped
     # build carries none of it.
-    defines=['NEA_MAXMOD', 'HL_HW_MATH'] + profile,
+    defines=['NEA_MAXMOD', 'HL_HW_MATH'] + profile + prebuilt_core,
     # The wireless is the dswifi fork that also does DS Download Play
     # (github.com/Warioware64/dswifi, installed as "dswifi_dl" beside the
     # stock one). Its headers have the stock names (dswifi9.h), so
@@ -71,9 +74,27 @@ arm9.generate_elf()
 # The other processor's program has to be of the same build as the ARM9's
 # wireless library: the two share the structures they talk through, and the
 # library refuses a pair that do not match.
-arm7 = Arm7BinaryDefault(
-    elf_path='${BLOCKSDSEXT}/dswifi_dl/sys/arm7/arm7_dswifi_dl_maxmod.elf'
-)
+# HL_ARM7_CORE=1 (or a path) builds against the prebuilt GoldSrc ARM7 core,
+# located by default at `arm7/hl_core/arm7.bin`, and loaded at 0x02380000.
+# It has no maxmod, reading the audio data image off the SD card itself,
+# so the ARM9's sound code has to be the client of that core's commands.
+# Leave this unset for the ROM to keep the stock core above.
+core = os.environ.get('HL_ARM7_CORE')
+if core:
+    # ndstool makes a DSi header (unit code, the ARM7i block) only from ELF inputs, so the flat binaries are wrapped in a bare one in build/ (tools/bin2elf.py:
+    # program headers and section names, no symbols). `core` is a folder with arm7.bin and arm7i.bin; 1: arm7/hl_core.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools'))
+    import bin2elf
+    core_dir = 'arm7/hl_core' if core == '1' else core
+    os.makedirs('build/hl_core', exist_ok=True)
+    with open(os.path.join(core_dir, 'arm7.bin'), 'rb') as f7, open(os.path.join(core_dir, 'arm7i.bin'), 'rb') as f7i:
+        with open('build/hl_core/arm7.elf', 'wb') as out:
+            out.write(bin2elf.build(f7.read(), f7i.read()))
+    arm7 = Arm7BinaryDefault(elf_path='build/hl_core/arm7.elf')
+else:
+    arm7 = Arm7BinaryDefault(
+        elf_path='${BLOCKSDSEXT}/dswifi_dl/sys/arm7/arm7_dswifi_dl_maxmod.elf'
+    )
 
 hl = Arm9DynamicLibrary(
     name='hl',

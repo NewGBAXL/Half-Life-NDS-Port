@@ -24,6 +24,9 @@ public:
     const char *fatDevice = nullptr;   ///< libfat default drive, e.g. "fat:" / "sd:"
     std::string fatDeviceCPP;          ///< same as a std::string, for path building
     bool hasFat = false;               ///< FAT init succeeded and a drive is mounted
+    /// The ARM7 core reads the audio image off the same card
+    //  0: not tried, 1: image open, others: a CardShare result
+    int sdAudio = 0;
     /// Without a card: what the console was like when it looked for one (the
     /// mode it runs in, its SD switch, the DLDI driver the loader put in, the
     /// path it was started from) -- said on the screen that says so, which is

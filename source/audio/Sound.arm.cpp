@@ -1,3 +1,6 @@
+// Maxmod is not used when the custom ARM7 core is used
+#ifndef HL_ARM7_PREBUILT
+
 #include "audio/Sound.hpp"
 
 #include <cstdlib>
@@ -1211,3 +1214,5 @@ namespace hlrt
         }
     }
 } // namespace hlrt
+
+#endif // HL_ARM7_PREBUILT

@@ -406,6 +406,9 @@ class GenericBinary():
             'rule ndstool\n'
             '  command = ${NDSTOOL} -c $out -7 ${arm7elf} -9 ${arm9elf} -b ${game_icon} ${game_full_title} ${ndstool_nitrofs_flags} ${ndstool_title_id} ${ndstool_unit_code}\n'
             '\n'
+            'rule ndstool_raw7\n'
+            '  command = ${NDSTOOL} -c $out -7 ${arm7bin} -r7 ${arm7load} -e7 ${arm7entry} -9 ${arm9elf} -b ${game_icon} ${game_full_title} ${ndstool_nitrofs_flags} ${ndstool_title_id} ${ndstool_unit_code}\n'
+            '\n'
             'rule grit\n'
             '  command = ${GRIT} ${in_path_img} ${options} -o ${grit_out_path}\n'
             '\n'
@@ -1504,6 +1507,23 @@ class Arm7BinaryDefault():
         self.elf_path = elf_path
         self.contents = ''
         self.dir_targets = []
+
+class Arm7BinaryPrebuilt():
+    '''
+    Class that represents an ARM7 core that was built elsewhere and is kept as
+    a flat binary: no ELF and no symbols in this repository. ndstool is given
+    the load and entry addresses itself (-r7, -e7). A DSi-only ARM7i part is
+    not carried (ndstool did not take a raw -7i as a DSi header).
+    '''
+
+    def __init__(self, bin_path, load_addr=0x02380000, entry_addr=0x02380000):
+        self.bin_path = bin_path
+        self.load_addr = load_addr
+        self.entry_addr = entry_addr
+        self.elf_path = None
+        self.contents = ''
+        self.dir_targets = []
+
 
 class Arm7Binary(GenericArmBinary):
     '''
@@ -2816,7 +2836,7 @@ class NdsRom(GenericBinary):
                 self.nitrofs = binary
             elif type_name == 'Arm9Binary':
                 self.arm9 = binary
-            elif type_name == 'Arm7Binary' or type_name == 'Arm7BinaryDefault':
+            elif type_name in ('Arm7Binary', 'Arm7BinaryDefault', 'Arm7BinaryPrebuilt'):
                 # This will replace the default ARM7 binary
                 self.arm7 = binary
             else:
@@ -2861,6 +2881,22 @@ class NdsRom(GenericBinary):
             unit_code_flag = f'-uc {self.unit_code}'
         else:
             unit_code_flag = ''
+
+        if type(self.arm7).__name__ == 'Arm7BinaryPrebuilt':
+            self.print(
+                f'build {self.nds_path}: ndstool_raw7 {self.arm7.bin_path} {self.arm9.elf_path} {nitrodir_paths} {flag_dep}\n'
+                f'  arm7bin = {self.arm7.bin_path}\n'
+                f'  arm7load = {self.arm7.load_addr:#x}\n'
+                f'  arm7entry = {self.arm7.entry_addr:#x}\n'
+                f'  arm9elf = {self.arm9.elf_path}\n'
+                f'  game_icon = {self.game_icon}\n'
+                f'  game_full_title = {game_full_title}\n'
+                f'  ndstool_nitrofs_flags = {ndstool_nitrofs_flags}\n'
+                f'  ndstool_title_id = {title_id_flag}\n'
+                f'  ndstool_unit_code = {unit_code_flag}\n'
+                '\n'
+            )
+            return
 
         self.print(
             f'build {self.nds_path}: ndstool {self.arm7.elf_path} {self.arm9.elf_path} {nitrodir_paths} {flag_dep}\n'

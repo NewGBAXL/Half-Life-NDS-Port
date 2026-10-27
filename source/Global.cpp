@@ -3,6 +3,7 @@
 #include <nds/arm9/dldi.h>
 
 #include "HlManifest.hpp"
+#include "audio/CardShare.hpp"
 #include "data/VramWriter.hpp"
 #include "render/HudDraw.hpp"
 #include "render/Camera.hpp"
@@ -70,12 +71,22 @@ void Global::Init(const char *launchedFrom)
     irqSet(IRQ_HBLANK, NEA_HBLFunc);
 
     // SD / flashcard FAT access -- every byte of game content comes from here.
+#ifdef HL_DLDI_FORCE_ARM7
+    // Forces the ARM7 to use DLDI even if the driver does not report support for it.
+    // Testing only.
+    dldiSetMode(DLDI_MODE_ARM7);
+#endif
     const bool fatOk = fatInitDefault();
     fatDevice = fatGetDefaultDrive();
     hasFat = fatOk && (fatDevice != nullptr);
     if (hasFat)
     {
         fatDeviceCPP = fatDevice;
+#ifdef HL_ARM7_PREBUILT
+        // The ARM7 core plays audio from a data image read off this card itself.
+        const hlrt::cardshare::Result shared = hlrt::cardshare::attach(fatDevice, "_nds/hl_nds/data/audio.nds");
+        sdAudio = shared == hlrt::cardshare::Result::Ok ? 1 : 2 + static_cast<int>(shared) * 16 + hlrt::cardshare::detail();
+#endif
     }
     else
     {
