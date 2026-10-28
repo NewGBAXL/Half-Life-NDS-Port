@@ -84,7 +84,7 @@ void Global::Init(const char *launchedFrom)
         fatDeviceCPP = fatDevice;
 #ifdef HL_ARM7_PREBUILT
         // The ARM7 core plays audio from a data image read off this card itself.
-        const hlrt::cardshare::Result shared = hlrt::cardshare::attach(fatDevice, "_nds/hl_nds/data/audio.nds");
+        const hlrt::cardshare::Result shared = hlrt::cardshare::attach(fatDevice, "_nds/hl_nds/data/audio.npac");
         sdAudio = shared == hlrt::cardshare::Result::Ok ? 1 : 2 + static_cast<int>(shared) * 16 + hlrt::cardshare::detail();
 #endif
     }

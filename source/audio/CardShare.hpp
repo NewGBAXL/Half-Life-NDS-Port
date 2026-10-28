@@ -17,7 +17,7 @@ namespace hlrt::cardshare
 
     // On init, after the FAT is loaded (Global.cpp), before ARM7 is given anything else.
     // `device`: libfat's default drive ("sd:", "fat:");
-    // `image`: data image's path from the card's root ("hl/audio.nds", no drive).
+    // `image`: data image's path from the card's root ("hl/audio.npac", no drive).
     Result attach(const char *device, const char *image);
 
     // Once per frame, pass of the main loop.

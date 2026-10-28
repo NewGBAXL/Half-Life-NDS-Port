@@ -49,7 +49,7 @@ typedef struct {
 } A7SdRead;
 
 // ARM9 -> ARM7, one data message. `dldi`: for A7SD_KIND_DLDI the DISC_INTERFACE the driver lives in (dldiGetInternal() on the ARM9), a main RAM address; 0 for the DSi's SD.
-// `path`: of the image on the card, from its root, '/' between the names ("hl/audio.nds").
+// `path`: of the image on the card, from its root, '/' between the names ("hl/audio.npac").
 typedef struct {
 	uint32_t magic;
 	uint16_t version, kind;
@@ -65,5 +65,5 @@ enum {
 	A7SD_BADIO = 3,          // the driver pointer is not a driver
 	A7SD_NO_VOLUME = 4,      // no FAT32 / exFAT volume on the card
 	A7SD_NO_FILE = 5,        // the path is not a file there
-	A7SD_BAD_IMAGE = 6       // the file is not a NitroFS image
+	A7SD_BAD_IMAGE = 6       // the file is neither an NPAC archive nor a NitroFS image
 };

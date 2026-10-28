@@ -4,7 +4,7 @@
 // Shared code defines what was heard and where, sending each as a command.
 //
 // Each sound of the level is named by the key its file name was cooked to (SoundCook.cpp's soundCardName).
-// `audio.keys`, written by the audio bake with `audio.nds`, turns that into the its number in the ARM7's bank,
+// `audio.keys`, written by the audio bake with `audio.npac`, turns that into the its number in the ARM7's bank,
 // once for every sound of a map when it is loaded.
 
 #ifdef HL_ARM7_PREBUILT

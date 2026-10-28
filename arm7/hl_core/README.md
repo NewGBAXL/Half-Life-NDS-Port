@@ -36,7 +36,7 @@ Uses shared WRAM and Main RAM for the wifi code and stacks
 
 ## Audio stored on the card
 
-* `sd/audio.nds`: a NitroFS image of the game's sounds, `sentences.txt`, `materials.txt` and music. Place at `_nds/hl_nds/data/audio.nds`.
+* `sd/audio.npac`: an NPAC archive (Nitro Engine Advanced's container) of the game's sounds, `sentences.txt`, `materials.txt` and music. Place at `_nds/hl_nds/data/audio.npac`.
 * `sd/audio.keys`: what turns a level's sound names into the core's sound numbers. Place at `_nds/hl_nds/data/audio.keys`.
 
 All sounds are converted to ADPCM.
